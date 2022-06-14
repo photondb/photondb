@@ -1,8 +1,9 @@
-use crossbeam_epoch::{pin, Guard, Owned, Shared};
+use crossbeam_epoch::{pin, Guard, Owned};
 
 use crate::{DeltaData, Node, NodeCache, NodeData, NodeLink};
 
-const NODE_CHAIN_MAXLEN: usize = 8;
+const NODE_MAX_LEN: usize = 8;
+const NODE_MAX_SIZE: usize = 4096;
 
 pub struct Store {
     cache: NodeCache,
@@ -32,6 +33,7 @@ impl Store {
                             return None;
                         }
                     }
+                    _ => todo!(),
                 },
                 _ => todo!(),
             }
@@ -44,11 +46,31 @@ impl Store {
         let guard = &pin();
 
         let mut old = self.root(guard);
-        if !old.is_null() && old.len() >= NODE_CHAIN_MAXLEN {
+        let stat = old.stat();
+        if stat.len >= NODE_MAX_LEN {
             let new = old.consolidate(guard);
             match self.cache.update(0, old, new, guard) {
                 Ok(_) => old = new,
                 Err(node) => old = node,
+            }
+        }
+        if stat.size >= NODE_MAX_SIZE {
+            if let Some((pivot, right)) = old.split(guard) {
+                let right_id = self.cache.allocate();
+                assert!(self
+                    .cache
+                    .update(right_id, Node::null(), right, guard)
+                    .is_ok());
+                let data = NodeData::DeltaData(DeltaData::SplitNode(pivot, right.as_u64()));
+                let mut new = Node::from(Owned::new(NodeLink { data, next: 0 }).into_shared(guard));
+                new.set_next(old);
+                match self.cache.update(0, old, new, guard) {
+                    Ok(_) => old = new,
+                    Err(node) => {
+                        // TODO: free the right node
+                        old = node;
+                    }
+                }
             }
         }
 
