@@ -2,6 +2,8 @@ use crossbeam_epoch::{pin, Guard, Owned, Shared};
 
 use crate::{DeltaDataNode, Link, Node, NodeCache};
 
+const NODE_CHAIN_MAXLEN: usize = 8;
+
 pub struct Store {
     cache: NodeCache,
 }
@@ -40,19 +42,31 @@ impl Store {
 
     pub fn put(&self, key: &[u8], value: &[u8]) {
         let guard = &pin();
+
+        let mut old = self.root(guard);
+        if !old.is_null() && unsafe { old.deref() }.len() >= NODE_CHAIN_MAXLEN {
+            let new = Owned::new(unsafe { old.deref() }.consolidate()).into_shared(guard);
+            match self.cache.update(0, old, new) {
+                Ok(_) => old = new,
+                Err(link) => old = link,
+            }
+        }
+
         let delta = DeltaDataNode::Put(key.to_vec(), value.to_vec());
         let mut new = Owned::new(Link {
             node: Node::DeltaData(delta),
             next: 0,
         })
         .into_shared(guard);
-        let mut old = self.root(guard);
         loop {
             unsafe {
                 new.deref_mut().next = old.as_raw() as u64;
             }
             match self.cache.update(0, old, new) {
-                Ok(_) => return,
+                Ok(_) => {
+                    unsafe { self.root(guard).deref().print() };
+                    return;
+                }
                 Err(link) => old = link,
             }
         }
@@ -72,7 +86,10 @@ mod test {
     #[test]
     fn test_store() {
         let store = Store::new();
-        store.put(&[1, 2, 3], &[4, 5, 6]);
-        assert_eq!(store.get(&[1, 2, 3]), Some(vec![4, 5, 6]));
+        for i in 0..10u8 {
+            println!("put {}", i);
+            store.put(&[i], &[i]);
+            assert_eq!(store.get(&[i]), Some(vec![i]));
+        }
     }
 }
