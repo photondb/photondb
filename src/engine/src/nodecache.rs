@@ -1,6 +1,6 @@
-use crossbeam_epoch::{Guard, Shared};
+use crossbeam_epoch::Guard;
 
-use crate::{Link, NodeTable};
+use crate::{Node, NodeTable};
 
 pub struct NodeCache {
     table: NodeTable,
@@ -17,23 +17,21 @@ impl NodeCache {
         self.table.allocate()
     }
 
-    pub fn load<'g>(&self, id: u64, _: &'g Guard) -> Shared<'g, Link> {
+    pub fn load<'g>(&self, id: u64, guard: &'g Guard) -> Node<'g> {
         let addr = self.table.load(id);
-        (addr as *const Link).into()
+        Node::from_u64(addr, guard)
     }
 
     pub fn update<'g>(
         &self,
         id: u64,
-        old: Shared<'g, Link>,
-        new: Shared<'g, Link>,
-    ) -> Result<(), Shared<'g, Link>> {
-        match self
-            .table
-            .compare_exchange(id, old.as_raw() as u64, new.as_raw() as u64)
-        {
+        old: Node<'g>,
+        new: Node<'g>,
+        guard: &'g Guard,
+    ) -> Result<(), Node<'g>> {
+        match self.table.compare_exchange(id, old.as_u64(), new.as_u64()) {
             Ok(_) => Ok(()),
-            Err(addr) => Err((addr as *const Link).into()),
+            Err(addr) => Err(Node::from_u64(addr, guard)),
         }
     }
 }

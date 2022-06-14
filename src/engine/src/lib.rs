@@ -5,7 +5,7 @@ mod store;
 pub use store::Store;
 
 mod node;
-use node::{BaseDataNode, DeltaDataNode, Link, Node};
+use node::{BaseData, DeltaData, Node, NodeData, NodeLink};
 
 mod nodecache;
 use nodecache::NodeCache;

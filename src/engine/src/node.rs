@@ -1,86 +1,118 @@
 use std::collections::BTreeMap;
 
-use crossbeam_epoch::Shared;
+use crossbeam_epoch::{Guard, Owned, Shared};
 
-pub struct Link {
-    pub node: Node,
-    pub next: u64,
+#[derive(Clone, Copy)]
+pub struct Node<'g>(Shared<'g, NodeLink>);
+
+impl<'g> From<Shared<'g, NodeLink>> for Node<'g> {
+    fn from(link: Shared<'g, NodeLink>) -> Self {
+        Node(link)
+    }
 }
 
-impl Link {
+impl<'g> Node<'g> {
+    pub fn from_u64(addr: u64, _: &'g Guard) -> Self {
+        Node((addr as *const NodeLink).into())
+    }
+
+    pub fn as_u64(&self) -> u64 {
+        self.0.as_raw() as u64
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
+
+    pub fn data(&self) -> &NodeData {
+        unsafe { &self.0.deref().data }
+    }
+
+    pub fn next(&self) -> Node<'g> {
+        Node(unsafe { (self.0.deref().next as *const NodeLink).into() })
+    }
+
+    pub fn set_next(&mut self, next: Node<'g>) {
+        unsafe {
+            self.0.deref_mut().next = next.as_u64();
+        }
+    }
+
     pub fn len(&self) -> usize {
         let mut len = 0;
-        let mut link = self;
-        loop {
+        let mut cursor = self.clone();
+        while !cursor.is_null() {
             len += 1;
-            match unsafe { link.next().as_ref() } {
-                Some(next) => link = next,
-                None => break,
-            }
+            cursor = cursor.next();
         }
         len
     }
 
-    pub fn next(&self) -> Shared<'_, Link> {
-        unsafe { (self.next as *const Link).into() }
-    }
-
-    pub fn print(&self) {
-        let mut link = self;
-        loop {
-            println!("{:?}", link.node);
-            match unsafe { link.next().as_ref() } {
-                Some(next) => link = next,
-                None => break,
-            }
-        }
-    }
-
-    pub fn consolidate(&self) -> Link {
-        let mut base = BaseDataNode {
-            map: BTreeMap::new(),
-        };
-        let mut link = self;
-        loop {
-            match &link.node {
-                Node::BaseData(node) => {
-                    base.map.extend(node.map.clone());
+    pub fn consolidate(&self, guard: &'g Guard) -> Node<'g> {
+        let mut map = BTreeMap::new();
+        let mut deltas = Vec::new();
+        let mut cursor = self.clone();
+        while !cursor.is_null() {
+            match cursor.data() {
+                NodeData::BaseData(node) => {
+                    map = node.map.clone();
+                    for (k, v) in deltas {
+                        match v {
+                            Some(v) => {
+                                map.insert(k, v);
+                            }
+                            None => {
+                                map.remove(&k);
+                            }
+                        }
+                    }
                     break;
                 }
-                Node::DeltaData(node) => match node {
-                    DeltaDataNode::Put(k, v) => {
-                        base.map.insert(k.clone(), v.clone());
+                NodeData::DeltaData(node) => match node {
+                    DeltaData::Put(k, v) => {
+                        deltas.push((k.clone(), Some(v.clone())));
                     }
-                    DeltaDataNode::Delete(k) => {
-                        base.map.remove(k);
+                    DeltaData::Delete(k) => {
+                        deltas.push((k.clone(), None));
                     }
                 },
+                _ => todo!(),
             }
-            match unsafe { link.next().as_ref() } {
-                Some(next) => link = next,
-                None => break,
-            }
+            cursor = cursor.next();
         }
-        Link {
-            node: Node::BaseData(base),
-            next: 0,
-        }
+        let data = NodeData::BaseData(BaseData { map });
+        Node(Owned::new(NodeLink { data, next: 0 }).into_shared(guard))
     }
 }
 
-#[derive(Debug)]
-pub enum Node {
-    BaseData(BaseDataNode),
-    DeltaData(DeltaDataNode),
+pub struct NodeLink {
+    pub data: NodeData,
+    pub next: u64,
 }
 
 #[derive(Debug)]
-pub struct BaseDataNode {
+pub enum NodeData {
+    BaseData(BaseData),
+    DeltaData(DeltaData),
+    BaseIndex(BaseIndex),
+    DeltaIndex(DeltaIndex),
+}
+
+#[derive(Debug)]
+pub struct BaseData {
     pub map: BTreeMap<Vec<u8>, Vec<u8>>,
 }
 
 #[derive(Debug)]
-pub enum DeltaDataNode {
+pub enum DeltaData {
     Put(Vec<u8>, Vec<u8>),
     Delete(Vec<u8>),
 }
+
+#[derive(Debug)]
+pub struct BaseIndex {
+    pub map: BTreeMap<Vec<u8>, u64>,
+}
+
+#[derive(Debug)]
+pub struct DeltaIndex {}
