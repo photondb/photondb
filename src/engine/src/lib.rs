@@ -1,14 +1,26 @@
-mod error;
-pub use error::{Error, Result};
+mod table;
+pub use table::Table;
 
-mod store;
-pub use store::Store;
+mod tree;
+use tree::Tree;
 
-mod node;
-use node::{BaseData, DeltaData, Node, NodeData, NodeLink};
+mod pagecache;
+use pagecache::{BaseData, DeltaData, Page, PageCache, PageId, PageKind, PagePtr};
 
-mod nodecache;
-use nodecache::NodeCache;
+mod pagetable;
+use pagetable::PageTable;
 
-mod nodetable;
-use nodetable::NodeTable;
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test() {
+        let table = Table::new();
+        table.put(b"key", b"value");
+        assert_eq!(table.get(b"key"), Some(b"value".to_vec()));
+        assert_eq!(table.get(b"key2"), None);
+        table.delete(b"key");
+        assert_eq!(table.get(b"key"), None);
+    }
+}
