@@ -1,46 +1,44 @@
-use crate::{BaseData, DeltaData, Page, PageCache, PageId, PageKind, PagePtr};
+use crate::{BaseData, DeltaData, Page, PageCache, PageContent, PageHeader, PageId, PagePtr};
 
 type NodeId = PageId;
 
-#[derive(Copy, Clone)]
-enum Node<'a> {
-    Data(DataNode<'a>),
-    Index(IndexNode<'a>),
-}
+const ROOT_ID: NodeId = NodeId::zero();
 
 #[derive(Copy, Clone)]
-struct DataNode<'a>(Page<'a>);
+struct Node<'a>(PagePtr<'a>);
 
-impl<'a> DataNode<'a> {
-    fn as_ptr(self) -> PagePtr {
-        self.0.as_ptr()
+impl<'a> Node<'a> {
+    fn as_ptr(self) -> PagePtr<'a> {
+        self.0
     }
 
-    fn lookup(self, key: &[u8]) -> Option<&'a [u8]> {
+    fn covers(self, key: &[u8]) -> bool {
+        self.0.covers(key)
+    }
+
+    fn is_data(self) -> bool {
+        self.0.is_data()
+    }
+
+    fn lookup_data(self, key: &[u8]) -> Option<&'a [u8]> {
         let mut current = self.0;
         loop {
-            match current {
-                Page::BaseData(page) => return page.get(key),
-                Page::DeltaData(page) => {
+            match current.content() {
+                PageContent::BaseData(page) => return page.get(key),
+                PageContent::DeltaData(page) => {
                     if let Some(value) = page.get(key) {
                         return value;
                     }
-                    current = page.next().deref();
                 }
+            }
+            match current.next() {
+                Some(next) => current = next,
+                None => return None,
             }
         }
     }
-}
 
-#[derive(Copy, Clone)]
-struct IndexNode<'a>(Page<'a>);
-
-impl IndexNode<'_> {
-    fn as_ptr(self) -> PagePtr {
-        self.0.as_ptr()
-    }
-
-    fn search(self, target: &[u8]) -> NodeId {
+    fn lookup_index(self, key: &[u8]) -> NodeId {
         todo!()
     }
 }
@@ -49,37 +47,33 @@ pub struct Tree {
     cache: PageCache,
 }
 
-const ROOT_ID: NodeId = NodeId::zero();
-
 impl Tree {
     pub fn new() -> Self {
         let cache = PageCache::new();
 
-        let root = Box::new(BaseData::default());
-        let root_ptr = PagePtr::new(PageKind::BaseData, &*root as *const BaseData as u64);
+        let root = Box::new(Page::new(
+            PageHeader::default(),
+            PageContent::BaseData(BaseData::new()),
+        ));
+        let root_ptr = PagePtr::new(Box::leak(root));
         assert_eq!(cache.install(root_ptr), ROOT_ID);
 
         Self { cache }
     }
 
     fn node<'a>(&self, id: NodeId) -> Node<'a> {
-        let ptr = self.cache.get(id);
-        let page = ptr.deref();
-        if page.is_data() {
-            Node::Data(DataNode(page))
-        } else {
-            Node::Index(IndexNode(page))
-        }
+        Node(self.cache.get(id))
     }
 
-    fn search(&self, target: &[u8]) -> (NodeId, DataNode) {
-        let mut id = ROOT_ID;
-        let mut current = self.node(id);
+    fn search<'a>(&self, key: &[u8]) -> (NodeId, Node<'a>) {
         loop {
-            match current {
-                Node::Data(node) => return (id, node),
-                Node::Index(node) => {
-                    id = node.search(target);
+            let mut id = ROOT_ID;
+            let mut current = self.node(id);
+            while current.covers(key) {
+                if current.is_data() {
+                    return (id, current);
+                } else {
+                    id = current.lookup_index(key);
                     current = self.node(id);
                 }
             }
@@ -88,7 +82,7 @@ impl Tree {
 
     pub fn lookup(&self, key: &[u8]) -> Option<&[u8]> {
         let (_, node) = self.search(key);
-        node.lookup(key)
+        node.lookup_data(key)
     }
 
     pub fn update(&self, key: &[u8], value: Option<&[u8]>) {

@@ -2,28 +2,95 @@ use crate::PageTable;
 
 use std::collections::BTreeMap;
 
-#[derive(Copy, Clone)]
-pub enum Page<'a> {
-    BaseData(&'a BaseData),
-    DeltaData(&'a DeltaData),
+pub struct Page {
+    header: PageHeader,
+    content: PageContent,
 }
 
-impl Page<'_> {
-    pub fn as_ptr(self) -> PagePtr {
+impl Page {
+    pub fn new(header: PageHeader, content: PageContent) -> Self {
+        Self { header, content }
+    }
+}
+
+#[derive(Clone)]
+pub struct PageHeader {
+    next: u64,
+    lower_bound: Vec<u8>,
+    upper_bound: Vec<u8>,
+}
+
+impl PageHeader {
+    pub fn covers(&self, key: &[u8]) -> bool {
+        key >= &self.lower_bound && (key <= &self.upper_bound || self.upper_bound.is_empty())
+    }
+}
+
+impl Default for PageHeader {
+    fn default() -> Self {
+        Self {
+            next: 0,
+            lower_bound: vec![],
+            upper_bound: vec![],
+        }
+    }
+}
+
+pub enum PageContent {
+    BaseData(BaseData),
+    DeltaData(DeltaData),
+}
+
+impl PageContent {
+    pub fn is_data(&self) -> bool {
         match self {
-            Page::BaseData(page) => {
-                PagePtr::new(PageKind::BaseData, page as *const BaseData as u64)
-            }
-            Page::DeltaData(page) => {
-                PagePtr::new(PageKind::DeltaData, page as *const DeltaData as u64)
-            }
+            PageContent::BaseData(_) | PageContent::DeltaData(_) => true,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct PagePtr<'a>(&'a Page);
+
+impl<'a> PagePtr<'a> {
+    pub fn new(page: &'a Page) -> Self {
+        Self(page)
+    }
+
+    pub fn next(self) -> Option<PagePtr<'a>> {
+        if self.0.header.next == 0 {
+            None
+        } else {
+            Some(self.0.header.next.into())
         }
     }
 
-    pub fn is_data(&self) -> bool {
-        match self {
-            Page::BaseData(_) | Page::DeltaData(_) => true,
-        }
+    pub fn set_next(self, next: Option<PagePtr<'a>>) {
+        self.0.header.next = next.map(|p| p.into()).unwrap_or(0);
+    }
+
+    pub fn covers(self, key: &[u8]) -> bool {
+        self.0.header.covers(key)
+    }
+
+    pub fn is_data(self) -> bool {
+        self.0.content.is_data()
+    }
+
+    pub fn content(self) -> &'a PageContent {
+        &self.0.content
+    }
+}
+
+impl<'a> From<u64> for PagePtr<'a> {
+    fn from(ptr: u64) -> Self {
+        Self(unsafe { &*(ptr as *const Page) })
+    }
+}
+
+impl<'a> Into<u64> for PagePtr<'a> {
+    fn into(self) -> u64 {
+        self.0 as *const Page as u64
     }
 }
 
@@ -32,29 +99,25 @@ pub struct BaseData {
 }
 
 impl BaseData {
+    pub fn new() -> Self {
+        Self {
+            records: BTreeMap::new(),
+        }
+    }
+
     pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
         self.records.get(key).map(|v| v.as_slice())
     }
 }
 
-impl Default for BaseData {
-    fn default() -> Self {
-        Self {
-            records: BTreeMap::new(),
-        }
-    }
-}
-
 pub struct DeltaData {
     records: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
-    next: PagePtr,
 }
 
 impl DeltaData {
-    pub fn new(next: PagePtr) -> Self {
+    pub fn new() -> Self {
         Self {
             records: BTreeMap::new(),
-            next,
         }
     }
 
@@ -67,14 +130,6 @@ impl DeltaData {
     pub fn add(&mut self, key: Vec<u8>, value: Option<Vec<u8>>) {
         self.records.insert(key, value);
     }
-
-    pub fn next(&self) -> PagePtr {
-        self.next
-    }
-
-    pub fn set_next(&mut self, next: PagePtr) {
-        self.next = next;
-    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -83,55 +138,6 @@ pub struct PageId(u64);
 impl PageId {
     pub const fn zero() -> PageId {
         PageId(0)
-    }
-}
-
-// Layout: mem/disk (1 bit) | page_kind (7 bits) | reserved (8 bits) | page_addr (48 bits)
-#[derive(Copy, Clone)]
-pub struct PagePtr(u64);
-
-impl PagePtr {
-    pub fn new(kind: PageKind, addr: u64) -> Self {
-        Self((kind as u64) << 56 | addr)
-    }
-
-    pub fn kind(self) -> PageKind {
-        (((self.0 >> 56) & 0x7F) as u8).into()
-    }
-
-    pub fn addr(self) -> u64 {
-        self.0 & 0x0000FFFFFFFFFFFF
-    }
-
-    pub fn deref<'a>(self) -> Page<'a> {
-        match self.kind() {
-            PageKind::BaseData => Page::BaseData(unsafe { &*(self.addr() as *const BaseData) }),
-            PageKind::DeltaData => Page::DeltaData(unsafe { &*(self.addr() as *const DeltaData) }),
-        }
-    }
-}
-
-pub enum PageKind {
-    BaseData = 0,
-    DeltaData = 1,
-}
-
-impl From<u8> for PageKind {
-    fn from(kind: u8) -> Self {
-        match kind {
-            0 => PageKind::BaseData,
-            1 => PageKind::DeltaData,
-            _ => panic!("invalid page kind"),
-        }
-    }
-}
-
-impl Into<u8> for PageKind {
-    fn into(self) -> u8 {
-        match self {
-            PageKind::BaseData => 0,
-            PageKind::DeltaData => 1,
-        }
     }
 }
 
@@ -146,16 +152,18 @@ impl PageCache {
         }
     }
 
-    pub fn get(&self, id: PageId) -> PagePtr {
-        PagePtr(self.table.get(id.0))
+    pub fn get<'a>(&self, id: PageId) -> PagePtr<'a> {
+        self.table.get(id.0).into()
     }
 
-    pub fn cas(&self, id: PageId, old: PagePtr, new: PagePtr) -> Option<PagePtr> {
-        self.table.cas(id.0, old.0, new.0).map(|ptr| PagePtr(ptr))
+    pub fn cas<'a>(&self, id: PageId, old: PagePtr<'a>, new: PagePtr<'a>) -> Option<PagePtr<'a>> {
+        self.table
+            .cas(id.0, old.into(), new.into())
+            .map(|ptr| ptr.into())
     }
 
-    pub fn install(&self, new: PagePtr) -> PageId {
-        PageId(self.table.install(new.0))
+    pub fn install<'a>(&self, new: PagePtr<'a>) -> PageId {
+        PageId(self.table.install(new.into()))
     }
 
     pub fn uninstall(&self, id: PageId) {
