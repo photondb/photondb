@@ -11,14 +11,19 @@ use std::{
 
 use crossbeam_epoch::Guard;
 
-const MIN_ID: usize = 1;
+const MIN_ID: usize = 0;
+const MAX_ID: usize = 1 << 48 - 1;
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct PageId<'a>(usize, PhantomData<&'a ()>);
 
 impl<'a> PageId<'a> {
     pub const fn min() -> PageId<'a> {
         PageId(MIN_ID, PhantomData)
+    }
+
+    pub const fn max() -> PageId<'a> {
+        PageId(MAX_ID, PhantomData)
     }
 
     fn from_usize(id: usize) -> Self {
@@ -30,7 +35,7 @@ impl<'a> PageId<'a> {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct PagePtr<'a>(usize, PhantomData<&'a ()>);
 
 impl<'a> PagePtr<'a> {
@@ -88,16 +93,20 @@ impl PageTable {
         }
     }
 
-    pub fn install<'a>(&self, new: PagePtr<'a>, _: &'a Guard) -> PageId<'a> {
-        let id = self.inner.alloc();
-        let new = new.into_usize();
-        self.inner.index(id).store(new, Ordering::Release);
-        PageId::from_usize(id)
+    pub fn install<'a>(&self, new: PagePtr<'a>, _: &'a Guard) -> Option<PageId<'a>> {
+        if let Some(id) = self.inner.alloc() {
+            let new = new.into_usize();
+            self.inner.index(id).store(new, Ordering::Release);
+            Some(PageId::from_usize(id))
+        } else {
+            None
+        }
     }
 
     pub fn uninstall<'a>(&self, id: PageId<'a>, guard: &'a Guard) {
         let id = id.into_usize();
         let inner = self.inner.clone();
+        // Prevents the id from being reused in the same epoch to protect the free list.
         guard.defer(move || {
             inner.dealloc(id);
         });
@@ -124,9 +133,9 @@ impl Inner {
         self.len.load(Ordering::Relaxed)
     }
 
-    fn alloc(&self) -> usize {
+    fn alloc(&self) -> Option<usize> {
         let mut id = self.free.load(Ordering::Acquire);
-        while id != 0 {
+        while id <= MAX_ID {
             let next = self.index(id).load(Ordering::Acquire);
             match self
                 .free
@@ -136,11 +145,18 @@ impl Inner {
                 Err(actual) => id = actual,
             }
         }
-        if id == 0 {
-            id = self.next.fetch_add(1, Ordering::Relaxed);
+        if id > MAX_ID {
+            let mut next = self.next.load(Ordering::Relaxed);
+            if next <= MAX_ID {
+                id = self.next.fetch_add(1, Ordering::Relaxed);
+            }
         }
-        self.len.fetch_add(1, Ordering::Relaxed);
-        id
+        if id > MAX_ID {
+            None
+        } else {
+            self.len.fetch_add(1, Ordering::Relaxed);
+            Some(id)
+        }
     }
 
     fn dealloc(&self, id: usize) {
@@ -167,8 +183,8 @@ impl Default for Inner {
             l1: Box::default(),
             l2: Box::default(),
             len: AtomicUsize::new(0),
-            next: AtomicUsize::new(MIN_ID),
-            free: AtomicUsize::new(0),
+            next: AtomicUsize::new(0),
+            free: AtomicUsize::new(MAX_ID + 1),
         }
     }
 }
@@ -274,18 +290,23 @@ mod test {
     const N: usize = 1 << 10;
 
     #[test]
-    fn test_inner() {
+    fn test_alloc() {
         let inner = Inner::default();
-
-        assert_eq!(inner.alloc(), MIN_ID);
-        assert_eq!(inner.alloc(), MIN_ID + 1);
+        let id1 = MIN_ID;
+        let id2 = MIN_ID + 1;
+        assert_eq!(inner.alloc(), Some(id1));
+        assert_eq!(inner.alloc(), Some(id2));
         assert_eq!(inner.len(), 2);
-        inner.dealloc(MIN_ID);
-        inner.dealloc(MIN_ID + 1);
+        inner.dealloc(id1);
+        inner.dealloc(id2);
         assert_eq!(inner.len(), 0);
-        assert_eq!(inner.alloc(), MIN_ID + 1);
-        assert_eq!(inner.alloc(), MIN_ID);
+        assert_eq!(inner.alloc(), Some(id2));
+        assert_eq!(inner.alloc(), Some(id1));
+    }
 
+    #[test]
+    fn test_index() {
+        let inner = Inner::default();
         for i in [0, L0_MAX - 1, L0_MAX, L1_MAX - 1, L1_MAX, L2_MAX - 1] {
             inner.index(i).store(i, Ordering::Relaxed);
             assert_eq!(inner.index(i).load(Ordering::Relaxed), i);
