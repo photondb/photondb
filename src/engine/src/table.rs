@@ -1,3 +1,5 @@
+use crossbeam_epoch::pin;
+
 use crate::Tree;
 
 pub struct Table {
@@ -10,7 +12,8 @@ impl Table {
     }
 
     pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.tree.lookup(key).map(|v| v.to_owned())
+        let guard = &pin();
+        self.tree.get(key, guard).map(|v| v.to_owned())
     }
 
     pub fn iter(&self) {
@@ -18,10 +21,12 @@ impl Table {
     }
 
     pub fn put(&self, key: &[u8], value: &[u8]) {
-        self.tree.update(key, Some(value));
+        let guard = &pin();
+        self.tree.write(key, Some(value), guard);
     }
 
     pub fn delete(&self, key: &[u8]) {
-        self.tree.update(key, None);
+        let guard = &pin();
+        self.tree.write(key, None, guard);
     }
 }

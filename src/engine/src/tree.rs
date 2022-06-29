@@ -61,6 +61,27 @@ impl Tree {
         Self { cache }
     }
 
+    pub fn get(&self, key: &[u8], guard: &Guard) -> Option<&[u8]> {
+        let (_, node) = self.search(key);
+        node.lookup_data(key)
+    }
+
+    pub fn write(&self, key: &[u8], value: Option<&[u8]>, guard: &Guard) {
+        let (id, node) = self.search(key);
+        let mut delta = DeltaData::new();
+        delta.add(key.to_owned(), value.map(|v| v.to_owned()));
+        let header = node.header().clone();
+        header.next = node;
+        let content = PageContent::DeltaData(delta);
+        let new_page = self.cache.alloc(node.header().clone(), content);
+
+        // TODO: validate the node range
+        while let Some(next_ptr) = self.cache.cas(id, delta.next(), delta_ptr) {
+            delta.set_next(next_ptr);
+        }
+        std::mem::forget(delta);
+    }
+
     fn node<'a>(&self, id: NodeId) -> Node<'a> {
         Node(self.cache.get(id))
     }
@@ -78,23 +99,5 @@ impl Tree {
                 }
             }
         }
-    }
-
-    pub fn lookup(&self, key: &[u8]) -> Option<&[u8]> {
-        let (_, node) = self.search(key);
-        node.lookup_data(key)
-    }
-
-    pub fn update(&self, key: &[u8], value: Option<&[u8]>) {
-        let (id, node) = self.search(key);
-        let mut delta = Box::new(DeltaData::new(node.as_ptr()));
-        delta.add(key.to_owned(), value.map(|v| v.to_owned()));
-        let delta_ptr = PagePtr::new(PageKind::DeltaData, &*delta as *const DeltaData as u64);
-
-        // TODO: validate the node range
-        while let Some(next_ptr) = self.cache.cas(id, delta.next(), delta_ptr) {
-            delta.set_next(next_ptr);
-        }
-        std::mem::forget(delta);
     }
 }

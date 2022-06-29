@@ -1,8 +1,7 @@
 use std::{
-    marker::PhantomData,
     mem::MaybeUninit,
     ops::Index,
-    ptr,
+    ptr::null_mut,
     sync::{
         atomic::{AtomicPtr, AtomicUsize, Ordering},
         Arc,
@@ -12,43 +11,19 @@ use std::{
 use crossbeam_epoch::Guard;
 
 const MIN_ID: usize = 0;
-const MAX_ID: usize = 1 << 48 - 1;
+const MAX_ID: usize = L2_MAX - 1;
+const INF_ID: usize = L2_MAX;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub struct PageId<'a>(usize, PhantomData<&'a ()>);
+pub struct PageId(usize);
 
-impl<'a> PageId<'a> {
-    pub const fn min() -> PageId<'a> {
-        PageId(MIN_ID, PhantomData)
+impl PageId {
+    pub const fn min() -> Self {
+        Self(MIN_ID)
     }
 
-    pub const fn max() -> PageId<'a> {
-        PageId(MAX_ID, PhantomData)
-    }
-
-    fn from_usize(id: usize) -> Self {
-        PageId(id, PhantomData)
-    }
-
-    fn into_usize(self) -> usize {
-        self.0
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct PagePtr<'a>(usize, PhantomData<&'a ()>);
-
-impl<'a> PagePtr<'a> {
-    const fn null() -> PagePtr<'a> {
-        PagePtr(0, PhantomData)
-    }
-
-    fn from_usize(ptr: usize) -> Self {
-        PagePtr(ptr, PhantomData)
-    }
-
-    fn into_usize(self) -> usize {
-        self.0
+    pub const fn max() -> Self {
+        Self(MAX_ID)
     }
 }
 
@@ -67,48 +42,35 @@ impl PageTable {
         self.inner.len()
     }
 
-    pub fn get<'a>(&self, id: PageId<'a>, _: &'a Guard) -> PagePtr<'a> {
-        let id = id.into_usize();
-        let ptr = self.inner.index(id).load(Ordering::Acquire);
-        PagePtr::from_usize(ptr)
+    pub fn get(&self, id: PageId) -> usize {
+        self.inner.index(id.0).load(Ordering::Acquire)
     }
 
-    pub fn cas<'a>(
-        &self,
-        id: PageId<'a>,
-        old: PagePtr<'a>,
-        new: PagePtr<'a>,
-        _: &'a Guard,
-    ) -> Option<PagePtr<'a>> {
-        let id = id.into_usize();
-        let old = old.into_usize();
-        let new = new.into_usize();
+    pub fn cas(&self, id: PageId, old: usize, new: usize) -> Option<usize> {
         match self
             .inner
-            .index(id)
+            .index(id.0)
             .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
         {
             Ok(_) => None,
-            Err(actual) => Some(PagePtr::from_usize(actual)),
+            Err(actual) => Some(actual),
         }
     }
 
-    pub fn install<'a>(&self, new: PagePtr<'a>, _: &'a Guard) -> Option<PageId<'a>> {
+    pub fn install(&self, new: usize, _: &Guard) -> Option<PageId> {
         if let Some(id) = self.inner.alloc() {
-            let new = new.into_usize();
             self.inner.index(id).store(new, Ordering::Release);
-            Some(PageId::from_usize(id))
+            Some(PageId(id))
         } else {
             None
         }
     }
 
-    pub fn uninstall<'a>(&self, id: PageId<'a>, guard: &'a Guard) {
-        let id = id.into_usize();
+    pub fn uninstall(&self, id: PageId, guard: &Guard) {
         let inner = self.inner.clone();
         // Prevents the id from being reused in the same epoch to protect the free list.
         guard.defer(move || {
-            inner.dealloc(id);
+            inner.dealloc(id.0);
         });
     }
 }
@@ -135,7 +97,7 @@ impl Inner {
 
     fn alloc(&self) -> Option<usize> {
         let mut id = self.free.load(Ordering::Acquire);
-        while id <= MAX_ID {
+        while id != INF_ID {
             let next = self.index(id).load(Ordering::Acquire);
             match self
                 .free
@@ -145,17 +107,17 @@ impl Inner {
                 Err(actual) => id = actual,
             }
         }
-        if id > MAX_ID {
-            let mut next = self.next.load(Ordering::Relaxed);
+        if id == INF_ID {
+            let next = self.next.load(Ordering::Relaxed);
             if next <= MAX_ID {
                 id = self.next.fetch_add(1, Ordering::Relaxed);
             }
         }
-        if id > MAX_ID {
-            None
-        } else {
+        if id <= MAX_ID {
             self.len.fetch_add(1, Ordering::Relaxed);
             Some(id)
+        } else {
+            None
         }
     }
 
@@ -184,7 +146,7 @@ impl Default for Inner {
             l2: Box::default(),
             len: AtomicUsize::new(0),
             next: AtomicUsize::new(0),
-            free: AtomicUsize::new(MAX_ID + 1),
+            free: AtomicUsize::new(INF_ID),
         }
     }
 }
@@ -231,6 +193,19 @@ macro_rules! define_level {
             }
         }
 
+        impl<const N: usize> Drop for $level<N> {
+            fn drop(&mut self) {
+                for child in &self.0 {
+                    let ptr = child.load(Ordering::Relaxed);
+                    if !ptr.is_null() {
+                        unsafe {
+                            Box::from_raw(ptr);
+                        }
+                    }
+                }
+            }
+        }
+
         impl<const N: usize> Index<usize> for $level<N> {
             type Output = AtomicUsize;
 
@@ -251,7 +226,7 @@ macro_rules! define_level {
             fn install_or_acquire_child(&self, index: usize) -> &$child {
                 let mut child = Box::into_raw(Box::default());
                 if let Err(current) = self.0[index].compare_exchange(
-                    ptr::null_mut(),
+                    null_mut(),
                     child,
                     Ordering::AcqRel,
                     Ordering::Acquire,
@@ -267,7 +242,6 @@ macro_rules! define_level {
     };
 }
 
-#[cfg(target_pointer_width = "64")]
 const FANOUT: usize = 1 << 16;
 const L0_LEN: usize = FANOUT;
 const L1_LEN: usize = FANOUT - 1;

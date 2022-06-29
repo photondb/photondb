@@ -1,4 +1,7 @@
 #![feature(test)]
 
+mod pagecache;
+use pagecache::{PageCache, PageRef};
+
 mod pagetable;
-use pagetable::PageTable;
+use pagetable::{PageId, PageTable};
