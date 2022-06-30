@@ -4,7 +4,7 @@ mod table;
 pub use table::Table;
 
 mod tree;
-use tree::Tree;
+use tree::{Config, Tree};
 
 mod page;
 use page::{BaseData, DeltaData, PageContent};

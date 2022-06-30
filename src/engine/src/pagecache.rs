@@ -1,7 +1,8 @@
 use crossbeam_epoch::Guard;
 
-use crate::{PageContent, PageId, PageTable};
+use crate::{BaseData, DeltaData, PageContent, PageId, PageTable};
 
+#[derive(Debug)]
 pub struct Page {
     header: PageHeader,
     content: PageContent,
@@ -14,13 +15,15 @@ impl Page {
 
     pub fn with_next(next: PageRef<'_>, content: PageContent) -> Self {
         let mut header = next.0.header.clone();
+        header.len += 1;
         header.next = next.into_usize();
         Self { header, content }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PageHeader {
+    len: usize,
     next: usize,
     lower_bound: Vec<u8>,
     upper_bound: Vec<u8>,
@@ -29,6 +32,7 @@ pub struct PageHeader {
 impl PageHeader {
     pub fn new() -> Self {
         Self {
+            len: 1,
             next: 0,
             lower_bound: Vec::new(),
             upper_bound: Vec::new(),
@@ -40,7 +44,7 @@ impl PageHeader {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct PageRef<'a>(&'a Page);
 
 impl<'a> PageRef<'a> {
@@ -52,12 +56,8 @@ impl<'a> PageRef<'a> {
         self.0 as *const Page as _
     }
 
-    fn header(self) -> &'a PageHeader {
-        &self.0.header
-    }
-
-    fn content(self) -> &'a PageContent {
-        &self.0.content
+    pub fn len(self) -> usize {
+        self.0.header.len
     }
 
     pub fn next(self) -> Option<PageRef<'a>> {
@@ -78,9 +78,9 @@ impl<'a> PageRef<'a> {
     }
 
     pub fn lookup_data(self, key: &[u8]) -> Option<&'a [u8]> {
-        let mut current = Some(self);
-        while let Some(page) = current {
-            match page.content() {
+        let mut page = self;
+        loop {
+            match &page.0.content {
                 PageContent::BaseData(data) => return data.get(key),
                 PageContent::DeltaData(data) => {
                     if let Some(value) = data.get(key) {
@@ -88,12 +88,39 @@ impl<'a> PageRef<'a> {
                     }
                 }
             }
-            current = page.next();
+            page = page.next().unwrap();
         }
-        None
     }
 
     pub fn lookup_index(self, key: &[u8]) -> PageId {
+        todo!()
+    }
+
+    pub fn consolidate(self) -> Page {
+        if self.is_data() {
+            self.consolidate_data()
+        } else {
+            self.consolidate_index()
+        }
+    }
+
+    fn consolidate_data(self) -> Page {
+        let mut page = self;
+        let mut delta = DeltaData::new();
+        loop {
+            match &page.0.content {
+                PageContent::BaseData(data) => {
+                    let mut base = data.clone();
+                    base.merge(delta);
+                    return Page::new(page.0.header.clone(), PageContent::BaseData(base));
+                }
+                PageContent::DeltaData(data) => delta.merge(data.clone()),
+            }
+            page = page.next().unwrap();
+        }
+    }
+
+    fn consolidate_index(self) -> Page {
         todo!()
     }
 }
@@ -128,7 +155,7 @@ impl PageCache {
             .map_err(|ptr| PageRef::from_usize(ptr))
     }
 
-    pub fn alloc(&self, page: Page) -> PageRef<'_> {
+    pub fn alloc(&self, page: Page) -> PageRef<'static> {
         PageRef(Box::leak(Box::new(page)))
     }
 

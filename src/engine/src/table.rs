@@ -1,14 +1,16 @@
 use crossbeam_epoch::pin;
 
-use crate::Tree;
+use crate::{Config, Tree};
 
 pub struct Table {
     tree: Tree,
 }
 
 impl Table {
-    pub fn new() -> Self {
-        Self { tree: Tree::new() }
+    pub fn new(cfg: Config) -> Self {
+        Self {
+            tree: Tree::new(cfg),
+        }
     }
 
     pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
@@ -31,17 +33,33 @@ impl Table {
     }
 }
 
+impl Default for Table {
+    fn default() -> Self {
+        Self::new(Config::default())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
 
     #[test]
     fn test_table() {
-        let table = Table::new();
+        let table = Table::default();
         table.put(b"key", b"value");
         assert_eq!(table.get(b"key"), Some(b"value".to_vec()));
         assert_eq!(table.get(b"not_found"), None);
         table.delete(b"key");
         assert_eq!(table.get(b"key"), None);
+    }
+
+    #[test]
+    fn test_consolidate() {
+        let table = Table::default();
+        for i in 0..16u64 {
+            let key = &i.to_be_bytes();
+            table.put(key, key);
+            assert_eq!(table.get(key), Some(key.to_vec()));
+        }
     }
 }
