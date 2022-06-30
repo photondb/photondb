@@ -13,7 +13,7 @@ impl Page {
 
 #[derive(Clone)]
 pub struct PageHeader {
-    next: u64,
+    next: usize,
     lower_bound: Vec<u8>,
     upper_bound: Vec<u8>,
 }
@@ -27,8 +27,8 @@ impl PageHeader {
         }
     }
 
-    pub fn contains(&self, key: &[u8]) -> bool {
-        &self.lower_bound <= key && (key <= &self.upper_bound || self.upper_bound.is_empty())
+    pub fn covers(&self, key: &[u8]) -> bool {
+        key >= &self.lower_bound && (key < &self.upper_bound || self.upper_bound.is_empty())
     }
 }
 

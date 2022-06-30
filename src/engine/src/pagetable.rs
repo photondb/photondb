@@ -34,7 +34,7 @@ pub struct PageTable {
 impl PageTable {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Inner::default()),
+            inner: Arc::new(Inner::new()),
         }
     }
 
@@ -91,6 +91,17 @@ struct Inner {
 }
 
 impl Inner {
+    fn new() -> Self {
+        Self {
+            l0: Box::default(),
+            l1: Box::default(),
+            l2: Box::default(),
+            len: AtomicUsize::new(0),
+            next: AtomicUsize::new(0),
+            free: AtomicUsize::new(INF_ID),
+        }
+    }
+
     fn len(&self) -> usize {
         self.len.load(Ordering::Relaxed)
     }
@@ -140,14 +151,7 @@ impl Inner {
 
 impl Default for Inner {
     fn default() -> Self {
-        Self {
-            l0: Box::default(),
-            l1: Box::default(),
-            l2: Box::default(),
-            len: AtomicUsize::new(0),
-            next: AtomicUsize::new(0),
-            free: AtomicUsize::new(INF_ID),
-        }
+        Self::new()
     }
 }
 
