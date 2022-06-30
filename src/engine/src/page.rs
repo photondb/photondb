@@ -1,37 +1,5 @@
 use std::collections::BTreeMap;
 
-pub struct Page {
-    header: PageHeader,
-    content: PageContent,
-}
-
-impl Page {
-    pub fn new(header: PageHeader, content: PageContent) -> Self {
-        Self { header, content }
-    }
-}
-
-#[derive(Clone)]
-pub struct PageHeader {
-    next: usize,
-    lower_bound: Vec<u8>,
-    upper_bound: Vec<u8>,
-}
-
-impl PageHeader {
-    pub fn new() -> Self {
-        Self {
-            next: 0,
-            lower_bound: Vec::new(),
-            upper_bound: Vec::new(),
-        }
-    }
-
-    pub fn covers(&self, key: &[u8]) -> bool {
-        key >= &self.lower_bound && (key < &self.upper_bound || self.upper_bound.is_empty())
-    }
-}
-
 pub enum PageContent {
     BaseData(BaseData),
     DeltaData(DeltaData),

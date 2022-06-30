@@ -30,3 +30,18 @@ impl Table {
         self.tree.write(key, None, guard);
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_table() {
+        let table = Table::new();
+        table.put(b"key", b"value");
+        assert_eq!(table.get(b"key"), Some(b"value".to_vec()));
+        assert_eq!(table.get(b"not_found"), None);
+        table.delete(b"key");
+        assert_eq!(table.get(b"key"), None);
+    }
+}

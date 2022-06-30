@@ -46,15 +46,10 @@ impl PageTable {
         self.inner.index(id.0).load(Ordering::Acquire)
     }
 
-    pub fn cas(&self, id: PageId, old: usize, new: usize) -> Option<usize> {
-        match self
-            .inner
+    pub fn cas(&self, id: PageId, old: usize, new: usize) -> Result<usize, usize> {
+        self.inner
             .index(id.0)
             .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
-        {
-            Ok(_) => None,
-            Err(actual) => Some(actual),
-        }
     }
 
     pub fn install(&self, new: usize, _: &Guard) -> Option<PageId> {
