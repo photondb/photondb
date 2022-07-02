@@ -8,10 +8,11 @@ mod tree;
 use tree::{Config, Tree};
 */
 
+mod page;
+use page::{BaseData, DeltaData, OwnedPage, Page, PageContent, PageHeader, SharedPage, SplitPage};
+
 mod pagecache;
-use pagecache::{
-    BasePage, DeltaPage, PageCache, PageContent, PageHeader, PageId, PageRef, SplitPage,
-};
+use pagecache::{PageCache, PageId};
 
 mod pagetable;
 use pagetable::PageTable;
