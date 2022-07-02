@@ -26,14 +26,6 @@ impl PageTable {
         }
     }
 
-    pub const fn min() -> usize {
-        0
-    }
-
-    pub const fn max() -> usize {
-        L2_MAX - 1
-    }
-
     pub const fn nan() -> usize {
         L2_MAX
     }
@@ -172,10 +164,8 @@ mod test {
     #[test]
     fn test_alloc() {
         let table = PageTable::default();
-        let id1 = PageTable::min();
-        let id2 = id1 + 1;
-        assert_eq!(table.alloc(), Some(id1));
-        assert_eq!(table.alloc(), Some(id2));
+        assert_eq!(table.alloc(), Some(0));
+        assert_eq!(table.alloc(), Some(1));
     }
 
     #[test]

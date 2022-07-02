@@ -4,8 +4,6 @@ use crate::{
     BasePage, DeltaPage, Page, PageCache, PageContent, PageHeader, PageId, PageRef, SplitPage,
 };
 
-const ROOT_ID: PageId = PageId::min();
-
 struct Node<'a> {
     id: PageId,
     page: PageRef<'a>,
@@ -39,7 +37,7 @@ impl Tree {
         let page = Page::new(PageHeader::new(), PageContent::Base(BasePage::new()));
         let root = cache.alloc(page);
         let guard = unsafe { unprotected() };
-        assert_eq!(cache.install(root, guard), Some(ROOT_ID));
+        assert_eq!(cache.install(root, guard), Some(PageId::zero()));
 
         Self { cfg, cache }
     }
@@ -50,24 +48,26 @@ impl Tree {
 
     pub fn write(&self, key: &[u8], value: Option<&[u8]>, guard: &Guard) {
         loop {
-            let (id, node) = self.search(key, guard);
-            let mut delta = DeltaPage::new();
-            delta.add(key.to_owned(), value.map(|v| v.to_owned()));
-            let new_page = Page::with_next(node, PageContent::Delta(delta));
-            let new_node = self.cache.alloc(new_page);
-            match self.cache.cas(id, node, new_node) {
+            let node = self.search(key, guard);
+            let header = PageHeader::with_next(node.page);
+            let mut content = DeltaPage::new();
+            content.add(key.to_owned(), value.map(|v| v.to_owned()));
+            let new_page = Page::new(header, PageContent::Delta(content));
+            let new_page = self.cache.alloc(new_page);
+            match self.cache.cas(node.id, node.page, new_page) {
                 Ok(_) => break,
-                Err(_) => self.cache.dealloc(new_node, guard),
+                Err(_) => self.cache.dealloc(new_page, guard),
             }
         }
     }
 
     fn root<'a>(&self, guard: &'a Guard) -> Node<'a> {
-        let page = self.cache.get(ROOT_ID, guard);
-        Node { id: ROOT_ID, page }
+        let id = PageId::zero();
+        let page = self.cache.get(id, guard);
+        Node { id, page }
     }
 
-    fn search<'a>(&self, key: &[u8], guard: &'a Guard) -> (PageId, PageRef<'a>) {
+    fn search<'a>(&self, key: &[u8], guard: &'a Guard) -> Node<'a> {
         loop {
             let mut node = self.root(guard);
             let mut parent = None;
@@ -118,28 +118,33 @@ impl Tree {
         let mut right_node = None;
         if let Some(right_page) = right_page {
             let right_page = self.cache.alloc(right_page);
-            let right_id = self.cache.install(right_page, guard).unwrap();
-            right_node = Some(Node {
-                id: right_id,
-                page: right_page,
-            });
-            let split = SplitPage {
-                key: right_page.lower_bound().to_owned(),
-                right: right_id,
-            };
-            let split_page = Page::with_next(left_page, PageContent::Split(split));
-            left_page = self.cache.alloc(split_page);
+            if let Some(right_id) = self.cache.install(right_page, guard) {
+                right_node = Some(Node {
+                    id: right_id,
+                    page: right_page,
+                });
+                let split_header = PageHeader::with_next(left_page);
+                let split_content = SplitPage {
+                    key: right_page.lower_bound().to_owned(),
+                    right: right_id,
+                };
+                let split_page = Page::new(split_header, PageContent::Split(split_content));
+                left_page = self.cache.alloc(split_page);
+            } else {
+                self.cache.dealloc(right_page, guard);
+            }
         }
         match self.cache.replace(node.id, node.page, left_page, guard) {
             Ok(_) => {
                 node.page = left_page;
                 right_node
             }
-            Err(_) => {
+            Err(actual) => {
+                node.page = actual;
+                self.cache.dealloc(left_page, guard);
                 if let Some(right_node) = right_node {
                     self.cache.uninstall(right_node.id, guard);
                 }
-                self.cache.dealloc(left_page, guard);
                 None
             }
         }
