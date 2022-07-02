@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, ops::Deref};
 
 use crate::PageId;
 
+#[derive(Debug)]
 pub struct OwnedPage(Box<Page>);
 
 impl OwnedPage {
@@ -11,6 +12,19 @@ impl OwnedPage {
 
     pub fn into_usize(self) -> usize {
         Box::into_raw(self.0) as usize
+    }
+
+    pub fn drop_chain(&mut self) {
+        let mut next = self.0.take_next();
+        while let Some(page) = next {
+            if let PageContent::RemovePage = page.content() {
+                // This page has been merged into the left page.
+                next = None;
+            } else {
+                next = page.next();
+            }
+            page.into_owned();
+        }
     }
 }
 
@@ -60,6 +74,12 @@ impl Page {
         } else {
             None
         }
+    }
+
+    pub fn take_next<'a>(&mut self) -> Option<SharedPage<'a>> {
+        let next = self.next();
+        self.header.next = 0;
+        next
     }
 
     pub fn lowest(&self) -> &[u8] {
@@ -227,14 +247,20 @@ pub struct DeltaIndex {
 
 #[derive(Debug)]
 pub struct SplitPage {
-    pub lower_bound: Vec<u8>,
-    pub right: PageId,
+    pub lowest: Vec<u8>,
+    pub right_page: PageId,
 }
 
 #[derive(Debug)]
 pub struct MergePage {
-    pub lower_bound: Vec<u8>,
-    pub right: usize,
+    pub lowest: Vec<u8>,
+    pub right_page: OwnedPage,
+}
+
+impl Drop for MergePage {
+    fn drop(&mut self) {
+        self.right_page.drop_chain();
+    }
 }
 
 /*

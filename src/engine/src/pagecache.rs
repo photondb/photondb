@@ -65,11 +65,10 @@ impl PageCache {
         guard: &'a Guard,
     ) -> Result<(), (SharedPage<'a>, OwnedPage)> {
         self.update(id, old, new, guard)?;
-        let mut cursor = Some(old);
-        while let Some(page) = cursor {
-            cursor = page.next();
-            page.into_owned();
-        }
+        let old = old.into_usize();
+        guard.defer(move || {
+            OwnedPage::from_usize(old).drop_chain();
+        });
         Ok(())
     }
 
@@ -88,7 +87,7 @@ impl PageCache {
         let table = self.table.clone();
         guard.defer(move || {
             table.dealloc(id);
-            OwnedPage::from_usize(ptr);
+            OwnedPage::from_usize(ptr).drop_chain();
         });
     }
 }
