@@ -1,57 +1,6 @@
-use std::{collections::BTreeMap, ops::Deref};
+use std::{collections::BTreeMap, ptr::null_mut};
 
 use crate::PageId;
-
-#[derive(Debug)]
-pub struct OwnedPage(Box<Page>);
-
-impl OwnedPage {
-    pub fn from_usize(ptr: usize) -> Self {
-        Self(unsafe { Box::from_raw(ptr as *mut Page) })
-    }
-
-    pub fn into_usize(self) -> usize {
-        Box::into_raw(self.0) as usize
-    }
-
-    pub fn drop_chain(&mut self) {
-        let mut next = self.0.take_next();
-        while let Some(page) = next {
-            if let PageContent::RemovePage = page.content() {
-                // This page has been merged into the left page.
-                next = None;
-            } else {
-                next = page.next();
-            }
-            page.into_owned();
-        }
-    }
-}
-
-#[derive(Copy, Clone)]
-pub struct SharedPage<'a>(&'a Page);
-
-impl<'a> SharedPage<'a> {
-    pub fn from_usize(ptr: usize) -> Self {
-        Self(unsafe { &*(ptr as *const Page) })
-    }
-
-    pub fn into_usize(self) -> usize {
-        self.0 as *const Page as usize
-    }
-
-    pub fn into_owned(self) -> OwnedPage {
-        OwnedPage::from_usize(self.into_usize())
-    }
-}
-
-impl<'a> Deref for SharedPage<'a> {
-    type Target = Page;
-
-    fn deref(&self) -> &Self::Target {
-        self.0
-    }
-}
 
 #[derive(Debug)]
 pub struct Page {
@@ -68,18 +17,8 @@ impl Page {
         self.header.len
     }
 
-    pub fn next<'a>(&self) -> Option<SharedPage<'a>> {
-        if self.header.next != 0 {
-            Some(SharedPage::from_usize(self.header.next))
-        } else {
-            None
-        }
-    }
-
-    pub fn take_next<'a>(&mut self) -> Option<SharedPage<'a>> {
-        let next = self.next();
-        self.header.next = 0;
-        next
+    pub fn next<'a>(&self) -> Option<&'a Page> {
+        unsafe { self.header.next.as_ref() }
     }
 
     pub fn lowest(&self) -> &[u8] {
@@ -95,10 +34,25 @@ impl Page {
     }
 }
 
+impl Drop for Page {
+    fn drop(&mut self) {
+        let mut next = self.header.next;
+        while !next.is_null() {
+            let page = unsafe { Box::from_raw(next) };
+            if let PageContent::RemovePage = page.content() {
+                // This page has been merged into the left page.
+                next = null_mut();
+            } else {
+                next = page.header.next;
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PageHeader {
     len: usize,
-    next: usize,
+    next: *mut Page,
     lowest: Vec<u8>,
     highest: Vec<u8>,
 }
@@ -107,19 +61,19 @@ impl PageHeader {
     pub fn new() -> Self {
         Self {
             len: 1,
-            next: 0,
+            next: null_mut(),
             lowest: Vec::new(),
             highest: Vec::new(),
         }
     }
 
-    pub fn with_next(next: SharedPage<'_>) -> Self {
-        Self {
-            len: next.len() + 1,
-            next: next.into_usize(),
-            lowest: next.lowest().to_owned(),
-            highest: next.highest().to_owned(),
-        }
+    pub fn next<'a>(&self) -> Option<&'a Page> {
+        unsafe { self.next.as_ref() }
+    }
+
+    pub fn set_next(&mut self, next: &'_ Page) {
+        self.len = next.len() + 1;
+        self.next = next as *const _ as *mut _;
     }
 
     pub fn contains(&self, key: &[u8]) -> bool {
@@ -130,7 +84,7 @@ impl PageHeader {
         assert!(self.contains(key));
         let right = PageHeader {
             len: 1,
-            next: 0,
+            next: null_mut(),
             lowest: key.to_vec(),
             highest: self.highest.clone(),
         };
@@ -254,13 +208,7 @@ pub struct SplitPage {
 #[derive(Debug)]
 pub struct MergePage {
     pub lowest: Vec<u8>,
-    pub right_page: OwnedPage,
-}
-
-impl Drop for MergePage {
-    fn drop(&mut self) {
-        self.right_page.drop_chain();
-    }
+    pub right_page: Box<Page>,
 }
 
 /*

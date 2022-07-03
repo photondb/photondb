@@ -1,11 +1,8 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 
 use crossbeam_epoch::Guard;
 
-use crate::{OwnedPage, PageTable, SharedPage};
+use crate::{Page, PageTable};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct PageId(usize);
@@ -25,56 +22,62 @@ impl PageId {
 }
 
 pub struct PageCache {
-    table: Arc<Table>,
+    table: Arc<PageTable>,
 }
 
 impl PageCache {
     pub fn new() -> Self {
         Self {
-            table: Arc::new(Table::new()),
+            table: Arc::new(PageTable::new()),
         }
     }
 
-    pub fn get<'a>(&self, id: PageId, _: &'a Guard) -> SharedPage<'a> {
+    pub fn get<'a>(&self, id: PageId, _: &'a Guard) -> &'a Page {
         let id = id.into_usize();
         let ptr = self.table.get(id);
-        SharedPage::from_usize(ptr)
+        unsafe { &*(ptr as *const Page) }
     }
 
     pub fn update<'a>(
         &self,
         id: PageId,
-        old: SharedPage<'a>,
-        new: OwnedPage,
+        old: &'a Page,
+        new: Box<Page>,
         _: &'a Guard,
-    ) -> Result<(), (SharedPage<'a>, OwnedPage)> {
+    ) -> Result<(), (&'a Page, Box<Page>)> {
         let id = id.into_usize();
-        let old = old.into_usize();
-        let new = new.into_usize();
-        self.table
-            .cas(id, old, new)
-            .map(|_| ())
-            .map_err(|ptr| (SharedPage::from_usize(ptr), OwnedPage::from_usize(new)))
+        let old = old as *const Page;
+        let new = Box::into_raw(new);
+        if let Err(ptr) = self.table.cas(id, old as usize, new as usize) {
+            unsafe {
+                let old = &*(ptr as *const Page);
+                let new = Box::from_raw(new);
+                Err((old, new))
+            }
+        } else {
+            Ok(())
+        }
     }
 
     pub fn replace<'a>(
         &self,
         id: PageId,
-        old: SharedPage<'a>,
-        new: OwnedPage,
+        old: &'a Page,
+        new: Box<Page>,
         guard: &'a Guard,
-    ) -> Result<(), (SharedPage<'a>, OwnedPage)> {
+    ) -> Result<(), (&'a Page, Box<Page>)> {
         self.update(id, old, new, guard)?;
-        let old = old.into_usize();
-        guard.defer(move || {
-            OwnedPage::from_usize(old).drop_chain();
+        let old = old as *const Page as usize;
+        guard.defer(move || unsafe {
+            Box::from_raw(old as *const Page as *mut Page);
         });
         Ok(())
     }
 
-    pub fn install<'a>(&self, page: OwnedPage, guard: &'a Guard) -> Option<PageId> {
+    pub fn install<'a>(&self, page: Box<Page>, _: &'a Guard) -> Option<PageId> {
         if let Some(id) = self.table.alloc() {
-            self.table.set(id, page.into_usize());
+            let ptr = Box::into_raw(page) as usize;
+            self.table.set(id, ptr);
             Some(PageId::from_usize(id))
         } else {
             None
@@ -87,66 +90,9 @@ impl PageCache {
         let table = self.table.clone();
         guard.defer(move || {
             table.dealloc(id);
-            OwnedPage::from_usize(ptr).drop_chain();
+            unsafe {
+                Box::from_raw(ptr as *const Page as *mut Page);
+            }
         });
-    }
-}
-
-struct Table {
-    map: PageTable,
-    free: AtomicUsize,
-}
-
-impl Table {
-    fn new() -> Self {
-        Self {
-            map: PageTable::new(),
-            free: AtomicUsize::new(0),
-        }
-    }
-
-    fn get(&self, id: usize) -> usize {
-        self.map[id].load(Ordering::Acquire)
-    }
-
-    fn set(&self, id: usize, ptr: usize) {
-        self.map[id].store(ptr, Ordering::Release);
-    }
-
-    fn cas(&self, id: usize, old: usize, new: usize) -> Result<usize, usize> {
-        self.map[id].compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
-    }
-
-    fn alloc(&self) -> Option<usize> {
-        let mut id = self.free.load(Ordering::Acquire);
-        while id != 0 {
-            let next = self.map[id].load(Ordering::Acquire);
-            match self
-                .free
-                .compare_exchange(id, next, Ordering::AcqRel, Ordering::Acquire)
-            {
-                Ok(_) => break,
-                Err(actual) => id = actual,
-            }
-        }
-        if id != 0 {
-            Some(id)
-        } else {
-            self.map.alloc()
-        }
-    }
-
-    fn dealloc(&self, id: usize) {
-        let mut next = self.free.load(Ordering::Acquire);
-        loop {
-            self.map[id].store(next, Ordering::Release);
-            match self
-                .free
-                .compare_exchange(next, id, Ordering::AcqRel, Ordering::Acquire)
-            {
-                Ok(_) => break,
-                Err(actual) => next = actual,
-            }
-        }
     }
 }

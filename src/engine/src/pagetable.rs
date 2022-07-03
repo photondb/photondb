@@ -6,6 +6,73 @@ use std::{
 };
 
 pub struct PageTable {
+    map: Map,
+    // The head of the free list. The list is lock-free and must be used with epoch-based
+    // reclaimation to prevent the ABA problem.
+    free: AtomicUsize,
+}
+
+impl PageTable {
+    pub fn new() -> Self {
+        Self {
+            map: Map::new(),
+            free: AtomicUsize::new(L2_MAX),
+        }
+    }
+
+    pub fn get(&self, id: usize) -> usize {
+        self.map[id].load(Ordering::Acquire)
+    }
+
+    pub fn set(&self, id: usize, ptr: usize) {
+        self.map[id].store(ptr, Ordering::Release);
+    }
+
+    pub fn cas(&self, id: usize, old: usize, new: usize) -> Result<usize, usize> {
+        self.map[id].compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
+    }
+
+    pub fn alloc(&self) -> Option<usize> {
+        let mut id = self.free.load(Ordering::Acquire);
+        while id != L2_MAX {
+            let next = self.map[id].load(Ordering::Acquire);
+            match self
+                .free
+                .compare_exchange(id, next, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => break,
+                Err(actual) => id = actual,
+            }
+        }
+        if id != L2_MAX {
+            Some(id)
+        } else {
+            self.map.alloc()
+        }
+    }
+
+    pub fn dealloc(&self, id: usize) {
+        let mut next = self.free.load(Ordering::Acquire);
+        loop {
+            self.map[id].store(next, Ordering::Release);
+            match self
+                .free
+                .compare_exchange(next, id, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => break,
+                Err(actual) => next = actual,
+            }
+        }
+    }
+}
+
+impl Default for PageTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+struct Map {
     // Level 0: [0, L0_MAX)
     l0: Box<L0<L0_LEN>>,
     // Level 1: [L0_MAX, L1_MAX)
@@ -16,18 +83,14 @@ pub struct PageTable {
     next: AtomicUsize,
 }
 
-impl PageTable {
-    pub fn new() -> Self {
+impl Map {
+    fn new() -> Self {
         Self {
             l0: Box::default(),
             l1: Box::default(),
             l2: Box::default(),
             next: AtomicUsize::new(0),
         }
-    }
-
-    pub const fn nan() -> usize {
-        L2_MAX
     }
 
     pub fn alloc(&self) -> Option<usize> {
@@ -43,13 +106,13 @@ impl PageTable {
     }
 }
 
-impl Default for PageTable {
+impl Default for Map {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Index<usize> for PageTable {
+impl Index<usize> for Map {
     type Output = AtomicUsize;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -172,8 +235,8 @@ mod test {
     fn test_index() {
         let table = PageTable::default();
         for i in [0, L0_MAX - 1, L0_MAX, L1_MAX - 1, L1_MAX, L2_MAX - 1] {
-            table[i].store(i, Ordering::Relaxed);
-            assert_eq!(table[i].load(Ordering::Relaxed), i);
+            table.set(i, i);
+            assert_eq!(table.get(i), i);
         }
     }
 
@@ -205,17 +268,17 @@ mod test {
     }
 
     #[bench]
-    fn bench_table_l0(b: &mut Bencher) {
-        bench::<PageTable>(b, 0);
+    fn bench_map_l0(b: &mut Bencher) {
+        bench::<Map>(b, 0);
     }
 
     #[bench]
-    fn bench_table_l1(b: &mut Bencher) {
-        bench::<PageTable>(b, L0_MAX);
+    fn bench_map_l1(b: &mut Bencher) {
+        bench::<Map>(b, L0_MAX);
     }
 
     #[bench]
-    fn bench_table_l2(b: &mut Bencher) {
-        bench::<PageTable>(b, L1_MAX);
+    fn bench_map_l2(b: &mut Bencher) {
+        bench::<Map>(b, L1_MAX);
     }
 }

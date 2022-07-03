@@ -9,7 +9,7 @@ use tree::{Config, Tree};
 */
 
 mod page;
-use page::{BaseData, DeltaData, OwnedPage, Page, PageContent, PageHeader, SharedPage, SplitPage};
+use page::{BaseData, DeltaData, Page, PageContent, PageHeader, SplitPage};
 
 mod pagecache;
 use pagecache::{PageCache, PageId};
