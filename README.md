@@ -4,6 +4,8 @@ This is an experimental project to explore how to build a high performance data 
 
 The first plan is to build an async runtime based on io_uring and a storage engine based on Bw-Tree. And then build a standalone server based on the runtime and the storage engine.
 
+You can check the [top-level design document](docs/design.md) for more details about the project.
+
 ## References
 
 - [The Bw-Tree: A B-tree for New Hardware Platforms](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/bw-tree-icde2013-final.pdf)
