@@ -1,15 +1,15 @@
 use crossbeam_epoch::pin;
 
-use crate::{Config, Tree};
+use crate::{Options, Tree};
 
 pub struct Table {
     tree: Tree,
 }
 
 impl Table {
-    pub fn new(cfg: Config) -> Self {
+    pub fn new(opts: Options) -> Self {
         Self {
-            tree: Tree::new(cfg),
+            tree: Tree::new(opts),
         }
     }
 
@@ -35,7 +35,7 @@ impl Table {
 
 impl Default for Table {
     fn default() -> Self {
-        Self::new(Config::default())
+        Self::new(Options::default())
     }
 }
 

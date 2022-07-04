@@ -1,6 +1,89 @@
-use std::{collections::BTreeMap, ptr::null_mut};
+use std::{
+    collections::BTreeMap,
+    ops::{Deref, DerefMut},
+};
 
 use crate::PageId;
+
+#[derive(Debug)]
+pub struct OwnedPage(Box<Page>);
+
+impl OwnedPage {
+    pub fn new(header: PageHeader, content: PageContent) -> Self {
+        Self(Box::new(Page { header, content }))
+    }
+
+    pub fn with_content(content: PageContent) -> Self {
+        Self::new(PageHeader::new(), content)
+    }
+
+    pub fn with_next(next: SharedPage<'_>, content: PageContent) -> Self {
+        Self::new(PageHeader::with_next(next), content)
+    }
+
+    pub fn from_usize(ptr: usize) -> Option<Self> {
+        if ptr == 0 {
+            None
+        } else {
+            Some(Self(unsafe { Box::from_raw(ptr as *mut Page) }))
+        }
+    }
+
+    pub fn into_usize(self) -> usize {
+        Box::into_raw(self.0) as usize
+    }
+
+    pub fn into_shared<'a>(self) -> SharedPage<'a> {
+        SharedPage(unsafe { &*Box::into_raw(self.0) })
+    }
+}
+
+impl Deref for OwnedPage {
+    type Target = Page;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for OwnedPage {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct SharedPage<'a>(&'a Page);
+
+impl<'a> SharedPage<'a> {
+    pub fn from_usize(ptr: usize) -> Option<Self> {
+        if ptr == 0 {
+            None
+        } else {
+            Some(Self(unsafe { &*(ptr as *const Page) }))
+        }
+    }
+
+    pub fn into_usize(self) -> usize {
+        self.0 as *const Page as usize
+    }
+
+    pub fn next(self) -> Option<SharedPage<'a>> {
+        self.0.next()
+    }
+
+    pub fn content(self) -> &'a PageContent {
+        self.0.content()
+    }
+}
+
+impl<'a> Deref for SharedPage<'a> {
+    type Target = Page;
+
+    fn deref(&self) -> &'a Self::Target {
+        self.0
+    }
+}
 
 #[derive(Debug)]
 pub struct Page {
@@ -9,24 +92,20 @@ pub struct Page {
 }
 
 impl Page {
-    pub fn new(header: PageHeader, content: PageContent) -> Self {
-        Self { header, content }
-    }
-
     pub fn len(&self) -> usize {
         self.header.len
     }
 
-    pub fn next<'a>(&self) -> Option<&'a Page> {
-        unsafe { self.header.next.as_ref() }
+    pub fn next<'a>(&self) -> Option<SharedPage<'a>> {
+        SharedPage::from_usize(self.header.next)
     }
 
-    pub fn lowest(&self) -> &[u8] {
-        &self.header.lowest
+    pub fn link(&mut self, next: SharedPage<'_>) {
+        self.header = PageHeader::with_next(next);
     }
 
-    pub fn highest(&self) -> &[u8] {
-        &self.header.highest
+    pub fn header(&self) -> &PageHeader {
+        &self.header
     }
 
     pub fn content(&self) -> &PageContent {
@@ -37,11 +116,10 @@ impl Page {
 impl Drop for Page {
     fn drop(&mut self) {
         let mut next = self.header.next;
-        while !next.is_null() {
-            let page = unsafe { Box::from_raw(next) };
-            if let PageContent::RemovePage = page.content() {
+        while let Some(page) = OwnedPage::from_usize(next) {
+            if page.content.is_remove() {
                 // This page has been merged into the left page.
-                next = null_mut();
+                next = 0;
             } else {
                 next = page.header.next;
             }
@@ -52,39 +130,49 @@ impl Drop for Page {
 #[derive(Clone, Debug)]
 pub struct PageHeader {
     len: usize,
-    next: *mut Page,
+    next: usize,
     lowest: Vec<u8>,
     highest: Vec<u8>,
 }
 
 impl PageHeader {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             len: 1,
-            next: null_mut(),
+            next: 0,
             lowest: Vec::new(),
             highest: Vec::new(),
         }
     }
 
-    pub fn next<'a>(&self) -> Option<&'a Page> {
-        unsafe { self.next.as_ref() }
+    fn with_next<'a>(next: SharedPage<'a>) -> Self {
+        let mut header = next.header.clone();
+        header.len += 1;
+        header.next = next.into_usize();
+        header
     }
 
-    pub fn set_next(&mut self, next: &'_ Page) {
-        self.len = next.len() + 1;
-        self.next = next as *const _ as *mut _;
+    pub fn len(&self) -> usize {
+        self.len
     }
 
-    pub fn contains(&self, key: &[u8]) -> bool {
+    pub fn covers(&self, key: &[u8]) -> bool {
         key >= &self.lowest && (key < &self.highest || self.highest.is_empty())
     }
 
+    pub fn lowest(&self) -> &[u8] {
+        &self.lowest
+    }
+
+    pub fn highest(&self) -> &[u8] {
+        &self.highest
+    }
+
     pub fn split_at(&mut self, key: &[u8]) -> PageHeader {
-        assert!(self.contains(key));
+        assert!(self.covers(key));
         let right = PageHeader {
             len: 1,
-            next: null_mut(),
+            next: 0,
             lowest: key.to_vec(),
             highest: self.highest.clone(),
         };
@@ -97,11 +185,34 @@ impl PageHeader {
 pub enum PageContent {
     BaseData(BaseData),
     DeltaData(DeltaData),
+    SplitData(SplitNode),
+    MergeData(MergeNode),
+    RemoveData,
     BaseIndex(BaseIndex),
     DeltaIndex(DeltaIndex),
-    SplitPage(SplitPage),
-    MergePage(MergePage),
-    RemovePage,
+    SplitIndex(SplitNode),
+    MergeIndex(MergeNode),
+    RemoveIndex,
+}
+
+impl PageContent {
+    pub fn is_data(&self) -> bool {
+        match self {
+            PageContent::BaseData(_)
+            | PageContent::DeltaData(_)
+            | PageContent::SplitData(_)
+            | PageContent::MergeData(_)
+            | PageContent::RemoveData => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_remove(&self) -> bool {
+        match self {
+            PageContent::RemoveData | PageContent::RemoveIndex => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -200,45 +311,13 @@ pub struct DeltaIndex {
 }
 
 #[derive(Debug)]
-pub struct SplitPage {
+pub struct SplitNode {
     pub lowest: Vec<u8>,
-    pub right_page: PageId,
+    pub right_id: PageId,
 }
 
 #[derive(Debug)]
-pub struct MergePage {
+pub struct MergeNode {
     pub lowest: Vec<u8>,
-    pub right_page: Box<Page>,
+    pub right_page: OwnedPage,
 }
-
-/*
-    pub fn consolidate(self, split_size: usize) -> (Page, Option<Page>) {
-        let mut page = self;
-        let mut delta = DeltaPage::new();
-        loop {
-            match page.content() {
-                PageContent::Base(base) => {
-                    let mut base = base.clone();
-                    base.merge(delta);
-                    let header = page.0.header.clone();
-                    let mut right_page = None;
-                    if base.size() >= split_size {
-                        if let Some((split_key, right_base)) = base.split() {
-                            let right_header = header.split_at(&split_key);
-                            right_page =
-                                Some(Page::new(right_header, PageContent::Base(right_base)));
-                        }
-                    }
-                    let left_page = Page::new(header, PageContent::Base(base));
-                    return (left_page, right_page);
-                }
-                PageContent::Delta(data) => {
-                    delta.merge(data.clone());
-                }
-                PageContent::Split(_) => {}
-            }
-            page = page.next().unwrap();
-        }
-    }
-}
-*/

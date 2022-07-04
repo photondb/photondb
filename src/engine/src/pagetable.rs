@@ -2,40 +2,83 @@ use std::{
     mem::MaybeUninit,
     ops::Index,
     ptr::null_mut,
-    sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicPtr, AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
+use crossbeam_epoch::Guard;
+
 pub struct PageTable {
-    map: Map,
-    // The head of the free list. The list is lock-free and must be used with epoch-based
-    // reclaimation to prevent the ABA problem.
-    free: AtomicUsize,
+    inner: Arc<Inner>,
 }
 
 impl PageTable {
     pub fn new() -> Self {
         Self {
-            map: Map::new(),
-            free: AtomicUsize::new(L2_MAX),
+            inner: Arc::new(Inner::new()),
         }
     }
 
     pub fn get(&self, id: usize) -> usize {
-        self.map[id].load(Ordering::Acquire)
+        self.inner[id].load(Ordering::Acquire)
     }
 
     pub fn set(&self, id: usize, ptr: usize) {
-        self.map[id].store(ptr, Ordering::Release);
+        self.inner[id].store(ptr, Ordering::Release);
     }
 
     pub fn cas(&self, id: usize, old: usize, new: usize) -> Result<usize, usize> {
-        self.map[id].compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
+        self.inner[id].compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
+    }
+
+    pub fn alloc(&self, _: &Guard) -> Option<usize> {
+        self.inner.alloc()
+    }
+
+    pub fn dealloc(&self, id: usize, guard: &Guard) {
+        let inner = self.inner.clone();
+        guard.defer(move || {
+            inner.dealloc(id);
+        })
+    }
+}
+
+impl Default for PageTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+struct Inner {
+    // Level 0: [0, L0_MAX)
+    l0: Box<L0<L0_LEN>>,
+    // Level 1: [L0_MAX, L1_MAX)
+    l1: Box<L1<L1_LEN>>,
+    // Level 2: [L1_MAX, L2_MAX)
+    l2: Box<L2<L2_LEN>>,
+    // The next id to allocate.
+    next: AtomicUsize,
+    // The head of the free list.
+    free: AtomicUsize,
+}
+
+impl Inner {
+    fn new() -> Self {
+        Self {
+            l0: Box::default(),
+            l1: Box::default(),
+            l2: Box::default(),
+            next: AtomicUsize::new(0),
+            free: AtomicUsize::new(L2_MAX),
+        }
     }
 
     pub fn alloc(&self) -> Option<usize> {
         let mut id = self.free.load(Ordering::Acquire);
         while id != L2_MAX {
-            let next = self.map[id].load(Ordering::Acquire);
+            let next = self.index(id).load(Ordering::Acquire);
             match self
                 .free
                 .compare_exchange(id, next, Ordering::AcqRel, Ordering::Acquire)
@@ -44,17 +87,23 @@ impl PageTable {
                 Err(actual) => id = actual,
             }
         }
-        if id != L2_MAX {
+        if id == L2_MAX {
+            id = self.next.load(Ordering::Relaxed);
+            if id < L2_MAX {
+                id = self.next.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        if id < L2_MAX {
             Some(id)
         } else {
-            self.map.alloc()
+            None
         }
     }
 
     pub fn dealloc(&self, id: usize) {
         let mut next = self.free.load(Ordering::Acquire);
         loop {
-            self.map[id].store(next, Ordering::Release);
+            self.index(id).store(next, Ordering::Release);
             match self
                 .free
                 .compare_exchange(next, id, Ordering::AcqRel, Ordering::Acquire)
@@ -66,53 +115,13 @@ impl PageTable {
     }
 }
 
-impl Default for PageTable {
+impl Default for Inner {
     fn default() -> Self {
         Self::new()
     }
 }
 
-struct Map {
-    // Level 0: [0, L0_MAX)
-    l0: Box<L0<L0_LEN>>,
-    // Level 1: [L0_MAX, L1_MAX)
-    l1: Box<L1<L1_LEN>>,
-    // Level 2: [L1_MAX, L2_MAX)
-    l2: Box<L2<L2_LEN>>,
-    // The next id to allocate.
-    next: AtomicUsize,
-}
-
-impl Map {
-    fn new() -> Self {
-        Self {
-            l0: Box::default(),
-            l1: Box::default(),
-            l2: Box::default(),
-            next: AtomicUsize::new(0),
-        }
-    }
-
-    pub fn alloc(&self) -> Option<usize> {
-        let mut id = self.next.load(Ordering::Relaxed);
-        if id < L2_MAX {
-            id = self.next.fetch_add(1, Ordering::Relaxed);
-        }
-        if id < L2_MAX {
-            Some(id)
-        } else {
-            None
-        }
-    }
-}
-
-impl Default for Map {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Index<usize> for Map {
+impl Index<usize> for Inner {
     type Output = AtomicUsize;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -218,6 +227,7 @@ define_level!(L2, L1<FANOUT>, L1_MAX);
 mod test {
     extern crate test;
 
+    use crossbeam_epoch::unprotected;
     use test::{black_box, Bencher};
 
     use super::*;
@@ -226,9 +236,14 @@ mod test {
 
     #[test]
     fn test_alloc() {
+        let guard = unsafe { unprotected() };
         let table = PageTable::default();
-        assert_eq!(table.alloc(), Some(0));
-        assert_eq!(table.alloc(), Some(1));
+        assert_eq!(table.alloc(guard), Some(0));
+        assert_eq!(table.alloc(guard), Some(1));
+        table.dealloc(0, guard);
+        table.dealloc(1, guard);
+        assert_eq!(table.alloc(guard), Some(1));
+        assert_eq!(table.alloc(guard), Some(0));
     }
 
     #[test]
@@ -268,17 +283,17 @@ mod test {
     }
 
     #[bench]
-    fn bench_map_l0(b: &mut Bencher) {
-        bench::<Map>(b, 0);
+    fn bench_inner_l0(b: &mut Bencher) {
+        bench::<Inner>(b, 0);
     }
 
     #[bench]
-    fn bench_map_l1(b: &mut Bencher) {
-        bench::<Map>(b, L0_MAX);
+    fn bench_inner_l1(b: &mut Bencher) {
+        bench::<Inner>(b, L0_MAX);
     }
 
     #[bench]
-    fn bench_map_l2(b: &mut Bencher) {
-        bench::<Map>(b, L1_MAX);
+    fn bench_inner_l2(b: &mut Bencher) {
+        bench::<Inner>(b, L1_MAX);
     }
 }

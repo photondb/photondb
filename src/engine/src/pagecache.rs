@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crossbeam_epoch::Guard;
 
-use crate::{Page, PageTable};
+use crate::{OwnedPage, PageTable, SharedPage};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct PageId(usize);
@@ -22,77 +22,78 @@ impl PageId {
 }
 
 pub struct PageCache {
-    table: Arc<PageTable>,
+    table: PageTable,
 }
 
 impl PageCache {
     pub fn new() -> Self {
         Self {
-            table: Arc::new(PageTable::new()),
+            table: PageTable::new(),
         }
     }
 
-    pub fn get<'a>(&self, id: PageId, _: &'a Guard) -> &'a Page {
+    pub fn get<'a>(&self, id: PageId, _: &'a Guard) -> SharedPage<'a> {
         let id = id.into_usize();
         let ptr = self.table.get(id);
-        unsafe { &*(ptr as *const Page) }
+        SharedPage::from_usize(ptr).unwrap()
     }
 
     pub fn update<'a>(
         &self,
         id: PageId,
-        old: &'a Page,
-        new: Box<Page>,
+        old: SharedPage<'a>,
+        new: OwnedPage,
         _: &'a Guard,
-    ) -> Result<(), (&'a Page, Box<Page>)> {
+    ) -> Result<SharedPage<'a>, (SharedPage<'a>, OwnedPage)> {
         let id = id.into_usize();
-        let old = old as *const Page;
-        let new = Box::into_raw(new);
-        if let Err(ptr) = self.table.cas(id, old as usize, new as usize) {
-            unsafe {
-                let old = &*(ptr as *const Page);
-                let new = Box::from_raw(new);
+        let old = old.into_usize();
+        let new = new.into_usize();
+        match self.table.cas(id, old, new) {
+            Ok(_) => Ok(SharedPage::from_usize(new).unwrap()),
+            Err(ptr) => unsafe {
+                let old = SharedPage::from_usize(old).unwrap();
+                let new = OwnedPage::from_usize(new).unwrap();
                 Err((old, new))
-            }
-        } else {
-            Ok(())
+            },
         }
     }
 
     pub fn replace<'a>(
         &self,
         id: PageId,
-        old: &'a Page,
-        new: Box<Page>,
+        old: SharedPage<'a>,
+        new: OwnedPage,
         guard: &'a Guard,
-    ) -> Result<(), (&'a Page, Box<Page>)> {
-        self.update(id, old, new, guard)?;
-        let old = old as *const Page as usize;
-        guard.defer(move || unsafe {
-            Box::from_raw(old as *const Page as *mut Page);
+    ) -> Result<SharedPage<'a>, (SharedPage<'a>, OwnedPage)> {
+        let new = self.update(id, old, new, guard)?;
+        let old = old.into_usize();
+        guard.defer(move || {
+            OwnedPage::from_usize(old);
         });
-        Ok(())
+        Ok(new)
     }
 
-    pub fn install<'a>(&self, page: Box<Page>, _: &'a Guard) -> Option<PageId> {
-        if let Some(id) = self.table.alloc() {
-            let ptr = Box::into_raw(page) as usize;
+    pub fn install<'a>(
+        &self,
+        page: OwnedPage,
+        guard: &'a Guard,
+    ) -> Result<(PageId, SharedPage<'a>), OwnedPage> {
+        if let Some(id) = self.table.alloc(guard) {
+            let page = page.into_shared();
+            let ptr = page.into_usize();
             self.table.set(id, ptr);
-            Some(PageId::from_usize(id))
+            Ok((PageId::from_usize(id), page))
         } else {
-            None
+            Err(page)
         }
     }
 
     pub fn uninstall<'a>(&self, id: PageId, guard: &'a Guard) {
         let id = id.into_usize();
         let ptr = self.table.get(id);
-        let table = self.table.clone();
+        self.table.dealloc(id, guard);
         guard.defer(move || {
-            table.dealloc(id);
-            unsafe {
-                Box::from_raw(ptr as *const Page as *mut Page);
-            }
+            OwnedPage::from_usize(ptr);
         });
     }
 }
