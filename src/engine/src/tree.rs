@@ -1,7 +1,7 @@
 use crossbeam_epoch::{unprotected, Guard};
 
 use crate::{
-    BaseData, DeltaData, OwnedPage, PageCache, PageContent, PageHeader, PageId, SharedPage,
+    BaseData, DeltaData, PageBuf, PageCache, PageContent, PageHeader, PageId, PageIndex, PageRef,
     SplitNode,
 };
 
@@ -30,18 +30,21 @@ impl Tree {
     pub fn new(opts: Options) -> Self {
         let cache = PageCache::new();
 
-        let data = PageContent::BaseData(BaseData::new());
-        let root = OwnedPage::with_content(data);
         let guard = unsafe { unprotected() };
-        let (root_id, _) = cache.install(root, guard).unwrap();
+        let root_page = PageBuf::with_content(PageContent::BaseData(BaseData::new()));
+        let (root_id, _) = cache.install(root_page, guard).unwrap();
         assert_eq!(root_id, PageId::zero());
 
         Self { opts, cache }
     }
 
     pub fn get<'a>(&self, key: &[u8], guard: &'a Guard) -> Option<&'a [u8]> {
-        let (id, page) = self.search(key, guard);
-        self.lookup_data(id, page, key, guard)
+        loop {
+            let (id, page) = self.search(key, guard);
+            if let Ok(value) = self.lookup_data(id, page, key, guard) {
+                return value;
+            }
+        }
     }
 
     pub fn write(&self, key: &[u8], value: Option<&[u8]>, guard: &Guard) {
@@ -49,16 +52,15 @@ impl Tree {
             let (id, mut page) = self.search(key, guard);
             let mut delta = DeltaData::new();
             delta.add(key.to_owned(), value.map(|v| v.to_owned()));
-            let content = PageContent::DeltaData(delta);
-            let mut new_page_opt = Some(OwnedPage::with_content(content));
+            let mut new_page_opt = Some(PageBuf::with_content(PageContent::DeltaData(delta)));
             while let Some(mut new_page) = new_page_opt.take() {
                 new_page.link(page);
                 match self.cache.update(id, page, new_page, guard) {
                     Ok(_) => return,
-                    Err((old, new)) => {
-                        if old.header().covers(key) {
-                            page = old;
-                            new_page_opt = Some(new);
+                    Err((old_page, new_page)) => {
+                        if old_page.epoch() == page.epoch() {
+                            page = old_page;
+                            new_page_opt = Some(new_page);
                         }
                     }
                 }
@@ -66,42 +68,59 @@ impl Tree {
         }
     }
 
-    fn search<'a>(&self, key: &[u8], guard: &'a Guard) -> (PageId, SharedPage<'a>) {
+    fn page<'a>(&self, id: PageId, guard: &'a Guard) -> PageRef<'a> {
+        self.cache.get(id, guard).unwrap()
+    }
+
+    fn search<'a>(&self, key: &[u8], guard: &'a Guard) -> (PageId, PageRef<'a>) {
         let mut id = PageId::zero();
+        let mut page = self.page(id, guard);
+        let mut parent = None;
         loop {
-            let mut page = self.cache.get(id, guard);
-            let header = page.header();
-            let content = page.content();
-            if content.is_data() {
-                if header.len() >= self.opts.delta_chain_length {
+            if page.content().is_data() {
+                if page.len() >= self.opts.delta_chain_length {
                     page = self.consolidate_data(id, page, self.opts.data_node_size, guard);
                 }
                 return (id, page);
             } else {
                 todo!()
             }
+            parent = Some((id, page));
         }
     }
 
     fn lookup_data<'a>(
         &self,
         id: PageId,
-        page: SharedPage<'a>,
+        page: PageRef<'a>,
         key: &[u8],
         guard: &'a Guard,
-    ) -> Option<&'a [u8]> {
+    ) -> Result<Option<&'a [u8]>, ()> {
         let mut cursor = page;
         loop {
             match cursor.content() {
-                PageContent::BaseData(base) => return base.get(key),
+                PageContent::BaseData(base) => return Ok(base.get(key)),
                 PageContent::DeltaData(delta) => {
                     if let Some(value) = delta.get(key) {
-                        return value;
+                        return Ok(value);
                     }
                 }
-                PageContent::SplitData(_) | PageContent::MergeData(_) | PageContent::RemoveData => {
-                    todo!()
+                PageContent::SplitData(split) => {
+                    if key >= &split.lowest {
+                        cursor = self.page(split.right_page.id, guard);
+                        if cursor.epoch() == split.right_page.epoch {
+                            continue;
+                        } else {
+                            return Err(());
+                        }
+                    }
                 }
+                PageContent::MergeData(merge) => {
+                    if key >= &merge.lowest {
+                        cursor = merge.right_page.as_ref();
+                    }
+                }
+                PageContent::RemoveData => return Err(()),
                 _ => unreachable!(),
             }
             cursor = cursor.next().unwrap();
@@ -111,17 +130,17 @@ impl Tree {
     fn consolidate_data<'a>(
         &self,
         id: PageId,
-        page: SharedPage<'a>,
+        page: PageRef<'a>,
         split_size: usize,
         guard: &'a Guard,
-    ) -> SharedPage<'a> {
+    ) -> PageRef<'a> {
         let mut cursor = page;
         let mut acc_delta = DeltaData::new();
-        let (mut new_base, mut new_header) = loop {
+        let (mut new_base, new_header) = loop {
             match cursor.content() {
                 PageContent::BaseData(base) => {
                     let mut new_base = base.clone();
-                    new_base.merge(acc_delta);
+                    new_base.apply(acc_delta);
                     let new_header = cursor.header().clone();
                     break (new_base, new_header);
                 }
@@ -135,26 +154,28 @@ impl Tree {
         };
 
         if new_base.size() < split_size {
-            let new_page = OwnedPage::new(new_header, PageContent::BaseData(new_base));
+            let new_page = PageBuf::new(new_header, PageContent::BaseData(new_base));
             return self
                 .cache
                 .replace(id, page, new_page, guard)
                 .unwrap_or(page);
         }
 
-        if let Some((split_key, right_base)) = new_base.split() {
-            let right_header = new_header.split_at(&split_key);
-            let right_page = OwnedPage::new(right_header, PageContent::BaseData(right_base));
-            let left_page = OwnedPage::new(new_header, PageContent::BaseData(new_base));
+        if let Some(right_base) = new_base.split() {
+            let right_page = PageBuf::with_content(PageContent::BaseData(right_base));
             if let Ok((right_id, right_page)) = self.cache.install(right_page, guard) {
                 let split = SplitNode {
-                    lowest: right_page.header().lowest().to_owned(),
-                    right_id,
+                    lowest: new_base.highest().to_vec(),
+                    right_page: PageIndex {
+                        id: right_id,
+                        epoch: right_page.epoch(),
+                    },
                 };
-                let new_page =
-                    OwnedPage::with_next(left_page.into_shared(), PageContent::SplitData(split));
-                match self.cache.replace(id, page, new_page, guard) {
-                    Ok(new_page) => return new_page,
+                let new_header = new_header.into_next_epoch();
+                let new_page = PageBuf::new(new_header, PageContent::BaseData(new_base));
+                let left_page = PageBuf::with_next(new_page, PageContent::SplitData(split));
+                match self.cache.replace(id, page, left_page, guard) {
+                    Ok(left_page) => return left_page,
                     Err(_) => {
                         self.cache.uninstall(right_id, guard);
                     }

@@ -1,8 +1,6 @@
-use std::sync::Arc;
-
 use crossbeam_epoch::Guard;
 
-use crate::{OwnedPage, PageTable, SharedPage};
+use crate::{PageBuf, PageRef, PageTable};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct PageId(usize);
@@ -32,28 +30,28 @@ impl PageCache {
         }
     }
 
-    pub fn get<'a>(&self, id: PageId, _: &'a Guard) -> SharedPage<'a> {
+    pub fn get<'a>(&self, id: PageId, _: &'a Guard) -> Option<PageRef<'a>> {
         let id = id.into_usize();
         let ptr = self.table.get(id);
-        SharedPage::from_usize(ptr).unwrap()
+        PageRef::from_usize(ptr)
     }
 
     pub fn update<'a>(
         &self,
         id: PageId,
-        old: SharedPage<'a>,
-        new: OwnedPage,
+        old: PageRef<'a>,
+        new: PageBuf,
         _: &'a Guard,
-    ) -> Result<SharedPage<'a>, (SharedPage<'a>, OwnedPage)> {
+    ) -> Result<PageRef<'a>, (PageRef<'a>, PageBuf)> {
         let id = id.into_usize();
         let old = old.into_usize();
         let new = new.into_usize();
         match self.table.cas(id, old, new) {
-            Ok(_) => Ok(SharedPage::from_usize(new).unwrap()),
-            Err(ptr) => unsafe {
-                let old = SharedPage::from_usize(old).unwrap();
-                let new = OwnedPage::from_usize(new).unwrap();
-                Err((old, new))
+            Ok(_) => Ok(unsafe { PageRef::from_usize_unchecked(new) }),
+            Err(now) => unsafe {
+                let now = PageRef::from_usize_unchecked(now);
+                let new = PageBuf::from_usize_unchecked(new);
+                Err((now, new))
             },
         }
     }
@@ -61,28 +59,29 @@ impl PageCache {
     pub fn replace<'a>(
         &self,
         id: PageId,
-        old: SharedPage<'a>,
-        new: OwnedPage,
+        old: PageRef<'a>,
+        new: PageBuf,
         guard: &'a Guard,
-    ) -> Result<SharedPage<'a>, (SharedPage<'a>, OwnedPage)> {
+    ) -> Result<PageRef<'a>, (PageRef<'a>, PageBuf)> {
         let new = self.update(id, old, new, guard)?;
         let old = old.into_usize();
         guard.defer(move || {
-            OwnedPage::from_usize(old);
+            PageBuf::from_usize(old);
         });
         Ok(new)
     }
 
     pub fn install<'a>(
         &self,
-        page: OwnedPage,
+        page: PageBuf,
         guard: &'a Guard,
-    ) -> Result<(PageId, SharedPage<'a>), OwnedPage> {
+    ) -> Result<(PageId, PageRef<'a>), PageBuf> {
         if let Some(id) = self.table.alloc(guard) {
-            let page = page.into_shared();
             let ptr = page.into_usize();
             self.table.set(id, ptr);
-            Ok((PageId::from_usize(id), page))
+            let id = PageId::from_usize(id);
+            let page = unsafe { PageRef::from_usize_unchecked(ptr) };
+            Ok((id, page))
         } else {
             Err(page)
         }
@@ -93,7 +92,7 @@ impl PageCache {
         let ptr = self.table.get(id);
         self.table.dealloc(id, guard);
         guard.defer(move || {
-            OwnedPage::from_usize(ptr);
+            PageBuf::from_usize(ptr);
         });
     }
 }
