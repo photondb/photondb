@@ -71,6 +71,24 @@ impl PageCache {
         Ok(new)
     }
 
+    pub fn move_and_replace<'a>(
+        &self,
+        id: PageId,
+        old: PageRef<'a>,
+        new: PageBuf,
+        guard: &'a Guard,
+    ) -> Result<PageRef<'a>, (PageRef<'a>, PageBuf)> {
+        if let Some(new_id) = self.table.alloc(guard) {
+            self.table.set(new_id, old.into_usize());
+            self.update(id, old, new, guard).map_err(|err| {
+                self.table.dealloc(new_id, guard);
+                err
+            })
+        } else {
+            Err((old, new))
+        }
+    }
+
     pub fn install<'a>(
         &self,
         page: PageBuf,

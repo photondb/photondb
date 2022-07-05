@@ -8,7 +8,8 @@ use tree::{Options, Tree};
 
 mod page;
 use page::{
-    BaseData, DeltaData, MergeNode, PageBuf, PageContent, PageHeader, PageIndex, PageRef, SplitNode,
+    BaseData, BaseIndex, DeltaData, DeltaIndex, MergeNode, PageBuf, PageContent, PageHeader,
+    PageIndex, PageRef, SplitNode,
 };
 
 mod pagecache;
@@ -22,7 +23,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test() {
+    fn test_basic() {
         let table = Table::default();
         table.put(b"key", b"value");
         assert_eq!(table.get(b"key"), Some(b"value".to_vec()));
