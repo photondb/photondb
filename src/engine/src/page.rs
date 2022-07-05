@@ -244,16 +244,18 @@ impl BaseData {
     }
 
     pub fn split(&mut self) -> Option<BaseData> {
-        if let Some(key) = self.records.keys().nth(self.records.len() / 2).cloned() {
+        let nth = (self.records.len() + 1) / 2;
+        if let Some(key) = self.records.keys().nth(nth).cloned() {
             let mut right = BaseData::new();
             right.lowest = key.to_vec();
             right.highest = std::mem::take(&mut self.highest);
-            self.highest = key.to_vec();
             right.records = self.records.split_off(&key);
             right.size = right
                 .records
                 .iter()
                 .fold(0, |acc, (k, v)| acc + k.len() + v.len());
+            self.size -= right.size;
+            self.highest = key.to_vec();
             Some(right)
         } else {
             None
@@ -328,7 +330,7 @@ impl BaseIndex {
 
     pub fn get(&self, key: &[u8]) -> Option<PageIndex> {
         self.children
-            .range((Excluded(key.to_owned()), Unbounded))
+            .range(..=key.to_owned())
             .next_back()
             .map(|(_, v)| v.clone())
     }
@@ -339,15 +341,15 @@ impl BaseIndex {
 
     pub fn apply(&mut self, deltas: Vec<DeltaIndex>) {
         for delta in deltas.into_iter().rev() {
-            let prev = self
-                .children
-                .range(delta.lowest.clone()..)
-                .next_back()
-                .map(|(_, v)| v.clone());
             // Inserts the new index or merges with the previous one if possible.
-            if let Some(index) = prev {
+            if let Some(index) = self
+                .children
+                .range_mut(..=delta.lowest.clone())
+                .next_back()
+                .map(|(_, v)| v)
+            {
                 if index.id == delta.new_child.id {
-                    assert_eq!(index.epoch, delta.new_child.epoch);
+                    index.epoch = delta.new_child.epoch;
                 } else {
                     self.children.insert(delta.lowest.clone(), delta.new_child);
                 }
@@ -370,12 +372,13 @@ impl BaseIndex {
             let mut right = BaseIndex::new();
             right.lowest = key.to_vec();
             right.highest = std::mem::take(&mut self.highest);
-            self.highest = key.to_vec();
             right.children = self.children.split_off(&key);
             right.size = right
                 .children
                 .iter()
                 .fold(0, |acc, (k, v)| acc + k.len() + size_of_val(v));
+            self.size -= right.size;
+            self.highest = key.to_vec();
             Some(right)
         } else {
             None
@@ -391,14 +394,6 @@ pub struct DeltaIndex {
 }
 
 impl DeltaIndex {
-    pub fn from_split(split: &SplitNode) -> Self {
-        Self {
-            lowest: split.lowest.clone(),
-            highest: split.highest.clone(),
-            new_child: split.right_page.clone(),
-        }
-    }
-
     pub fn covers(&self, key: &[u8]) -> Option<PageIndex> {
         if key >= &self.lowest && (key < &self.highest || self.highest.is_empty()) {
             Some(self.new_child.clone())
@@ -411,6 +406,7 @@ impl DeltaIndex {
 #[derive(Clone, Debug)]
 pub struct SplitNode {
     pub lowest: Vec<u8>,
+    pub middle: Vec<u8>,
     pub highest: Vec<u8>,
     pub right_page: PageIndex,
 }

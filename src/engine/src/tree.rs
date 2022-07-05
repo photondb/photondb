@@ -94,11 +94,14 @@ impl Tree {
         let mut parent = None;
         loop {
             let page = self.page(pid, guard);
+            // println!("page {:?} {:?}", pid, page);
             if let Some(epoch) = epoch {
                 if page.epoch() != epoch {
                     self.handle_pending_split(pid, page, parent, guard);
                     return None;
                 }
+            } else if self.handle_pending_split(pid, page, parent, guard) {
+                return None;
             }
             if page.is_data() {
                 return Some((pid, page));
@@ -119,28 +122,46 @@ impl Tree {
         page: PageRef<'a>,
         parent: Option<(PageId, PageRef<'a>)>,
         guard: &'a Guard,
-    ) {
+    ) -> bool {
         let split = match page.content() {
             PageContent::SplitData(split) => split,
             PageContent::SplitIndex(split) => split,
-            _ => return,
+            _ => return false,
         };
 
-        if let Some((id, page)) = parent {
-            let delta = DeltaIndex::from_split(split);
-            let new_page = PageBuf::with_next(page, PageContent::DeltaIndex(delta));
-            let _ = self.cache.update(id, page, new_page, guard);
+        if let Some(parent) = parent {
+            let left_delta = DeltaIndex {
+                lowest: split.lowest.clone(),
+                highest: split.middle.clone(),
+                new_child: PageIndex {
+                    id: pid,
+                    epoch: page.epoch(),
+                },
+            };
+            let right_delta = DeltaIndex {
+                lowest: split.middle.clone(),
+                highest: split.highest.clone(),
+                new_child: split.right_page.clone(),
+            };
+            let new_page = PageBuf::with_next(parent.1, PageContent::DeltaIndex(left_delta));
+            let new_page = PageBuf::with_next(new_page, PageContent::DeltaIndex(right_delta));
+            let _ = self.cache.update(parent.0, parent.1, new_page, guard);
         } else {
             let mut base = BaseIndex::new();
+            let left_id = self.cache.attach(page, guard).unwrap();
             let left_index = PageIndex {
-                id: pid,
+                id: left_id,
                 epoch: page.epoch(),
             };
             base.add(Vec::new(), left_index);
-            base.add(split.lowest.clone(), split.right_page.clone());
+            base.add(split.middle.clone(), split.right_page.clone());
             let new_page = PageBuf::with_content(PageContent::BaseIndex(base));
-            let _ = self.cache.move_and_replace(pid, page, new_page, guard);
+            if let Err(_) = self.cache.update(pid, page, new_page, guard) {
+                self.cache.detach(left_id, guard);
+            }
         }
+
+        true
     }
 
     fn lookup_data<'a>(
@@ -151,6 +172,7 @@ impl Tree {
     ) -> Result<Option<&'a [u8]>, ()> {
         let mut cursor = page;
         loop {
+            // println!("lookup data {:?} {:?}", key, cursor);
             match cursor.content() {
                 PageContent::BaseData(base) => return Ok(base.get(key)),
                 PageContent::DeltaData(delta) => {
@@ -159,7 +181,7 @@ impl Tree {
                     }
                 }
                 PageContent::SplitData(split) => {
-                    if key >= &split.lowest {
+                    if key >= &split.middle {
                         cursor = self.page(split.right_page.id, guard);
                         if cursor.epoch() == split.right_page.epoch {
                             continue;
@@ -188,6 +210,7 @@ impl Tree {
     ) -> Result<PageIndex, ()> {
         let mut cursor = page;
         loop {
+            // println!("lookup index {:?} {:?}", key, cursor);
             match cursor.content() {
                 PageContent::BaseIndex(base) => return base.get(key).ok_or(()),
                 PageContent::DeltaIndex(delta) => {
@@ -196,7 +219,7 @@ impl Tree {
                     }
                 }
                 PageContent::SplitIndex(split) => {
-                    if key >= &split.lowest {
+                    if key >= &split.middle {
                         cursor = self.page(split.right_page.id, guard);
                         if cursor.epoch() == split.right_page.epoch {
                             continue;
@@ -248,6 +271,7 @@ impl Tree {
 
         if new_base.size() < split_size {
             let new_page = PageBuf::new(new_header, PageContent::BaseData(new_base));
+            // println!("page {:?} {:?} consolidates into {:?}", pid, page, new_page);
             return self
                 .cache
                 .replace(pid, page, new_page, guard)
@@ -255,13 +279,15 @@ impl Tree {
         }
 
         if let Some(right_base) = new_base.split() {
-            let right_lowest = right_base.lowest().to_owned();
-            let right_highest = right_base.highest().to_owned();
+            let lowest = new_base.lowest().to_owned();
+            let middle = right_base.lowest().to_owned();
+            let highest = right_base.highest().to_owned();
             let right_page = PageBuf::with_content(PageContent::BaseData(right_base));
             if let Ok((right_id, right_page)) = self.cache.install(right_page, guard) {
                 let split = SplitNode {
-                    lowest: right_lowest,
-                    highest: right_highest,
+                    lowest,
+                    middle,
+                    highest,
                     right_page: PageIndex {
                         id: right_id,
                         epoch: right_page.epoch(),
@@ -269,6 +295,10 @@ impl Tree {
                 };
                 let new_header = new_header.into_next_epoch();
                 let new_page = PageBuf::new(new_header, PageContent::BaseData(new_base));
+                // println!(
+                //    "page {:?} {:?} splits into {:?} and {:?} {:?}",
+                //    pid, page, new_page, right_id, right_page
+                // );
                 let left_page = PageBuf::with_next(new_page, PageContent::SplitData(split));
                 match self.cache.replace(pid, page, left_page, guard) {
                     Ok(left_page) => return left_page,
@@ -320,13 +350,15 @@ impl Tree {
         }
 
         if let Some(right_base) = new_base.split() {
-            let right_lowest = right_base.lowest().to_owned();
-            let right_highest = right_base.highest().to_owned();
+            let lowest = new_base.lowest().to_owned();
+            let middle = right_base.lowest().to_owned();
+            let highest = right_base.highest().to_owned();
             let right_page = PageBuf::with_content(PageContent::BaseIndex(right_base));
             if let Ok((right_id, right_page)) = self.cache.install(right_page, guard) {
                 let split = SplitNode {
-                    lowest: right_lowest,
-                    highest: right_highest,
+                    lowest,
+                    middle,
+                    highest,
                     right_page: PageIndex {
                         id: right_id,
                         epoch: right_page.epoch(),
