@@ -8,8 +8,8 @@ use tree::{Options, Tree};
 
 mod page;
 use page::{
-    BaseData, BaseIndex, DeltaData, DeltaIndex, MergeNode, PageBuf, PageContent, PageHeader,
-    PageIndex, PageRef, SplitNode,
+    BaseData, BaseIndex, DeltaData, DeltaIndex, MergeNode, PageBuf, PageContent, PageHandle,
+    PageHeader, PageIndex, PageRef, SplitNode,
 };
 
 mod pagecache;
@@ -39,8 +39,8 @@ mod test {
     #[test]
     fn test_smo() {
         let opts = Options {
-            data_node_size: 128,
-            index_node_size: 128,
+            data_node_size: 64,
+            index_node_size: 64,
             delta_chain_length: 4,
         };
         let table = Table::new(opts);
@@ -52,6 +52,57 @@ mod test {
             assert_eq!(table.get(key), Some(key.to_vec()));
         }
         for i in 0..n {
+            let key = &i.to_be_bytes();
+            assert_eq!(table.get(key), Some(key.to_vec()));
+        }
+    }
+
+    #[test]
+    fn multi_thread() {
+        const NUM_THREADS: usize = 8;
+        const NUM_RECORDS: usize = 1 << 13;
+
+        let opts = Options {
+            data_node_size: 64,
+            index_node_size: 64,
+            delta_chain_length: 4,
+        };
+        let table = Table::new(opts);
+        let mut handles = Vec::new();
+        for t in 0..NUM_THREADS {
+            {
+                let table = table.clone();
+                let handle = std::thread::spawn(move || {
+                    for i in 0..NUM_RECORDS {
+                        if i % 1024 == 0 {
+                            println!("thread {} put {}", t, i);
+                        }
+                        let key = &i.to_be_bytes();
+                        table.put(key, key);
+                    }
+                });
+                handles.push(handle);
+            }
+            /*
+            {
+                let table = table.clone();
+                let handle = std::thread::spawn(move || {
+                    for i in 0..NUM_RECORDS {
+                        if i % 1024 == 0 {
+                            println!("thread {} get {}", t, i);
+                        }
+                        let key = &i.to_be_bytes();
+                        table.get(key);
+                    }
+                });
+                handles.push(handle);
+            }
+            */
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        for i in 0..NUM_RECORDS {
             let key = &i.to_be_bytes();
             assert_eq!(table.get(key), Some(key.to_vec()));
         }

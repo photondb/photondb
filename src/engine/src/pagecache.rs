@@ -19,6 +19,7 @@ impl PageId {
     }
 }
 
+#[derive(Clone)]
 pub struct PageCache {
     table: PageTable,
 }

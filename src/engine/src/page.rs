@@ -1,10 +1,7 @@
 use std::{
     collections::BTreeMap,
     mem::size_of_val,
-    ops::{
-        Bound::{Excluded, Unbounded},
-        Deref, DerefMut,
-    },
+    ops::{Deref, DerefMut},
 };
 
 use crate::PageId;
@@ -121,12 +118,21 @@ impl Page {
     pub fn link(&mut self, next: PageRef<'_>) {
         self.header = PageHeader::with_next(next);
     }
+
+    pub fn unlink(&mut self) {
+        self.header.next = 0;
+    }
 }
 
 impl Drop for Page {
     fn drop(&mut self) {
-        if !self.content.is_removed() {
-            PageBuf::from_usize(self.header.next);
+        let mut next = self.header.next;
+        while let Some(mut page) = PageBuf::from_usize(next) {
+            if page.content.is_removed() {
+                break;
+            }
+            next = page.header.next;
+            page.header.next = 0;
         }
     }
 }
@@ -294,6 +300,13 @@ impl DeltaData {
 
 #[derive(Clone, Debug)]
 pub struct PageIndex {
+    pub lowest: Vec<u8>,
+    pub highest: Vec<u8>,
+    pub handle: PageHandle,
+}
+
+#[derive(Clone, Debug)]
+pub struct PageHandle {
     pub id: PageId,
     pub epoch: u64,
 }
@@ -303,7 +316,7 @@ pub struct BaseIndex {
     size: usize,
     lowest: Vec<u8>,
     highest: Vec<u8>,
-    children: BTreeMap<Vec<u8>, PageIndex>,
+    children: BTreeMap<Vec<u8>, PageHandle>,
 }
 
 impl BaseIndex {
@@ -328,37 +341,41 @@ impl BaseIndex {
         &self.highest
     }
 
-    pub fn get(&self, key: &[u8]) -> Option<PageIndex> {
+    pub fn get(&self, key: &[u8]) -> Option<PageHandle> {
         self.children
             .range(..=key.to_owned())
             .next_back()
             .map(|(_, v)| v.clone())
     }
 
-    pub fn add(&mut self, key: Vec<u8>, index: PageIndex) {
-        self.children.insert(key, index);
+    pub fn add(&mut self, key: Vec<u8>, value: PageHandle) {
+        self.size += key.len() + size_of_val(&value);
+        if let Some(old_value) = self.children.insert(key, value) {
+            self.size -= size_of_val(&old_value);
+        }
     }
 
-    pub fn apply(&mut self, deltas: Vec<DeltaIndex>) {
-        for delta in deltas.into_iter().rev() {
+    pub fn apply(&mut self, delta: DeltaIndex) {
+        for index in delta.children.into_iter().rev() {
             // Inserts the new index or merges with the previous one if possible.
-            if let Some(index) = self
+            if let Some(handle) = self
                 .children
-                .range_mut(..=delta.lowest.clone())
+                .range_mut(..=index.lowest.clone())
                 .next_back()
                 .map(|(_, v)| v)
             {
-                if index.id == delta.new_child.id {
-                    index.epoch = delta.new_child.epoch;
+                if handle.id == index.handle.id {
+                    handle.epoch = index.handle.epoch;
                 } else {
-                    self.children.insert(delta.lowest.clone(), delta.new_child);
+                    self.children.insert(index.lowest.clone(), index.handle);
                 }
             } else {
-                self.children.insert(delta.lowest.clone(), delta.new_child);
+                self.children.insert(index.lowest.clone(), index.handle);
             }
             // Removes range (lowest, highest)
-            self.children
-                .retain(|k, _| k <= &delta.lowest || k >= &delta.highest);
+            self.children.retain(|k, _| {
+                k <= &index.lowest || (k >= &index.highest && !index.highest.is_empty())
+            });
         }
         self.size = self
             .children
@@ -388,18 +405,31 @@ impl BaseIndex {
 
 #[derive(Clone, Debug)]
 pub struct DeltaIndex {
-    pub lowest: Vec<u8>,
-    pub highest: Vec<u8>,
-    pub new_child: PageIndex,
+    children: Vec<PageIndex>,
 }
 
 impl DeltaIndex {
-    pub fn covers(&self, key: &[u8]) -> Option<PageIndex> {
-        if key >= &self.lowest && (key < &self.highest || self.highest.is_empty()) {
-            Some(self.new_child.clone())
-        } else {
-            None
+    pub fn new() -> Self {
+        Self {
+            children: Vec::new(),
         }
+    }
+
+    pub fn get(&self, key: &[u8]) -> Option<PageHandle> {
+        for index in &self.children {
+            if key >= &index.lowest && (key < &index.highest || index.highest.is_empty()) {
+                return Some(index.handle.clone());
+            }
+        }
+        None
+    }
+
+    pub fn add(&mut self, index: PageIndex) {
+        self.children.push(index);
+    }
+
+    pub fn merge(&mut self, other: DeltaIndex) {
+        self.children.extend(other.children);
     }
 }
 
@@ -408,7 +438,17 @@ pub struct SplitNode {
     pub lowest: Vec<u8>,
     pub middle: Vec<u8>,
     pub highest: Vec<u8>,
-    pub right_page: PageIndex,
+    pub right_page: PageHandle,
+}
+
+impl SplitNode {
+    pub fn covers(&self, key: &[u8]) -> Option<PageHandle> {
+        if key >= &self.middle && (key < &self.highest || self.highest.is_empty()) {
+            Some(self.right_page.clone())
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug)]

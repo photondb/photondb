@@ -10,6 +10,7 @@ use std::{
 
 use crossbeam_epoch::Guard;
 
+#[derive(Clone)]
 pub struct PageTable {
     inner: Arc<Inner>,
 }

@@ -1,15 +1,18 @@
+use std::sync::Arc;
+
 use crossbeam_epoch::pin;
 
 use crate::{Options, Tree};
 
+#[derive(Clone)]
 pub struct Table {
-    tree: Tree,
+    tree: Arc<Tree>,
 }
 
 impl Table {
     pub fn new(opts: Options) -> Self {
         Self {
-            tree: Tree::new(opts),
+            tree: Arc::new(Tree::new(opts)),
         }
     }
 
