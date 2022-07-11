@@ -9,7 +9,7 @@ use tree::{Options, Tree};
 mod page;
 use page::{
     BaseData, BaseIndex, DeltaData, DeltaIndex, MergeNode, PageBuf, PageContent, PageHandle,
-    PageHeader, PageIndex, PageRef, SplitNode,
+    PageIndex, PageRef, SplitNode,
 };
 
 mod pagecache;
@@ -22,7 +22,7 @@ use pagetable::PageTable;
 mod test {
     extern crate test;
 
-    use test::{black_box, Bencher};
+    use test::Bencher;
 
     use super::*;
 
@@ -39,8 +39,8 @@ mod test {
     #[test]
     fn test_smo() {
         let opts = Options {
-            data_node_size: 64,
-            index_node_size: 64,
+            node_split_size: 64,
+            node_merge_size: 16,
             delta_chain_length: 4,
         };
         let table = Table::new(opts);
@@ -63,8 +63,8 @@ mod test {
         const NUM_RECORDS: usize = 1 << 13;
 
         let opts = Options {
-            data_node_size: 64,
-            index_node_size: 64,
+            node_split_size: 64,
+            node_merge_size: 16,
             delta_chain_length: 4,
         };
         let table = Table::new(opts);

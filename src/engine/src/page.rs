@@ -59,12 +59,20 @@ impl PageBuf {
         Self(Box::new(Page { header, content }))
     }
 
-    pub fn with_content(content: PageContent) -> Self {
+    pub fn with(content: PageContent) -> Self {
         Self::new(PageHeader::new(), content)
     }
 
     pub fn with_next<'a>(next: impl Into<PageRef<'a>>, content: PageContent) -> Self {
         Self::new(PageHeader::with_next(next.into()), content)
+    }
+
+    pub fn with_epoch(epoch: u64, content: PageContent) -> Self {
+        Self::new(PageHeader::with_epoch(epoch), content)
+    }
+
+    pub fn with_next_epoch<'a>(next: impl Into<PageRef<'a>>, content: PageContent) -> Self {
+        Self::new(PageHeader::with_next_epoch(next.into()), content)
     }
 
     pub fn from_usize(ptr: usize) -> Option<Self> {
@@ -153,6 +161,14 @@ impl PageHeader {
         }
     }
 
+    fn with_epoch(epoch: u64) -> Self {
+        Self {
+            len: 1,
+            next: 0,
+            epoch,
+        }
+    }
+
     fn with_next(next: PageRef<'_>) -> Self {
         let mut header = next.header().clone();
         header.len += 1;
@@ -160,9 +176,10 @@ impl PageHeader {
         header
     }
 
-    pub fn into_next_epoch(mut self) -> Self {
-        self.epoch += 1;
-        self
+    fn with_next_epoch(next: PageRef<'_>) -> Self {
+        let mut header = Self::with_next(next);
+        header.epoch += 1;
+        header
     }
 }
 
@@ -249,23 +266,32 @@ impl BaseData {
         }
     }
 
-    pub fn split(&mut self) -> Option<BaseData> {
+    pub fn split(&self) -> Option<BaseData> {
         let nth = (self.records.len() + 1) / 2;
-        if let Some(key) = self.records.keys().nth(nth).cloned() {
+        if let Some(key) = self.records.keys().nth(nth) {
             let mut right = BaseData::new();
             right.lowest = key.to_vec();
-            right.highest = std::mem::take(&mut self.highest);
-            right.records = self.records.split_off(&key);
-            right.size = right
-                .records
-                .iter()
-                .fold(0, |acc, (k, v)| acc + k.len() + v.len());
-            self.size -= right.size;
-            self.highest = key.to_vec();
+            right.highest = self.highest.clone();
+            for (key, value) in self.records.iter().skip(nth) {
+                right.size += key.len() + value.len();
+                right.records.insert(key.clone(), value.clone());
+            }
             Some(right)
         } else {
             None
         }
+    }
+
+    pub fn retain(&mut self, lowest: &[u8], highest: &[u8]) {
+        self.lowest = lowest.to_vec();
+        self.highest = highest.to_vec();
+        self.records.retain(|k, _| {
+            k.as_slice() >= lowest && (k.as_slice() < highest || highest.is_empty())
+        });
+        self.size = self
+            .records
+            .iter()
+            .fold(0, |acc, (k, v)| acc + k.len() + v.len());
     }
 }
 
@@ -383,23 +409,32 @@ impl BaseIndex {
             .fold(0, |acc, (k, v)| acc + k.len() + size_of_val(v));
     }
 
-    pub fn split(&mut self) -> Option<BaseIndex> {
+    pub fn split(&self) -> Option<BaseIndex> {
         let nth = (self.children.len() + 1) / 2;
-        if let Some(key) = self.children.keys().nth(nth).cloned() {
+        if let Some(key) = self.children.keys().nth(nth) {
             let mut right = BaseIndex::new();
             right.lowest = key.to_vec();
-            right.highest = std::mem::take(&mut self.highest);
-            right.children = self.children.split_off(&key);
-            right.size = right
-                .children
-                .iter()
-                .fold(0, |acc, (k, v)| acc + k.len() + size_of_val(v));
-            self.size -= right.size;
-            self.highest = key.to_vec();
+            right.highest = self.highest.clone();
+            for (key, value) in self.children.iter().skip(nth - 1) {
+                right.size += key.len() + size_of_val(value);
+                right.children.insert(key.clone(), value.clone());
+            }
             Some(right)
         } else {
             None
         }
+    }
+
+    pub fn retain(&mut self, lowest: &[u8], highest: &[u8]) {
+        self.lowest = lowest.to_vec();
+        self.highest = highest.to_vec();
+        self.children.retain(|k, _| {
+            k.as_slice() >= lowest && (k.as_slice() < highest || highest.is_empty())
+        });
+        self.size = self
+            .children
+            .iter()
+            .fold(0, |acc, (k, v)| acc + k.len() + size_of_val(v));
     }
 }
 
