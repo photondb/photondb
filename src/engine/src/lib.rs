@@ -18,6 +18,8 @@ use pagecache::{PageCache, PageId};
 mod pagetable;
 use pagetable::PageTable;
 
+mod store;
+
 #[cfg(test)]
 mod test {
     extern crate test;
