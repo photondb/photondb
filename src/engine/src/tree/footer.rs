@@ -50,11 +50,11 @@ impl PageStore {
         Ok(Self {})
     }
 
-    pub async fn read_page(&self, addr: PageAddr) -> Result<Vec<u8>> {
+    pub async fn read_page(&self, addr: u64) -> Result<Vec<u8>> {
         todo!()
     }
 
-    pub async fn write_page(&self, id: u64, page: &[u8]) -> Result<PageAddr> {
+    pub async fn write_page(&self, id: u64, page: &[u8]) -> Result<u64> {
         todo!()
     }
 }
@@ -68,9 +68,9 @@ impl PageFile {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct PageAddr {
+struct PageAddr {
     // The file number.
-    pub file: u32,
+    file: u32,
     // The index of the page in the file.
-    pub index: u16,
+    index: u16,
 }

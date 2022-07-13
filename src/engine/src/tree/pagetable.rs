@@ -1,9 +1,8 @@
 use std::{
     mem::MaybeUninit,
-    ops::Index,
     ptr::null_mut,
     sync::{
-        atomic::{AtomicPtr, AtomicUsize, Ordering},
+        atomic::{AtomicPtr, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -15,40 +14,38 @@ pub struct PageTable {
     inner: Arc<Inner>,
 }
 
-impl PageTable {
-    pub fn new() -> Self {
+impl Default for PageTable {
+    fn default() -> Self {
         Self {
-            inner: Arc::new(Inner::new()),
+            inner: Arc::default(),
         }
     }
+}
 
-    pub fn get(&self, id: usize) -> usize {
-        self.inner[id].load(Ordering::Acquire)
+impl PageTable {
+    pub fn get(&self, id: u64) -> u64 {
+        self.inner.index(id).load(Ordering::Acquire)
     }
 
-    pub fn set(&self, id: usize, ptr: usize) {
-        self.inner[id].store(ptr, Ordering::Release);
+    pub fn set(&self, id: u64, ptr: u64) {
+        self.inner.index(id).store(ptr, Ordering::Release);
     }
 
-    pub fn cas(&self, id: usize, old: usize, new: usize) -> Result<usize, usize> {
-        self.inner[id].compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
+    pub fn cas(&self, id: u64, old: u64, new: u64) -> Result<u64, u64> {
+        self.inner
+            .index(id)
+            .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
     }
 
-    pub fn alloc(&self, _: &Guard) -> Option<usize> {
+    pub fn alloc(&self, _: &Guard) -> Option<u64> {
         self.inner.alloc()
     }
 
-    pub fn dealloc(&self, id: usize, guard: &Guard) {
+    pub fn dealloc(&self, id: u64, guard: &Guard) {
         let inner = self.inner.clone();
         guard.defer(move || {
             inner.dealloc(id);
         })
-    }
-}
-
-impl Default for PageTable {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -60,23 +57,38 @@ struct Inner {
     // Level 2: [L1_MAX, L2_MAX)
     l2: Box<L2<L2_LEN>>,
     // The next id to allocate.
-    next: AtomicUsize,
+    next: AtomicU64,
     // The head of the free list.
-    free: AtomicUsize,
+    // The list uses epoch-based reclaimation to prevent the ABA problem.
+    free: AtomicU64,
 }
 
-impl Inner {
-    fn new() -> Self {
+impl Default for Inner {
+    fn default() -> Self {
         Self {
             l0: Box::default(),
             l1: Box::default(),
             l2: Box::default(),
-            next: AtomicUsize::new(0),
-            free: AtomicUsize::new(L2_MAX),
+            next: AtomicU64::new(0),
+            free: AtomicU64::new(L2_MAX),
+        }
+    }
+}
+
+impl Inner {
+    fn index(&self, index: u64) -> &AtomicU64 {
+        if index < L0_MAX {
+            self.l0.index(index)
+        } else if index < L1_MAX {
+            self.l1.index(index - L0_MAX)
+        } else if index < L2_MAX {
+            self.l2.index(index - L1_MAX)
+        } else {
+            unreachable!()
         }
     }
 
-    pub fn alloc(&self) -> Option<usize> {
+    fn alloc(&self) -> Option<u64> {
         let mut id = self.free.load(Ordering::Acquire);
         while id != L2_MAX {
             let next = self.index(id).load(Ordering::Acquire);
@@ -101,7 +113,7 @@ impl Inner {
         }
     }
 
-    pub fn dealloc(&self, id: usize) {
+    fn dealloc(&self, id: u64) {
         let mut next = self.free.load(Ordering::Acquire);
         loop {
             self.index(id).store(next, Ordering::Release);
@@ -116,29 +128,7 @@ impl Inner {
     }
 }
 
-impl Default for Inner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Index<usize> for Inner {
-    type Output = AtomicUsize;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        if index < L0_MAX {
-            self.l0.index(index)
-        } else if index < L1_MAX {
-            self.l1.index(index - L0_MAX)
-        } else if index < L2_MAX {
-            self.l2.index(index - L1_MAX)
-        } else {
-            unreachable!()
-        }
-    }
-}
-
-struct L0<const N: usize>([AtomicUsize; N]);
+struct L0<const N: usize>([AtomicU64; N]);
 
 impl<const N: usize> Default for L0<N> {
     fn default() -> Self {
@@ -146,11 +136,9 @@ impl<const N: usize> Default for L0<N> {
     }
 }
 
-impl<const N: usize> Index<usize> for L0<N> {
-    type Output = AtomicUsize;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.0[index]
+impl<const N: usize> L0<N> {
+    fn index(&self, index: u64) -> &AtomicU64 {
+        &self.0[index as usize]
     }
 }
 
@@ -177,22 +165,18 @@ macro_rules! define_level {
             }
         }
 
-        impl<const N: usize> Index<usize> for $level<N> {
-            type Output = AtomicUsize;
-
-            fn index(&self, index: usize) -> &Self::Output {
+        impl<const N: usize> $level<N> {
+            fn index(&self, index: u64) -> &AtomicU64 {
                 let i = index / $fanout;
                 let j = index % $fanout;
-                let p = self.0[i].load(Ordering::Relaxed);
+                let p = self.0[i as usize].load(Ordering::Relaxed);
                 let child = unsafe {
                     p.as_ref()
-                        .unwrap_or_else(|| self.install_or_acquire_child(i))
+                        .unwrap_or_else(|| self.install_or_acquire_child(i as usize))
                 };
                 child.index(j)
             }
-        }
 
-        impl<const N: usize> $level<N> {
             #[cold]
             fn install_or_acquire_child(&self, index: usize) -> &$child {
                 let mut child = Box::into_raw(Box::default());
@@ -217,9 +201,9 @@ const FANOUT: usize = 1 << 16;
 const L0_LEN: usize = FANOUT;
 const L1_LEN: usize = FANOUT - 1;
 const L2_LEN: usize = FANOUT - 1;
-const L0_MAX: usize = FANOUT;
-const L1_MAX: usize = L0_MAX * FANOUT;
-const L2_MAX: usize = L1_MAX * FANOUT;
+const L0_MAX: u64 = FANOUT as u64;
+const L1_MAX: u64 = L0_MAX * L0_MAX;
+const L2_MAX: u64 = L1_MAX * L0_MAX;
 
 define_level!(L1, L0<FANOUT>, L0_MAX);
 define_level!(L2, L1<FANOUT>, L1_MAX);
@@ -254,47 +238,5 @@ mod test {
             table.set(i, i);
             assert_eq!(table.get(i), i);
         }
-    }
-
-    fn bench<T: Default + Index<usize>>(b: &mut Bencher, start: usize) {
-        let l: Box<T> = Box::default();
-        for i in start..(start + N) {
-            l.index(i);
-        }
-        b.iter(|| {
-            for i in start..(start + N) {
-                black_box(l.index(i));
-            }
-        })
-    }
-
-    #[bench]
-    fn bench_l0(b: &mut Bencher) {
-        bench::<L0<FANOUT>>(b, 0);
-    }
-
-    #[bench]
-    fn bench_l1(b: &mut Bencher) {
-        bench::<L1<FANOUT>>(b, L0_MAX);
-    }
-
-    #[bench]
-    fn bench_l2(b: &mut Bencher) {
-        bench::<L2<FANOUT>>(b, L1_MAX);
-    }
-
-    #[bench]
-    fn bench_inner_l0(b: &mut Bencher) {
-        bench::<Inner>(b, 0);
-    }
-
-    #[bench]
-    fn bench_inner_l1(b: &mut Bencher) {
-        bench::<Inner>(b, L0_MAX);
-    }
-
-    #[bench]
-    fn bench_inner_l2(b: &mut Bencher) {
-        bench::<Inner>(b, L1_MAX);
     }
 }
