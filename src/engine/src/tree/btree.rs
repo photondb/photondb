@@ -1,23 +1,48 @@
 use crossbeam_epoch::Guard;
 
-use super::{PageAddr, PageRef, PageStore, PageTable, PageView, Result};
+use super::{Error, Options, PageAddr, PageRef, PageStore, PageTable, PageView, Result};
 
-struct BTree {
+pub struct BTree {
     table: PageTable,
     store: PageStore,
 }
 
+macro_rules! retry {
+    ($e:expr) => {
+        loop {
+            match $e {
+                Err(Error::Aborted) => continue,
+                other => break other,
+            }
+        }
+    };
+}
+
 impl BTree {
-    async fn get<'g>(&self, key: &[u8], guard: &'g Guard) -> Result<Option<&'g [u8]>> {
-        let node = self.find_data_node(key, guard).await?;
-        self.find_data_in_node(key, &node, guard).await
+    pub async fn open(opts: Options) -> Result<Self> {
+        let table = PageTable::default();
+        let store = PageStore::open(opts).await?;
+        Ok(Self { table, store })
     }
 
-    async fn put<'g>(&self, key: &[u8], value: &[u8], guard: &'g Guard) -> Result<()> {
+    pub async fn get<'g>(&self, key: &[u8], guard: &'g Guard) -> Result<Option<&'g [u8]>> {
+        retry!(self.try_get(key, guard).await)
+    }
+
+    async fn try_get<'g>(&self, key: &[u8], guard: &'g Guard) -> Result<Option<&'g [u8]>> {
+        let node = self.try_find_data_node(key, guard).await?;
+        self.try_find_data_in_node(key, &node, guard).await
+    }
+
+    pub async fn put<'g>(&self, key: &[u8], value: &[u8], guard: &'g Guard) -> Result<()> {
         todo!()
     }
 
-    async fn delete<'g>(&self, key: &[u8], guard: &'g Guard) -> Result<()> {
+    pub async fn delete<'g>(&self, key: &[u8], guard: &'g Guard) -> Result<()> {
+        todo!()
+    }
+
+    async fn try_update<'g>(&self, node: &NodeView<'g>, guard: &'g Guard) -> Result<()> {
         todo!()
     }
 }
@@ -66,35 +91,33 @@ impl BTree {
         }
     }
 
-    async fn find_data_node<'g>(&self, key: &[u8], guard: &'g Guard) -> Result<NodeView<'g>> {
-        loop {
-            if let Some(page) = self.try_find_data_node(key, guard).await? {
-                return Ok(page);
-            }
-        }
-    }
-
-    async fn try_find_data_node<'g>(
-        &self,
-        key: &[u8],
-        guard: &'g Guard,
-    ) -> Result<Option<NodeView<'g>>> {
+    async fn try_find_data_node<'g>(&self, key: &[u8], guard: &'g Guard) -> Result<NodeView<'g>> {
         let mut cursor = NodeIndex::root();
         let mut parent = None;
         loop {
             let node = self.node_view(cursor.id, guard);
             if node.ver() != cursor.ver {
-                todo!()
+                self.try_help_pending_smo(&node, parent.as_ref(), guard)?;
+                return Err(Error::Aborted);
             }
             if node.is_data() {
-                return Ok(Some(node));
+                return Ok(node);
             }
-            cursor = self.find_index_in_node(key, &node, guard).await?;
+            cursor = self.try_find_index_in_node(key, &node, guard).await?;
             parent = Some(node);
         }
     }
 
-    async fn find_data_in_node<'g>(
+    fn try_help_pending_smo<'g>(
+        &self,
+        node: &NodeView<'g>,
+        parent: Option<&NodeView<'g>>,
+        guard: &'g Guard,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    async fn try_find_data_in_node<'g>(
         &self,
         key: &[u8],
         node: &NodeView<'g>,
@@ -103,12 +126,20 @@ impl BTree {
         todo!()
     }
 
-    async fn find_index_in_node<'g>(
+    async fn try_find_index_in_node<'g>(
         &self,
         key: &[u8],
         node: &NodeView<'g>,
         guard: &'g Guard,
     ) -> Result<NodeIndex> {
+        todo!()
+    }
+
+    fn try_consolidate_data_node<'g>(&self, node: &NodeView<'g>, guard: &'g Guard) -> Result<()> {
+        todo!()
+    }
+
+    fn try_consolidate_index_node<'g>(&self, node: &NodeView<'g>, guard: &'g Guard) -> Result<()> {
         todo!()
     }
 }

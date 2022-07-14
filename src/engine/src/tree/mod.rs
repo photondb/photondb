@@ -1,13 +1,24 @@
+mod table;
+pub use table::Table;
+
 mod error;
 use error::{Error, Result};
 
 mod btree;
+use btree::BTree;
 
 mod pagetable;
 use pagetable::PageTable;
 
 mod pagestore;
 use pagestore::{DiskAddr, DiskPtr, PageInfo, PageKind, PageStore};
+
+pub struct Options {
+    pub data_node_size: usize,
+    pub data_delta_length: usize,
+    pub index_node_size: usize,
+    pub index_delta_length: usize,
+}
 
 #[derive(Copy, Clone, Debug)]
 pub struct PageRef<'a>(&'a [u8]);

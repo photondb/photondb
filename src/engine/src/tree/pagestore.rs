@@ -1,4 +1,4 @@
-use super::Result;
+use super::{Options, Result};
 
 pub struct DiskPtr {
     fileno: u64,
@@ -39,9 +39,15 @@ pub struct PageInfo {
     pub kind: PageKind,
 }
 
-pub struct PageStore {}
+pub struct PageStore {
+    opts: Options,
+}
 
 impl PageStore {
+    pub async fn open(opts: Options) -> Result<Self> {
+        Ok(Self { opts })
+    }
+
     pub fn page_info(&self, addr: DiskAddr) -> Option<PageInfo> {
         todo!()
     }
