@@ -155,7 +155,7 @@ macro_rules! define_level {
         impl<const N: usize> Drop for $level<N> {
             fn drop(&mut self) {
                 for child in &self.0 {
-                    let ptr = child.load(Ordering::Relaxed);
+                    let ptr = child.load(Ordering::Acquire);
                     if !ptr.is_null() {
                         unsafe {
                             Box::from_raw(ptr);
@@ -210,14 +210,9 @@ define_level!(L2, L1<FANOUT>, L1_MAX);
 
 #[cfg(test)]
 mod test {
-    extern crate test;
-
     use crossbeam_epoch::unprotected;
-    use test::{black_box, Bencher};
 
     use super::*;
-
-    const N: usize = 1 << 10;
 
     #[test]
     fn test_alloc() {

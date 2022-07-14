@@ -3,50 +3,94 @@ use error::{Error, Result};
 
 mod btree;
 
-struct PageRef<'a>(&'a [u8]);
+mod pagetable;
+use pagetable::PageTable;
+
+mod pagestore;
+use pagestore::{DiskAddr, DiskPtr, PageInfo, PageKind, PageStore};
+
+#[derive(Copy, Clone, Debug)]
+pub struct PageRef<'a>(&'a [u8]);
 
 impl<'a> PageRef<'a> {
-    fn next(self) {
+    pub fn ver(self) -> u64 {
         todo!()
     }
 
-    fn kind(self) -> PageKind {
+    pub fn len(self) -> u8 {
         todo!()
     }
 
-    fn length(self) -> u8 {
+    pub fn kind(self) -> PageKind {
         todo!()
     }
 
-    fn version(self) -> u64 {
+    pub fn next(self) -> PageAddr {
         todo!()
     }
 }
 
-#[repr(u8)]
-enum PageKind {
-    Base = 0,
+impl From<u64> for PageRef<'_> {
+    fn from(ptr: u64) -> Self {
+        todo!()
+    }
 }
 
-enum PagePtr<'a> {
+impl Into<u64> for PageRef<'_> {
+    fn into(self) -> u64 {
+        self.0.as_ptr() as u64
+    }
+}
+pub enum PageView<'a> {
     Mem(PageRef<'a>),
+    Disk(DiskAddr, PageInfo),
+}
+
+impl<'a> PageView<'a> {
+    pub fn ver(&self) -> u64 {
+        match self {
+            Self::Mem(page) => page.ver(),
+            Self::Disk(_, page) => page.ver,
+        }
+    }
+
+    pub fn kind(&self) -> PageKind {
+        match self {
+            Self::Mem(page) => page.kind(),
+            Self::Disk(_, page) => page.kind,
+        }
+    }
+
+    pub fn as_addr(&self) -> PageAddr {
+        match *self {
+            Self::Mem(page) => PageAddr::Mem(page.into()),
+            Self::Disk(addr, _) => PageAddr::Disk(addr.into()),
+        }
+    }
+}
+
+pub enum PageAddr {
+    Mem(u64),
     Disk(u64),
 }
 
 const MEM_DISK_MASK: u64 = 1 << 63;
 
-impl<'a> From<u64> for PagePtr<'a> {
-    fn from(ptr: u64) -> Self {
-        if ptr & MEM_DISK_MASK == 0 {
-            todo!()
+impl From<u64> for PageAddr {
+    fn from(addr: u64) -> Self {
+        if addr & MEM_DISK_MASK == 0 {
+            Self::Mem(addr)
         } else {
-            todo!()
+            Self::Disk(addr & !MEM_DISK_MASK)
         }
     }
 }
 
-impl<'a> Into<u64> for PagePtr<'a> {
+impl<'a> Into<u64> for PageAddr {
     fn into(self) -> u64 {
-        todo!()
+        match self {
+            Self::Mem(addr) => addr,
+            Self::Disk(addr) => addr | MEM_DISK_MASK,
+        }
     }
 }
