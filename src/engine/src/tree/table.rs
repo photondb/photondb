@@ -1,6 +1,4 @@
-use crossbeam_epoch::pin;
-
-use super::{BTree, Options};
+use super::{BTree, Ghost, Options};
 use crate::Result;
 
 pub struct Table {
@@ -14,8 +12,8 @@ impl Table {
     }
 
     pub async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        let guard = &pin();
-        let value = self.tree.get(key, guard).await?;
+        let ghost = &Ghost::pin();
+        let value = self.tree.get(key, ghost).await?;
         Ok(value.map(|v| v.to_vec()))
     }
 }

@@ -1,6 +1,4 @@
-use crossbeam_epoch::Guard;
-
-use super::{Error, Options, PageAddr, PageRef, PageStore, PageTable, PageView, Result};
+use super::{Error, Ghost, Options, PageAddr, PageRef, PageStore, PageTable, PageView, Result};
 
 pub struct BTree {
     table: PageTable,
@@ -25,24 +23,24 @@ impl BTree {
         Ok(Self { table, store })
     }
 
-    pub async fn get<'g>(&self, key: &[u8], guard: &'g Guard) -> Result<Option<&'g [u8]>> {
-        retry!(self.try_get(key, guard).await)
+    pub async fn get<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
+        retry!(self.try_get(key, ghost).await)
     }
 
-    async fn try_get<'g>(&self, key: &[u8], guard: &'g Guard) -> Result<Option<&'g [u8]>> {
-        let node = self.try_find_data_node(key, guard).await?;
-        self.try_find_data_in_node(key, &node, guard).await
+    async fn try_get<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
+        let node = self.try_find_data_node(key, ghost).await?;
+        self.try_find_data_in_node(key, &node, ghost).await
     }
 
-    pub async fn put<'g>(&self, key: &[u8], value: &[u8], guard: &'g Guard) -> Result<()> {
+    pub async fn put<'g>(&self, key: &[u8], value: &[u8], ghost: &'g Ghost) -> Result<()> {
         todo!()
     }
 
-    pub async fn delete<'g>(&self, key: &[u8], guard: &'g Guard) -> Result<()> {
+    pub async fn delete<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<()> {
         todo!()
     }
 
-    async fn try_update<'g>(&self, node: &NodeView<'g>, guard: &'g Guard) -> Result<()> {
+    async fn try_update<'g>(&self, node: &NodeView<'g>, ghost: &'g Ghost) -> Result<()> {
         todo!()
     }
 }
@@ -52,58 +50,65 @@ impl BTree {
         self.table.get(id.into()).into()
     }
 
-    fn page_view<'g>(&self, id: NodeId, _: &'g Guard) -> PageView<'g> {
+    fn page_view<'g>(&self, id: NodeId, _: &'g Ghost) -> Option<PageView<'g>> {
         let addr = self.page_addr(id);
         match addr {
-            PageAddr::Mem(addr) => PageView::Mem(addr.into()),
+            PageAddr::Mem(addr) => PageRef::from_addr(addr).map(PageView::Mem),
             PageAddr::Disk(addr) => {
                 let addr = addr.into();
-                let info = self.store.page_info(addr).unwrap();
-                PageView::Disk(addr, info)
+                self.store
+                    .page_info(addr)
+                    .map(|info| PageView::Disk(addr, info))
             }
         }
     }
 
-    fn node_view<'g>(&self, id: NodeId, guard: &'g Guard) -> NodeView<'g> {
-        NodeView::new(id, self.page_view(id, guard))
+    fn node_view<'g>(&self, id: NodeId, ghost: &'g Ghost) -> Option<NodeView<'g>> {
+        self.page_view(id, ghost)
+            .map(|page| NodeView::new(id, page))
     }
 
     async fn load_page_with_addr<'g>(
         &self,
         addr: PageAddr,
-        guard: &'g Guard,
+        ghost: &'g Ghost,
     ) -> Result<Option<PageRef<'g>>> {
-        todo!()
-    }
-
-    async fn load_page_with_view<'g>(
-        &self,
-        view: PageView<'g>,
-        guard: &'g Guard,
-    ) -> Result<PageRef<'g>> {
-        match view {
-            PageView::Mem(page) => Ok(page),
-            PageView::Disk(_, info) => {
-                let page = self.store.load_page_with_ptr(info.ptr).await?;
-                // Ok(page)
+        match addr {
+            PageAddr::Mem(addr) => Ok(PageRef::from_addr(addr)),
+            PageAddr::Disk(addr) => {
+                let page = self.store.load_page_with_addr(addr.into()).await?;
                 todo!()
             }
         }
     }
 
-    async fn try_find_data_node<'g>(&self, key: &[u8], guard: &'g Guard) -> Result<NodeView<'g>> {
+    async fn load_page_with_view<'g>(
+        &self,
+        view: PageView<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<PageRef<'g>> {
+        match view {
+            PageView::Mem(page) => Ok(page),
+            PageView::Disk(_, info) => {
+                let page = self.store.load_page_with_handle(info.handle).await?;
+                todo!()
+            }
+        }
+    }
+
+    async fn try_find_data_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<NodeView<'g>> {
         let mut cursor = NodeIndex::root();
         let mut parent = None;
         loop {
-            let node = self.node_view(cursor.id, guard);
+            let node = self.node_view(cursor.id, ghost).unwrap();
             if node.ver() != cursor.ver {
-                self.try_help_pending_smo(&node, parent.as_ref(), guard)?;
+                self.try_help_pending_smo(&node, parent.as_ref(), ghost)?;
                 return Err(Error::Aborted);
             }
             if node.is_data() {
                 return Ok(node);
             }
-            cursor = self.try_find_index_in_node(key, &node, guard).await?;
+            cursor = self.try_find_index_in_node(key, &node, ghost).await?;
             parent = Some(node);
         }
     }
@@ -112,7 +117,7 @@ impl BTree {
         &self,
         node: &NodeView<'g>,
         parent: Option<&NodeView<'g>>,
-        guard: &'g Guard,
+        ghost: &'g Ghost,
     ) -> Result<()> {
         todo!()
     }
@@ -121,7 +126,7 @@ impl BTree {
         &self,
         key: &[u8],
         node: &NodeView<'g>,
-        guard: &'g Guard,
+        ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         todo!()
     }
@@ -130,16 +135,16 @@ impl BTree {
         &self,
         key: &[u8],
         node: &NodeView<'g>,
-        guard: &'g Guard,
+        ghost: &'g Ghost,
     ) -> Result<NodeIndex> {
         todo!()
     }
 
-    fn try_consolidate_data_node<'g>(&self, node: &NodeView<'g>, guard: &'g Guard) -> Result<()> {
+    fn try_consolidate_data_node<'g>(&self, node: &NodeView<'g>, ghost: &'g Ghost) -> Result<()> {
         todo!()
     }
 
-    fn try_consolidate_index_node<'g>(&self, node: &NodeView<'g>, guard: &'g Guard) -> Result<()> {
+    fn try_consolidate_index_node<'g>(&self, node: &NodeView<'g>, ghost: &'g Ghost) -> Result<()> {
         todo!()
     }
 }

@@ -20,7 +20,7 @@ pub trait SequentialRead {
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>>;
 
-    fn poll_seek(self: Pin<&mut Self>, ctx: &mut Context, pos: u64) -> Poll<io::Result<u64>>;
+    fn poll_seek(self: Pin<&mut Self>, cx: &mut Context, pos: u64) -> Poll<io::Result<u64>>;
 }
 
 pub trait SequentialWrite {
