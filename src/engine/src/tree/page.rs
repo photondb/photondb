@@ -1,5 +1,3 @@
-use super::{DiskAddr, PageInfo};
-
 #[derive(Copy, Clone, Debug)]
 pub struct PageRef<'a>(&'a [u8]);
 
@@ -16,11 +14,7 @@ impl<'a> PageRef<'a> {
         todo!()
     }
 
-    pub fn next(self) -> PageAddr {
-        todo!()
-    }
-
-    pub fn from_addr(addr: u64) -> Option<PageRef<'a>> {
+    pub fn next(self) -> Option<PagePtr> {
         todo!()
     }
 }
@@ -37,42 +31,14 @@ impl<'a> Into<u64> for PageRef<'a> {
     }
 }
 
-pub enum PageView<'a> {
-    Mem(PageRef<'a>),
-    Disk(DiskAddr, PageInfo),
-}
-
-impl<'a> PageView<'a> {
-    pub fn ver(&self) -> u64 {
-        match self {
-            Self::Mem(page) => page.ver(),
-            Self::Disk(_, page) => page.ver,
-        }
-    }
-
-    pub fn kind(&self) -> PageKind {
-        match self {
-            Self::Mem(page) => page.kind(),
-            Self::Disk(_, page) => page.kind,
-        }
-    }
-
-    pub fn as_addr(&self) -> PageAddr {
-        match *self {
-            Self::Mem(page) => PageAddr::Mem(page.into()),
-            Self::Disk(addr, _) => PageAddr::Disk(addr.into()),
-        }
-    }
-}
-
-pub enum PageAddr {
+pub enum PagePtr {
     Mem(u64),
     Disk(u64),
 }
 
 const MEM_DISK_MASK: u64 = 1 << 63;
 
-impl From<u64> for PageAddr {
+impl From<u64> for PagePtr {
     fn from(addr: u64) -> Self {
         if addr & MEM_DISK_MASK == 0 {
             Self::Mem(addr)
@@ -82,7 +48,7 @@ impl From<u64> for PageAddr {
     }
 }
 
-impl<'a> Into<u64> for PageAddr {
+impl<'a> Into<u64> for PagePtr {
     fn into(self) -> u64 {
         match self {
             Self::Mem(addr) => addr,
@@ -92,13 +58,16 @@ impl<'a> Into<u64> for PageAddr {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum PageKind {
-    Base = 0,
+    BaseData = 0,
+    DeltaData = 1,
+    BaseIndex = 32,
+    DeltaIndex = 33,
 }
 
 impl PageKind {
-    pub fn is_data(&self) -> bool {
-        todo!()
+    pub fn is_data(self) -> bool {
+        self < Self::BaseIndex
     }
 }

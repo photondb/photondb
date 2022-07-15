@@ -1,9 +1,9 @@
-use super::{Options, PageKind, Result};
+use super::{page::PageKind, Options, Result};
 
 pub struct PageInfo {
     pub ver: u64,
     pub kind: PageKind,
-    pub handle: DiskHandle,
+    pub handle: PageHandle,
 }
 
 pub struct PageDesc {
@@ -13,21 +13,21 @@ pub struct PageDesc {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct DiskAddr(u64);
+pub struct PageAddr(u64);
 
-impl From<u64> for DiskAddr {
+impl From<u64> for PageAddr {
     fn from(addr: u64) -> Self {
         Self(addr)
     }
 }
 
-impl Into<u64> for DiskAddr {
+impl Into<u64> for PageAddr {
     fn into(self) -> u64 {
         self.0
     }
 }
 
-pub struct DiskHandle {
+pub struct PageHandle {
     fileno: u64,
     offset: u64,
     size: u64,
@@ -42,27 +42,27 @@ impl PageStore {
         Ok(Self { opts })
     }
 
-    pub fn page_info(&self, addr: DiskAddr) -> Option<PageInfo> {
+    pub fn page_info(&self, addr: PageAddr) -> Option<PageInfo> {
         todo!()
     }
 
-    pub fn acquire_page(&self) -> DiskAddr {
+    pub fn acquire_page(&self) -> PageAddr {
         todo!()
     }
 
-    pub fn release_page(&self, addr: DiskAddr, desc: PageDesc) {
+    pub fn release_page(&self, addr: PageAddr, desc: PageDesc) {
         todo!()
     }
 
-    pub fn highest_stable_addr(&self) -> DiskAddr {
+    pub fn highest_stable_addr(&self) -> PageAddr {
         todo!()
     }
 
-    pub async fn load_page_with_addr(&self, addr: DiskAddr) -> Result<Option<Vec<u8>>> {
+    pub async fn load_page_with_addr(&self, addr: PageAddr) -> Result<Vec<u8>> {
         todo!()
     }
 
-    pub async fn load_page_with_handle(&self, handle: DiskHandle) -> Result<Option<Vec<u8>>> {
+    pub async fn load_page_with_handle(&self, handle: &PageHandle) -> Result<Vec<u8>> {
         todo!()
     }
 }

@@ -1,4 +1,9 @@
-use super::{Error, Ghost, Options, PageAddr, PageRef, PageStore, PageTable, PageView, Result};
+use super::{
+    page::{PageKind, PagePtr, PageRef},
+    pagestore::{PageAddr, PageInfo, PageStore},
+    pagetable::PageTable,
+    Error, Ghost, Options, Result,
+};
 
 pub struct BTree {
     table: PageTable,
@@ -40,67 +45,78 @@ impl BTree {
         todo!()
     }
 
-    async fn try_update<'g>(&self, node: &NodeView<'g>, ghost: &'g Ghost) -> Result<()> {
+    async fn try_update<'g>(&self, node: &NodePair<'g>, ghost: &'g Ghost) -> Result<()> {
         todo!()
     }
 }
 
 impl BTree {
-    fn page_addr(&self, id: NodeId) -> PageAddr {
+    fn page_ptr(&self, id: NodeId) -> PagePtr {
         self.table.get(id.into()).into()
     }
 
-    fn page_view<'g>(&self, id: NodeId, _: &'g Ghost) -> Option<PageView<'g>> {
-        let addr = self.page_addr(id);
-        match addr {
-            PageAddr::Mem(addr) => PageRef::from_addr(addr).map(PageView::Mem),
-            PageAddr::Disk(addr) => {
+    fn page_view<'g>(&self, ptr: PagePtr, _: &'g Ghost) -> PageView<'g> {
+        match ptr {
+            PagePtr::Mem(addr) => PageView::Mem(addr.into()),
+            PagePtr::Disk(addr) => {
                 let addr = addr.into();
-                self.store
-                    .page_info(addr)
-                    .map(|info| PageView::Disk(addr, info))
+                let info = self.store.page_info(addr).unwrap();
+                PageView::Disk(addr, info)
             }
         }
     }
 
-    fn node_view<'g>(&self, id: NodeId, ghost: &'g Ghost) -> Option<NodeView<'g>> {
-        self.page_view(id, ghost)
-            .map(|page| NodeView::new(id, page))
+    fn node_pair<'g>(&self, id: NodeId, ghost: &'g Ghost) -> NodePair<'g> {
+        let ptr = self.page_ptr(id);
+        let view = self.page_view(ptr, ghost);
+        NodePair::new(id, view)
     }
 
-    async fn load_page_with_addr<'g>(
+    fn swapin_page<'g>(
         &self,
-        addr: PageAddr,
-        ghost: &'g Ghost,
-    ) -> Result<Option<PageRef<'g>>> {
-        match addr {
-            PageAddr::Mem(addr) => Ok(PageRef::from_addr(addr)),
-            PageAddr::Disk(addr) => {
-                let page = self.store.load_page_with_addr(addr.into()).await?;
-                todo!()
-            }
-        }
-    }
-
-    async fn load_page_with_view<'g>(
-        &self,
-        view: PageView<'g>,
+        id: NodeId,
+        ptr: PagePtr,
+        buf: Vec<u8>,
         ghost: &'g Ghost,
     ) -> Result<PageRef<'g>> {
-        match view {
-            PageView::Mem(page) => Ok(page),
-            PageView::Disk(_, info) => {
-                let page = self.store.load_page_with_handle(info.handle).await?;
-                todo!()
+        todo!()
+    }
+
+    async fn load_page_with_ptr<'g>(
+        &self,
+        id: NodeId,
+        ptr: PagePtr,
+        ghost: &'g Ghost,
+    ) -> Result<PageRef<'g>> {
+        match ptr {
+            PagePtr::Mem(addr) => Ok(addr.into()),
+            PagePtr::Disk(addr) => {
+                let buf = self.store.load_page_with_addr(addr.into()).await?;
+                self.swapin_page(id, ptr, buf, ghost)
             }
         }
     }
 
-    async fn try_find_data_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<NodeView<'g>> {
+    async fn load_page_with_node<'g>(
+        &self,
+        node: &NodePair<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<PageRef<'g>> {
+        match node.view {
+            PageView::Mem(page) => Ok(page),
+            PageView::Disk(addr, ref info) => {
+                let ptr = PagePtr::Disk(addr.into());
+                let buf = self.store.load_page_with_handle(&info.handle).await?;
+                self.swapin_page(node.id, ptr, buf, ghost)
+            }
+        }
+    }
+
+    async fn try_find_data_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<NodePair<'g>> {
         let mut cursor = NodeIndex::root();
         let mut parent = None;
         loop {
-            let node = self.node_view(cursor.id, ghost).unwrap();
+            let node = self.node_pair(cursor.id, ghost);
             if node.ver() != cursor.ver {
                 self.try_help_pending_smo(&node, parent.as_ref(), ghost)?;
                 return Err(Error::Aborted);
@@ -115,8 +131,8 @@ impl BTree {
 
     fn try_help_pending_smo<'g>(
         &self,
-        node: &NodeView<'g>,
-        parent: Option<&NodeView<'g>>,
+        node: &NodePair<'g>,
+        parent: Option<&NodePair<'g>>,
         ghost: &'g Ghost,
     ) -> Result<()> {
         todo!()
@@ -125,26 +141,33 @@ impl BTree {
     async fn try_find_data_in_node<'g>(
         &self,
         key: &[u8],
-        node: &NodeView<'g>,
+        node: &NodePair<'g>,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
-        todo!()
+        let mut page = self.load_page_with_node(node, ghost).await?;
+        loop {
+            if let Some(next) = page.next() {
+                page = self.load_page_with_ptr(node.id, next, ghost).await?;
+            } else {
+                return Ok(None);
+            }
+        }
     }
 
     async fn try_find_index_in_node<'g>(
         &self,
         key: &[u8],
-        node: &NodeView<'g>,
+        node: &NodePair<'g>,
         ghost: &'g Ghost,
     ) -> Result<NodeIndex> {
         todo!()
     }
 
-    fn try_consolidate_data_node<'g>(&self, node: &NodeView<'g>, ghost: &'g Ghost) -> Result<()> {
+    fn try_consolidate_data_node<'g>(&self, node: &NodePair<'g>, ghost: &'g Ghost) -> Result<()> {
         todo!()
     }
 
-    fn try_consolidate_index_node<'g>(&self, node: &NodeView<'g>, ghost: &'g Ghost) -> Result<()> {
+    fn try_consolidate_index_node<'g>(&self, node: &NodePair<'g>, ghost: &'g Ghost) -> Result<()> {
         todo!()
     }
 }
@@ -170,22 +193,43 @@ impl Into<u64> for NodeId {
     }
 }
 
-struct NodeView<'g> {
+struct NodePair<'g> {
     id: NodeId,
-    page: PageView<'g>,
+    view: PageView<'g>,
 }
 
-impl<'g> NodeView<'g> {
-    fn new(id: NodeId, page: PageView<'g>) -> Self {
-        Self { id, page }
+impl<'g> NodePair<'g> {
+    fn new(id: NodeId, view: PageView<'g>) -> Self {
+        Self { id, view }
     }
 
     fn ver(&self) -> u64 {
-        self.page.ver()
+        self.view.ver()
     }
 
     fn is_data(&self) -> bool {
-        self.page.kind().is_data()
+        self.view.kind().is_data()
+    }
+}
+
+pub enum PageView<'a> {
+    Mem(PageRef<'a>),
+    Disk(PageAddr, PageInfo),
+}
+
+impl<'a> PageView<'a> {
+    pub fn ver(&self) -> u64 {
+        match self {
+            Self::Mem(page) => page.ver(),
+            Self::Disk(_, page) => page.ver,
+        }
+    }
+
+    pub fn kind(&self) -> PageKind {
+        match self {
+            Self::Mem(page) => page.kind(),
+            Self::Disk(_, page) => page.kind,
+        }
     }
 }
 

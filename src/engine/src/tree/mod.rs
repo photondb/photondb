@@ -8,13 +8,8 @@ mod btree;
 use btree::BTree;
 
 mod page;
-use page::{PageAddr, PageKind, PageRef, PageView};
-
-mod pagetable;
-use pagetable::PageTable;
-
 mod pagestore;
-use pagestore::{DiskAddr, DiskHandle, PageDesc, PageInfo, PageStore};
+mod pagetable;
 
 pub struct Ghost {
     guard: crossbeam_epoch::Guard,
