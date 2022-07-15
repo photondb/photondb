@@ -11,7 +11,7 @@ mod page;
 mod pagestore;
 mod pagetable;
 
-pub struct Ghost {
+struct Ghost {
     guard: crossbeam_epoch::Guard,
 }
 

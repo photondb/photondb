@@ -1,4 +1,4 @@
-# PhotonDB
+# ![PhotonDB](docs/media/logo.drawio.svg)
 
 This is an experimental project to explore how to build a high performance data store in Rust.
 

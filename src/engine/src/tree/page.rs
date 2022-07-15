@@ -1,3 +1,29 @@
+pub enum PagePtr {
+    Mem(u64),
+    Disk(u64),
+}
+
+const MEM_DISK_MASK: u64 = 1 << 63;
+
+impl From<u64> for PagePtr {
+    fn from(addr: u64) -> Self {
+        if addr & MEM_DISK_MASK == 0 {
+            Self::Mem(addr)
+        } else {
+            Self::Disk(addr & !MEM_DISK_MASK)
+        }
+    }
+}
+
+impl<'a> Into<u64> for PagePtr {
+    fn into(self) -> u64 {
+        match self {
+            Self::Mem(addr) => addr,
+            Self::Disk(addr) => addr | MEM_DISK_MASK,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct PageRef<'a>(&'a [u8]);
 
@@ -31,29 +57,72 @@ impl<'a> Into<u64> for PageRef<'a> {
     }
 }
 
-pub enum PagePtr {
-    Mem(u64),
-    Disk(u64),
+pub struct PageBuf(Box<[u8]>);
+
+impl PageBuf {}
+
+pub enum Value<'a> {
+    Put(&'a [u8]),
+    Delete,
 }
 
-const MEM_DISK_MASK: u64 = 1 << 63;
+pub struct Record<'a> {
+    pub lsn: u64,
+    pub key: &'a [u8],
+    pub value: Value<'a>,
+}
 
-impl From<u64> for PagePtr {
-    fn from(addr: u64) -> Self {
-        if addr & MEM_DISK_MASK == 0 {
-            Self::Mem(addr)
-        } else {
-            Self::Disk(addr & !MEM_DISK_MASK)
+impl<'a> Record<'a> {
+    pub fn put(lsn: u64, key: &'a [u8], value: &'a [u8]) -> Self {
+        Self {
+            lsn,
+            key,
+            value: Value::Put(value),
+        }
+    }
+
+    pub fn delete(lsn: u64, key: &'a [u8]) -> Self {
+        Self {
+            lsn,
+            key,
+            value: Value::Delete,
         }
     }
 }
 
-impl<'a> Into<u64> for PagePtr {
-    fn into(self) -> u64 {
-        match self {
-            Self::Mem(addr) => addr,
-            Self::Disk(addr) => addr | MEM_DISK_MASK,
-        }
+pub struct BaseData<'a>(&'a [u8]);
+
+impl<'a> BaseData<'a> {
+    pub fn get(self, key: &[u8]) -> Option<Value<'a>> {
+        todo!()
+    }
+}
+
+impl<'a> From<PageRef<'a>> for BaseData<'a> {
+    fn from(page: PageRef<'a>) -> Self {
+        todo!()
+    }
+}
+
+pub struct DeltaDataBuf {}
+
+impl DeltaDataBuf {
+    pub fn add(&mut self, record: &Record) {
+        todo!()
+    }
+}
+
+pub struct DeltaDataRef<'a>(&'a [u8]);
+
+impl<'a> DeltaDataRef<'a> {
+    pub fn get(self, key: &[u8]) -> Option<Value<'a>> {
+        todo!()
+    }
+}
+
+impl<'a> From<PageRef<'a>> for DeltaDataRef<'a> {
+    fn from(page: PageRef<'a>) -> Self {
+        todo!()
     }
 }
 
@@ -71,3 +140,21 @@ impl PageKind {
         self < Self::BaseIndex
     }
 }
+
+pub trait PageLayout {}
+
+pub struct DeltaDataLayout {}
+
+impl Default for DeltaDataLayout {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
+impl DeltaDataLayout {
+    pub fn add(&mut self, record: &Record) {
+        todo!()
+    }
+}
+
+impl PageLayout for DeltaDataLayout {}

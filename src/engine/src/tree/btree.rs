@@ -1,5 +1,5 @@
 use super::{
-    page::{PageKind, PagePtr, PageRef},
+    page::{DeltaDataLayout, PageBuf, PageKind, PageLayout, PagePtr, PageRef, Record},
     pagestore::{PageAddr, PageInfo, PageStore},
     pagetable::PageTable,
     Error, Ghost, Options, Result,
@@ -15,7 +15,7 @@ macro_rules! retry {
         loop {
             match $e {
                 Err(Error::Aborted) => continue,
-                other => break other,
+                other => return other,
             }
         }
     };
@@ -37,21 +37,38 @@ impl BTree {
         self.try_find_data_in_node(key, &node, ghost).await
     }
 
-    pub async fn put<'g>(&self, key: &[u8], value: &[u8], ghost: &'g Ghost) -> Result<()> {
+    pub async fn put<'g>(
+        &self,
+        lsn: u64,
+        key: &[u8],
+        value: &[u8],
+        ghost: &'g Ghost,
+    ) -> Result<()> {
+        let record = Record::put(lsn, key, value);
+        self.update(&record, ghost).await
+    }
+
+    pub async fn delete<'g>(&self, lsn: u64, key: &[u8], ghost: &'g Ghost) -> Result<()> {
+        let record = Record::delete(lsn, key);
+        self.update(&record, ghost).await
+    }
+
+    async fn update<'g>(&self, record: &Record<'g>, ghost: &'g Ghost) -> Result<()> {
+        let mut layout = DeltaDataLayout::default();
+        layout.add(&record);
+        let mut page = self.alloc_page(&layout);
+        // page.add(&record);
         todo!()
     }
 
-    pub async fn delete<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<()> {
-        todo!()
-    }
-
-    async fn try_update<'g>(&self, node: &NodePair<'g>, ghost: &'g Ghost) -> Result<()> {
+    async fn try_update<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<()> {
+        let node = self.try_find_data_node(key, ghost).await?;
         todo!()
     }
 }
 
 impl BTree {
-    fn page_ptr(&self, id: NodeId) -> PagePtr {
+    fn page(&self, id: NodeId) -> PagePtr {
         self.table.get(id.into()).into()
     }
 
@@ -67,9 +84,17 @@ impl BTree {
     }
 
     fn node_pair<'g>(&self, id: NodeId, ghost: &'g Ghost) -> NodePair<'g> {
-        let ptr = self.page_ptr(id);
+        let ptr = self.page(id);
         let view = self.page_view(ptr, ghost);
         NodePair::new(id, view)
+    }
+
+    fn alloc_page<L: PageLayout>(&self, layout: &L) -> PageBuf {
+        todo!()
+    }
+
+    fn dealloc_page(&self, page: PageBuf) {
+        todo!()
     }
 
     fn swapin_page<'g>(
