@@ -1,7 +1,8 @@
 use super::{
-    node::{NodeId, NodeIndex, NodePair, NodeView},
+    node::{DataNodeIter, NodeId, NodeIndex, NodePair, NodeView},
     page::{
-        DeltaDataBuf, DeltaDataLayout, PageBuf, PageKind, PageLayout, PagePtr, PageRef, Record,
+        DataPageBuf, DataPageIter, DataPageLayout, PageBuf, PageKind, PageLayout, PagePtr, PageRef,
+        Record,
     },
     pagestore::PageStore,
     pagetable::PageTable,
@@ -31,7 +32,7 @@ impl Tree {
 
     async fn try_get<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_data_node(key, ghost).await?;
-        self.try_find_data_in_node(key, &node, ghost).await
+        self.find_data_in_node(key, &node, ghost).await
     }
 
     pub async fn put<'g>(
@@ -51,15 +52,12 @@ impl Tree {
     }
 
     async fn update<'g>(&self, record: &Record<'g>, ghost: &'g Ghost) -> Result<()> {
-        let mut layout = DeltaDataLayout::default();
+        let mut layout = DataPageLayout::default();
         layout.add(&record);
-        let mut page: DeltaDataBuf = self.alloc_page(&layout);
+        let mut page: DataPageBuf = self.alloc_page(&layout);
         page.add(&record);
         loop {
-            match self
-                .try_update(record.key, page.as_ref().as_ptr(), ghost)
-                .await
-            {
+            match self.try_update(record.key, page.as_ptr(), ghost).await {
                 Ok(_) => {
                     std::mem::forget(page);
                     return Ok(());
@@ -81,7 +79,7 @@ impl Tree {
                 Some(now) => {
                     let view = self.node_view(now, ghost);
                     if view.ver() != node.ver() {
-                        return Err(Error::Aborted);
+                        return Err(Error::Again);
                     }
                     node.view = view;
                 }
@@ -136,6 +134,10 @@ impl Tree {
         todo!()
     }
 
+    fn swapout_page<'g>(&self, id: NodeId, ptr: PagePtr, ghost: &'g Ghost) -> Result<PageRef<'g>> {
+        todo!()
+    }
+
     async fn load_page_with_ptr<'g>(
         &self,
         id: NodeId,
@@ -173,12 +175,12 @@ impl Tree {
             let node = self.node_pair(cursor.id, ghost);
             if node.ver() != cursor.ver {
                 self.try_help_pending_smo(&node, parent.as_ref(), ghost)?;
-                return Err(Error::Aborted);
+                return Err(Error::Again);
             }
             if node.is_data() {
                 return Ok(node);
             }
-            cursor = self.try_find_index_in_node(key, &node, ghost).await?;
+            cursor = self.find_index_in_node(key, &node, ghost).await?;
             parent = Some(node);
         }
     }
@@ -192,7 +194,7 @@ impl Tree {
         todo!()
     }
 
-    async fn try_find_data_in_node<'g>(
+    async fn find_data_in_node<'g>(
         &self,
         key: &[u8],
         node: &NodePair<'g>,
@@ -208,7 +210,23 @@ impl Tree {
         }
     }
 
-    async fn try_find_index_in_node<'g>(
+    async fn iter_data_node<'g>(
+        &self,
+        node: &NodePair<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<DataNodeIter<'g>> {
+        let mut page = self.load_page_with_node(node, ghost).await?;
+        loop {
+            if let Some(next) = page.next() {
+                page = self.load_page_with_ptr(node.id, next, ghost).await?;
+            } else {
+                todo!()
+            }
+        }
+        todo!()
+    }
+
+    async fn find_index_in_node<'g>(
         &self,
         key: &[u8],
         node: &NodePair<'g>,
@@ -217,11 +235,16 @@ impl Tree {
         todo!()
     }
 
-    fn try_consolidate_data_node<'g>(&self, node: &NodePair<'g>, ghost: &'g Ghost) -> Result<()> {
+    async fn consolidate_data_node<'g>(&self, node: &NodePair<'g>, ghost: &'g Ghost) -> Result<()> {
+        let mut page = self.load_page_with_node(node, ghost).await?;
         todo!()
     }
 
-    fn try_consolidate_index_node<'g>(&self, node: &NodePair<'g>, ghost: &'g Ghost) -> Result<()> {
+    async fn try_consolidate_index_node<'g>(
+        &self,
+        node: &NodePair<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<()> {
         todo!()
     }
 }

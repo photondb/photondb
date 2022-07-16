@@ -1,5 +1,6 @@
 use super::{
-    page::{PageKind, PagePtr, PageRef},
+    iter::MergeIter,
+    page::{DataPageIter, PageKind, PagePtr, PageRef},
     pagestore::{PageAddr, PageInfo},
 };
 
@@ -84,3 +85,5 @@ impl NodeIndex {
         }
     }
 }
+
+pub type DataNodeIter<'a> = MergeIter<DataPageIter<'a>>;

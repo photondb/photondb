@@ -1,3 +1,5 @@
+use super::iter::PageIter;
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum PagePtr {
     Mem(u64),
@@ -119,98 +121,78 @@ impl<'a> Record<'a> {
     }
 }
 
-pub struct BaseDataRef<'a>(&'a [u8]);
+pub struct DataPageRef<'a>(&'a [u8]);
 
-impl<'a> BaseDataRef<'a> {
+impl<'a> DataPageRef<'a> {
     pub fn get(self, key: &[u8]) -> Option<Value<'a>> {
+        todo!()
+    }
+
+    pub fn iter(self) -> DataPageIter<'a> {
         todo!()
     }
 }
 
-impl<'a> From<PageRef<'a>> for BaseDataRef<'a> {
+impl<'a> From<PageRef<'a>> for DataPageRef<'a> {
     fn from(page: PageRef<'a>) -> Self {
         todo!()
     }
 }
 
-pub struct BaseDataBuf {}
+pub struct DataPageBuf(Box<[u8]>);
 
-impl BaseDataBuf {
+impl DataPageBuf {
     pub fn add(&mut self, record: &Record) {
         todo!()
     }
-}
 
-pub struct DeltaDataRef<'a>(PageRef<'a>);
-
-impl<'a> DeltaDataRef<'a> {
-    pub fn get(self, key: &[u8]) -> Option<Value<'a>> {
+    pub fn as_ptr(&self) -> PagePtr {
         todo!()
     }
 }
 
-impl<'a> From<PageRef<'a>> for DeltaDataRef<'a> {
-    fn from(page: PageRef<'a>) -> Self {
-        Self(page)
+impl From<PageBuf> for DataPageBuf {
+    fn from(buf: PageBuf) -> Self {
+        Self(buf.0)
     }
 }
 
-impl<'a> From<DeltaDataRef<'a>> for PageRef<'a> {
-    fn from(page: DeltaDataRef<'a>) -> Self {
-        page.0
-    }
-}
-
-impl<'a> AsRef<PageRef<'a>> for DeltaDataRef<'a> {
-    fn as_ref(&self) -> &PageRef<'a> {
-        &self.0
-    }
-}
-
-pub struct DeltaDataBuf(PageBuf);
-
-impl DeltaDataBuf {
-    pub fn add(&mut self, record: &Record) {
+impl From<DataPageBuf> for PageBuf {
+    fn from(buf: DataPageBuf) -> Self {
         todo!()
     }
 }
 
-impl From<PageBuf> for DeltaDataBuf {
-    fn from(page: PageBuf) -> Self {
-        Self(page)
-    }
-}
+pub struct DataPageLayout {}
 
-impl From<DeltaDataBuf> for PageBuf {
-    fn from(page: DeltaDataBuf) -> Self {
-        page.0
-    }
-}
-
-impl AsRef<PageBuf> for DeltaDataBuf {
-    fn as_ref(&self) -> &PageBuf {
-        &self.0
-    }
-}
-
-impl AsMut<PageBuf> for DeltaDataBuf {
-    fn as_mut(&mut self) -> &mut PageBuf {
-        &mut self.0
-    }
-}
-
-pub struct DeltaDataLayout {}
-
-impl Default for DeltaDataLayout {
+impl Default for DataPageLayout {
     fn default() -> Self {
         Self {}
     }
 }
 
-impl DeltaDataLayout {
+impl DataPageLayout {
     pub fn add(&mut self, record: &Record) {
         todo!()
     }
 }
 
-impl PageLayout for DeltaDataLayout {}
+impl PageLayout for DataPageLayout {}
+
+pub struct DataPageIter<'a>(&'a [u8]);
+
+impl<'a> PageIter for DataPageIter<'a> {
+    type Item = Record<'a>;
+
+    fn seek(&mut self, key: &[u8]) {
+        todo!()
+    }
+}
+
+impl<'a> Iterator for DataPageIter<'a> {
+    type Item = Record<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
+}
