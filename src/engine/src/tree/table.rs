@@ -1,5 +1,4 @@
-use super::{Ghost, Options, Tree};
-use crate::Result;
+use super::{tree::Tree, Ghost, Options, Result};
 
 pub struct Table {
     tree: Tree,

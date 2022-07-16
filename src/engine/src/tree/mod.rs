@@ -2,15 +2,13 @@ mod table;
 pub use table::Table;
 
 mod error;
-use error::{Error, Result};
+pub use error::{Error, Result};
 
 mod node;
-mod tree;
-use tree::Tree;
-
 mod page;
 mod pagestore;
 mod pagetable;
+mod tree;
 
 struct Ghost {
     guard: crossbeam_epoch::Guard,

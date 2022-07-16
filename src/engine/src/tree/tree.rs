@@ -23,7 +23,7 @@ impl Tree {
     pub async fn get<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         loop {
             match self.try_get(key, ghost).await {
-                Err(Error::Aborted) => continue,
+                Err(Error::Again) => continue,
                 other => return other,
             }
         }
@@ -64,11 +64,11 @@ impl Tree {
                     std::mem::forget(page);
                     return Ok(());
                 }
-                Err(Error::Aborted) => continue,
-                err => {
+                Err(err) => {
                     self.dealloc_page(page.into());
-                    return err;
+                    return Err(err);
                 }
+                Err(Error::Again) => continue,
             }
         }
     }
