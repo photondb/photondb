@@ -4,7 +4,6 @@ pub use table::Table;
 mod error;
 pub use error::{Error, Result};
 
-mod iter;
 mod node;
 mod page;
 mod pagestore;

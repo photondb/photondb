@@ -1,8 +1,8 @@
 use super::{
-    node::{DataNodeIter, NodeId, NodeIndex, NodePair, NodeView},
+    node::{DataNodeIter, IndexNodeIter, NodeId, NodeIndex, NodePair, NodeView},
     page::{
-        DataPageBuf, DataPageIter, DataPageLayout, PageBuf, PageKind, PageLayout, PagePtr, PageRef,
-        Record,
+        DataPageBuf, DataPageIter, DataPageLayout, DataPageRef, DataRecord, IndexPageRef,
+        MergeIterBuilder, PageBuf, PageKind, PageLayout, PagePtr, PageRef,
     },
     pagestore::PageStore,
     pagetable::PageTable,
@@ -42,16 +42,16 @@ impl Tree {
         value: &[u8],
         ghost: &'g Ghost,
     ) -> Result<()> {
-        let record = Record::put(lsn, key, value);
+        let record = DataRecord::put(lsn, key, value);
         self.update(&record, ghost).await
     }
 
     pub async fn delete<'g>(&self, lsn: u64, key: &[u8], ghost: &'g Ghost) -> Result<()> {
-        let record = Record::delete(lsn, key);
+        let record = DataRecord::delete(lsn, key);
         self.update(&record, ghost).await
     }
 
-    async fn update<'g>(&self, record: &Record<'g>, ghost: &'g Ghost) -> Result<()> {
+    async fn update<'g>(&self, record: &DataRecord<'g>, ghost: &'g Ghost) -> Result<()> {
         let mut layout = DataPageLayout::default();
         layout.add(&record);
         let mut page: DataPageBuf = self.alloc_page(&layout);
@@ -216,14 +216,32 @@ impl Tree {
         ghost: &'g Ghost,
     ) -> Result<DataNodeIter<'g>> {
         let mut page = self.load_page_with_node(node, ghost).await?;
+        let mut merger = MergeIterBuilder::default();
         loop {
+            merger.add(DataPageRef::from(page).iter());
             if let Some(next) = page.next() {
                 page = self.load_page_with_ptr(node.id, next, ghost).await?;
             } else {
-                todo!()
+                return Ok(merger.build());
             }
         }
-        todo!()
+    }
+
+    async fn iter_index_node<'g>(
+        &self,
+        node: &NodePair<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<IndexNodeIter<'g>> {
+        let mut page = self.load_page_with_node(node, ghost).await?;
+        let mut merger = MergeIterBuilder::default();
+        loop {
+            merger.add(IndexPageRef::from(page).iter());
+            if let Some(next) = page.next() {
+                page = self.load_page_with_ptr(node.id, next, ghost).await?;
+            } else {
+                return Ok(merger.build());
+            }
+        }
     }
 
     async fn find_index_in_node<'g>(
