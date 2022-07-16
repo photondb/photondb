@@ -1,13 +1,13 @@
-use super::{BTree, Ghost, Options};
+use super::{Ghost, Options, Tree};
 use crate::Result;
 
 pub struct Table {
-    tree: BTree,
+    tree: Tree,
 }
 
 impl Table {
     pub async fn open(opts: Options) -> Result<Self> {
-        let tree = BTree::open(opts).await?;
+        let tree = Tree::open(opts).await?;
         Ok(Self { tree })
     }
 

@@ -4,8 +4,9 @@ pub use table::Table;
 mod error;
 use error::{Error, Result};
 
-mod btree;
-use btree::BTree;
+mod node;
+mod tree;
+use tree::Tree;
 
 mod page;
 mod pagestore;

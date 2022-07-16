@@ -1,17 +1,5 @@
 use super::{page::PageKind, Options, Result};
 
-pub struct PageInfo {
-    pub ver: u64,
-    pub kind: PageKind,
-    pub handle: PageHandle,
-}
-
-pub struct PageDesc {
-    pub ver: u64,
-    pub kind: PageKind,
-    pub data: Vec<u8>,
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct PageAddr(u64);
 
@@ -25,6 +13,18 @@ impl Into<u64> for PageAddr {
     fn into(self) -> u64 {
         self.0
     }
+}
+
+pub struct PageInfo {
+    pub ver: u64,
+    pub kind: PageKind,
+    pub handle: PageHandle,
+}
+
+pub struct PageDesc {
+    pub ver: u64,
+    pub kind: PageKind,
+    pub data: Vec<u8>,
 }
 
 pub struct PageHandle {
@@ -54,7 +54,7 @@ impl PageStore {
         todo!()
     }
 
-    pub fn highest_stable_addr(&self) -> PageAddr {
+    pub fn highest_stable_page(&self) -> PageAddr {
         todo!()
     }
 
