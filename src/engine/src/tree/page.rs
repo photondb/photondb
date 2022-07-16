@@ -24,10 +24,27 @@ impl<'a> Into<u64> for PagePtr {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct PageRef<'a>(&'a [u8]);
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum PageKind {
+    BaseData = 0,
+    DeltaData = 1,
+    BaseIndex = 32,
+    DeltaIndex = 33,
+}
 
-impl<'a> PageRef<'a> {
+impl PageKind {
+    pub fn is_data(self) -> bool {
+        self < Self::BaseIndex
+    }
+}
+
+pub trait PageLayout {}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Page<'a>(&'a [u8]);
+
+impl<'a> Page<'a> {
     pub fn ver(self) -> u64 {
         todo!()
     }
@@ -45,13 +62,13 @@ impl<'a> PageRef<'a> {
     }
 }
 
-impl<'a> From<u64> for PageRef<'a> {
+impl<'a> From<u64> for Page<'a> {
     fn from(addr: u64) -> Self {
         todo!()
     }
 }
 
-impl<'a> Into<u64> for PageRef<'a> {
+impl<'a> Into<u64> for Page<'a> {
     fn into(self) -> u64 {
         todo!()
     }
@@ -60,6 +77,12 @@ impl<'a> Into<u64> for PageRef<'a> {
 pub struct PageBuf(Box<[u8]>);
 
 impl PageBuf {}
+
+impl From<Box<[u8]>> for PageBuf {
+    fn from(buf: Box<[u8]>) -> Self {
+        Self(buf)
+    }
+}
 
 pub enum Value<'a> {
     Put(&'a [u8]),
@@ -98,8 +121,30 @@ impl<'a> BaseData<'a> {
     }
 }
 
-impl<'a> From<PageRef<'a>> for BaseData<'a> {
-    fn from(page: PageRef<'a>) -> Self {
+impl<'a> From<Page<'a>> for BaseData<'a> {
+    fn from(page: Page<'a>) -> Self {
+        todo!()
+    }
+}
+
+pub struct BaseDataBuf {}
+
+impl BaseDataBuf {
+    pub fn add(&mut self, record: &Record) {
+        todo!()
+    }
+}
+
+pub struct DeltaData<'a>(&'a [u8]);
+
+impl<'a> DeltaData<'a> {
+    pub fn get(self, key: &[u8]) -> Option<Value<'a>> {
+        todo!()
+    }
+}
+
+impl<'a> From<Page<'a>> for DeltaData<'a> {
+    fn from(page: Page<'a>) -> Self {
         todo!()
     }
 }
@@ -112,36 +157,11 @@ impl DeltaDataBuf {
     }
 }
 
-pub struct DeltaDataRef<'a>(&'a [u8]);
-
-impl<'a> DeltaDataRef<'a> {
-    pub fn get(self, key: &[u8]) -> Option<Value<'a>> {
+impl From<PageBuf> for DeltaDataBuf {
+    fn from(page: PageBuf) -> Self {
         todo!()
     }
 }
-
-impl<'a> From<PageRef<'a>> for DeltaDataRef<'a> {
-    fn from(page: PageRef<'a>) -> Self {
-        todo!()
-    }
-}
-
-#[repr(u8)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub enum PageKind {
-    BaseData = 0,
-    DeltaData = 1,
-    BaseIndex = 32,
-    DeltaIndex = 33,
-}
-
-impl PageKind {
-    pub fn is_data(self) -> bool {
-        self < Self::BaseIndex
-    }
-}
-
-pub trait PageLayout {}
 
 pub struct DeltaDataLayout {}
 

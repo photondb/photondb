@@ -1,5 +1,5 @@
 use super::{
-    page::{DeltaDataLayout, PageBuf, PageKind, PageLayout, PagePtr, PageRef, Record},
+    page::{DeltaDataLayout, Page, PageBuf, PageKind, PageLayout, PagePtr, Record},
     pagestore::{PageAddr, PageInfo, PageStore},
     pagetable::PageTable,
     Error, Ghost, Options, Result,
@@ -68,7 +68,7 @@ impl BTree {
 }
 
 impl BTree {
-    fn page(&self, id: NodeId) -> PagePtr {
+    fn page_ptr(&self, id: NodeId) -> PagePtr {
         self.table.get(id.into()).into()
     }
 
@@ -84,7 +84,7 @@ impl BTree {
     }
 
     fn node_pair<'g>(&self, id: NodeId, ghost: &'g Ghost) -> NodePair<'g> {
-        let ptr = self.page(id);
+        let ptr = self.page_ptr(id);
         let view = self.page_view(ptr, ghost);
         NodePair::new(id, view)
     }
@@ -101,9 +101,9 @@ impl BTree {
         &self,
         id: NodeId,
         ptr: PagePtr,
-        buf: Vec<u8>,
+        buf: PageBuf,
         ghost: &'g Ghost,
-    ) -> Result<PageRef<'g>> {
+    ) -> Result<Page<'g>> {
         todo!()
     }
 
@@ -112,12 +112,12 @@ impl BTree {
         id: NodeId,
         ptr: PagePtr,
         ghost: &'g Ghost,
-    ) -> Result<PageRef<'g>> {
+    ) -> Result<Page<'g>> {
         match ptr {
             PagePtr::Mem(addr) => Ok(addr.into()),
             PagePtr::Disk(addr) => {
                 let buf = self.store.load_page_with_addr(addr.into()).await?;
-                self.swapin_page(id, ptr, buf, ghost)
+                self.swapin_page(id, ptr, buf.into(), ghost)
             }
         }
     }
@@ -126,13 +126,13 @@ impl BTree {
         &self,
         node: &NodePair<'g>,
         ghost: &'g Ghost,
-    ) -> Result<PageRef<'g>> {
+    ) -> Result<Page<'g>> {
         match node.view {
             PageView::Mem(page) => Ok(page),
             PageView::Disk(addr, ref info) => {
                 let ptr = PagePtr::Disk(addr.into());
                 let buf = self.store.load_page_with_handle(&info.handle).await?;
-                self.swapin_page(node.id, ptr, buf, ghost)
+                self.swapin_page(node.id, ptr, buf.into(), ghost)
             }
         }
     }
@@ -218,27 +218,8 @@ impl Into<u64> for NodeId {
     }
 }
 
-struct NodePair<'g> {
-    id: NodeId,
-    view: PageView<'g>,
-}
-
-impl<'g> NodePair<'g> {
-    fn new(id: NodeId, view: PageView<'g>) -> Self {
-        Self { id, view }
-    }
-
-    fn ver(&self) -> u64 {
-        self.view.ver()
-    }
-
-    fn is_data(&self) -> bool {
-        self.view.kind().is_data()
-    }
-}
-
-pub enum PageView<'a> {
-    Mem(PageRef<'a>),
+enum PageView<'a> {
+    Mem(Page<'a>),
     Disk(PageAddr, PageInfo),
 }
 
@@ -255,6 +236,25 @@ impl<'a> PageView<'a> {
             Self::Mem(page) => page.kind(),
             Self::Disk(_, page) => page.kind,
         }
+    }
+}
+
+struct NodePair<'g> {
+    id: NodeId,
+    view: PageView<'g>,
+}
+
+impl<'g> NodePair<'g> {
+    fn new(id: NodeId, view: PageView<'g>) -> Self {
+        Self { id, view }
+    }
+
+    fn ver(&self) -> u64 {
+        self.view.ver()
+    }
+
+    fn is_data(&self) -> bool {
+        self.view.kind().is_data()
     }
 }
 

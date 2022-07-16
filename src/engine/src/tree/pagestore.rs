@@ -58,11 +58,11 @@ impl PageStore {
         todo!()
     }
 
-    pub async fn load_page_with_addr(&self, addr: PageAddr) -> Result<Vec<u8>> {
+    pub async fn load_page_with_addr(&self, addr: PageAddr) -> Result<Box<[u8]>> {
         todo!()
     }
 
-    pub async fn load_page_with_handle(&self, handle: &PageHandle) -> Result<Vec<u8>> {
+    pub async fn load_page_with_handle(&self, handle: &PageHandle) -> Result<Box<[u8]>> {
         todo!()
     }
 }
