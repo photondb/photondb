@@ -1,3 +1,5 @@
+use std::ops::{Deref, DerefMut};
+
 use super::{PageBuf, PageIter, PageLayout, PagePtr, PageRef};
 
 pub struct IndexValue {
@@ -12,7 +14,57 @@ pub struct IndexRecord<'a> {
 
 impl<'a> IndexRecord<'a> {}
 
-pub struct IndexPageRef<'a>(&'a [u8]);
+pub struct IndexPageLayout {}
+
+impl Default for IndexPageLayout {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
+impl IndexPageLayout {
+    pub fn add(&mut self, record: &IndexRecord) {
+        todo!()
+    }
+}
+
+impl PageLayout for IndexPageLayout {}
+
+pub struct IndexPageBuf(PageBuf);
+
+impl IndexPageBuf {
+    pub fn add(&mut self, record: &IndexRecord) {
+        todo!()
+    }
+}
+
+impl Deref for IndexPageBuf {
+    type Target = PageBuf;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for IndexPageBuf {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<PageBuf> for IndexPageBuf {
+    fn from(page: PageBuf) -> Self {
+        Self(page)
+    }
+}
+
+impl From<IndexPageBuf> for PageBuf {
+    fn from(page: IndexPageBuf) -> Self {
+        page.0
+    }
+}
+
+pub struct IndexPageRef<'a>(PageRef<'a>);
 
 impl<'a> IndexPageRef<'a> {
     pub fn get(self, key: &[u8]) -> Option<IndexValue> {
@@ -24,15 +76,23 @@ impl<'a> IndexPageRef<'a> {
     }
 }
 
+impl<'a> Deref for IndexPageRef<'a> {
+    type Target = PageRef<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 impl<'a> From<PageRef<'a>> for IndexPageRef<'a> {
     fn from(page: PageRef<'a>) -> Self {
-        todo!()
+        Self(page)
     }
 }
 
 impl<'a> From<IndexPageRef<'a>> for PageRef<'a> {
     fn from(page: IndexPageRef<'a>) -> Self {
-        todo!()
+        page.0
     }
 }
 
@@ -53,43 +113,3 @@ impl<'a> Iterator for IndexPageIter<'a> {
         todo!()
     }
 }
-
-pub struct IndexPageBuf(Box<[u8]>);
-
-impl IndexPageBuf {
-    pub fn add(&mut self, record: &IndexRecord) {
-        todo!()
-    }
-
-    pub fn as_ptr(&self) -> PagePtr {
-        todo!()
-    }
-}
-
-impl From<PageBuf> for IndexPageBuf {
-    fn from(page: PageBuf) -> Self {
-        todo!()
-    }
-}
-
-impl From<IndexPageBuf> for PageBuf {
-    fn from(page: IndexPageBuf) -> Self {
-        todo!()
-    }
-}
-
-pub struct IndexPageLayout {}
-
-impl Default for IndexPageLayout {
-    fn default() -> Self {
-        Self {}
-    }
-}
-
-impl IndexPageLayout {
-    pub fn add(&mut self, record: &IndexRecord) {
-        todo!()
-    }
-}
-
-impl PageLayout for IndexPageLayout {}

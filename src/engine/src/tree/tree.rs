@@ -1,8 +1,8 @@
 use super::{
-    node::{DataNodeIter, IndexNodeIter, NodeId, NodeIndex, NodePair, NodeView},
+    node::{DataNodeIter, IndexNodeIter, NodeId, NodeIndex, NodePair, PageView},
     page::{
-        DataPageBuf, DataPageIter, DataPageLayout, DataPageRef, DataRecord, IndexPageRef,
-        MergeIterBuilder, PageBuf, PageKind, PageLayout, PagePtr, PageRef,
+        DataPageBuf, DataPageLayout, DataPageRef, DataRecord, IndexPageRef, MergeIterBuilder,
+        PageBuf, PageKind, PageLayout, PagePtr, PageRef,
     },
     pagestore::PageStore,
     pagetable::PageTable,
@@ -32,7 +32,7 @@ impl Tree {
 
     async fn try_get<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_data_node(key, ghost).await?;
-        self.find_data_in_node(key, &node, ghost).await
+        self.search_data_node(key, &node, ghost).await
     }
 
     pub async fn put<'g>(
@@ -77,7 +77,7 @@ impl Tree {
             match self.update_node(node.id, node.view.as_ptr(), delta) {
                 None => return Ok(()),
                 Some(now) => {
-                    let view = self.node_view(now, ghost);
+                    let view = self.page_view(now, ghost);
                     if view.ver() != node.ver() {
                         return Err(Error::Again);
                     }
@@ -89,24 +89,24 @@ impl Tree {
 }
 
 impl Tree {
-    fn node_ptr(&self, id: NodeId) -> PagePtr {
+    fn page_ptr(&self, id: NodeId) -> PagePtr {
         self.table.get(id.into()).into()
     }
 
-    fn node_view<'g>(&self, ptr: PagePtr, _: &'g Ghost) -> NodeView<'g> {
+    fn page_view<'g>(&self, ptr: PagePtr, _: &'g Ghost) -> PageView<'g> {
         match ptr {
-            PagePtr::Mem(addr) => NodeView::Mem(addr.into()),
+            PagePtr::Mem(addr) => PageView::Mem(addr.into()),
             PagePtr::Disk(addr) => {
                 let addr = addr.into();
                 let info = self.store.page_info(addr).unwrap();
-                NodeView::Disk(addr, info)
+                PageView::Disk(addr, info)
             }
         }
     }
 
     fn node_pair<'g>(&self, id: NodeId, ghost: &'g Ghost) -> NodePair<'g> {
-        let ptr = self.node_ptr(id);
-        let view = self.node_view(ptr, ghost);
+        let ptr = self.page_ptr(id);
+        let view = self.page_view(ptr, ghost);
         NodePair::new(id, view)
     }
 
@@ -153,17 +153,18 @@ impl Tree {
         }
     }
 
-    async fn load_page_with_node<'g>(
+    async fn load_page_with_view<'g>(
         &self,
-        node: &NodePair<'g>,
+        id: NodeId,
+        view: &PageView<'g>,
         ghost: &'g Ghost,
     ) -> Result<PageRef<'g>> {
-        match node.view {
-            NodeView::Mem(page) => Ok(page),
-            NodeView::Disk(addr, ref info) => {
+        match *view {
+            PageView::Mem(page) => Ok(page),
+            PageView::Disk(addr, ref info) => {
                 let ptr = PagePtr::Disk(addr.into());
                 let buf = self.store.load_page_with_handle(&info.handle).await?;
-                self.swapin_page(node.id, ptr, buf.into(), ghost)
+                self.swapin_page(id, ptr, buf.into(), ghost)
             }
         }
     }
@@ -180,7 +181,7 @@ impl Tree {
             if node.is_data() {
                 return Ok(node);
             }
-            cursor = self.find_index_in_node(key, &node, ghost).await?;
+            cursor = self.search_index_node(key, &node, ghost).await?;
             parent = Some(node);
         }
     }
@@ -194,14 +195,46 @@ impl Tree {
         todo!()
     }
 
-    async fn find_data_in_node<'g>(
+    async fn iter_data_node<'g>(
+        &self,
+        node: &NodePair<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<DataNodeIter<'g>> {
+        let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
+        let mut merger = MergeIterBuilder::default();
+        loop {
+            match page.kind() {
+                PageKind::Data => {
+                    let page = DataPageRef::from(page);
+                    merger.add(page.iter());
+                }
+                _ => unreachable!(),
+            }
+            if let Some(next) = page.next() {
+                page = self.load_page_with_ptr(node.id, next, ghost).await?;
+            } else {
+                return Ok(merger.build());
+            }
+        }
+    }
+
+    async fn search_data_node<'g>(
         &self,
         key: &[u8],
         node: &NodePair<'g>,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
-        let mut page = self.load_page_with_node(node, ghost).await?;
+        let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
         loop {
+            match page.kind() {
+                PageKind::Data => {
+                    let page = DataPageRef::from(page);
+                    if let Some(record) = page.get(key) {
+                        todo!()
+                    }
+                }
+                _ => unreachable!(),
+            }
             if let Some(next) = page.next() {
                 page = self.load_page_with_ptr(node.id, next, ghost).await?;
             } else {
@@ -210,21 +243,18 @@ impl Tree {
         }
     }
 
-    async fn iter_data_node<'g>(
+    async fn try_consolidate_data_node<'g>(
         &self,
         node: &NodePair<'g>,
         ghost: &'g Ghost,
-    ) -> Result<DataNodeIter<'g>> {
-        let mut page = self.load_page_with_node(node, ghost).await?;
-        let mut merger = MergeIterBuilder::default();
-        loop {
-            merger.add(DataPageRef::from(page).iter());
-            if let Some(next) = page.next() {
-                page = self.load_page_with_ptr(node.id, next, ghost).await?;
-            } else {
-                return Ok(merger.build());
-            }
+    ) -> Result<()> {
+        let iter = self.iter_data_node(node, ghost).await?;
+        let mut layout = DataPageLayout::default();
+        for record in iter {
+            layout.add(&record);
         }
+        let mut page: DataPageBuf = self.alloc_page(&layout);
+        todo!()
     }
 
     async fn iter_index_node<'g>(
@@ -232,10 +262,16 @@ impl Tree {
         node: &NodePair<'g>,
         ghost: &'g Ghost,
     ) -> Result<IndexNodeIter<'g>> {
-        let mut page = self.load_page_with_node(node, ghost).await?;
+        let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
         let mut merger = MergeIterBuilder::default();
         loop {
-            merger.add(IndexPageRef::from(page).iter());
+            match page.kind() {
+                PageKind::Index => {
+                    let page = IndexPageRef::from(page);
+                    merger.add(page.iter());
+                }
+                _ => unreachable!(),
+            }
             if let Some(next) = page.next() {
                 page = self.load_page_with_ptr(node.id, next, ghost).await?;
             } else {
@@ -244,17 +280,12 @@ impl Tree {
         }
     }
 
-    async fn find_index_in_node<'g>(
+    async fn search_index_node<'g>(
         &self,
         key: &[u8],
         node: &NodePair<'g>,
         ghost: &'g Ghost,
     ) -> Result<NodeIndex> {
-        todo!()
-    }
-
-    async fn consolidate_data_node<'g>(&self, node: &NodePair<'g>, ghost: &'g Ghost) -> Result<()> {
-        let mut page = self.load_page_with_node(node, ghost).await?;
         todo!()
     }
 

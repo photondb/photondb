@@ -24,12 +24,12 @@ impl Into<u64> for NodeId {
     }
 }
 
-pub enum NodeView<'a> {
+pub enum PageView<'a> {
     Mem(PageRef<'a>),
     Disk(PageAddr, PageInfo),
 }
 
-impl<'a> NodeView<'a> {
+impl<'a> PageView<'a> {
     pub fn ver(&self) -> u64 {
         match self {
             Self::Mem(page) => page.ver(),
@@ -54,11 +54,11 @@ impl<'a> NodeView<'a> {
 
 pub struct NodePair<'a> {
     pub id: NodeId,
-    pub view: NodeView<'a>,
+    pub view: PageView<'a>,
 }
 
 impl<'a> NodePair<'a> {
-    pub fn new(id: NodeId, view: NodeView<'a>) -> Self {
+    pub fn new(id: NodeId, view: PageView<'a>) -> Self {
         Self { id, view }
     }
 

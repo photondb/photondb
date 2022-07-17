@@ -31,15 +31,13 @@ impl<'a> Into<u64> for PagePtr {
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum PageKind {
-    BaseData = 0,
-    DeltaData = 1,
-    BaseIndex = 32,
-    DeltaIndex = 33,
+    Data = 0,
+    Index = 16,
 }
 
 impl PageKind {
     pub fn is_data(self) -> bool {
-        self < Self::BaseIndex
+        self < Self::Index
     }
 }
 
