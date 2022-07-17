@@ -5,4 +5,5 @@ edition = "2021"
 
 [dependencies]
 crossbeam-epoch = "0.9"
+jemallocator = "0.5"
 thiserror = "1.0"

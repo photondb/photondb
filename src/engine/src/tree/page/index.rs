@@ -1,4 +1,7 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    alloc::Layout,
+    ops::{Deref, DerefMut},
+};
 
 use super::{PageBuf, PageIter, PageLayout, PagePtr, PageRef};
 
@@ -28,7 +31,11 @@ impl IndexPageLayout {
     }
 }
 
-impl PageLayout for IndexPageLayout {}
+impl PageLayout for IndexPageLayout {
+    fn layout(&self) -> Layout {
+        todo!()
+    }
+}
 
 pub struct IndexPageBuf(PageBuf);
 

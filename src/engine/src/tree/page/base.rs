@@ -1,4 +1,4 @@
-use std::{iter::Iterator, ops::Deref};
+use std::{alloc::Layout, iter::Iterator, ops::Deref};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum PagePtr {
@@ -41,7 +41,15 @@ impl PageKind {
     }
 }
 
-pub trait PageLayout {}
+#[repr(C)]
+pub struct PageHeader {
+    pub ver: u64,
+    pub next: u64,
+}
+
+pub trait PageLayout {
+    fn layout(&self) -> Layout;
+}
 
 pub struct PageBuf(Box<[u8]>);
 

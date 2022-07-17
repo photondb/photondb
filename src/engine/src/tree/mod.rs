@@ -9,6 +9,7 @@ use ghost::{Ghost, Guard};
 
 mod node;
 mod page;
+mod pagealloc;
 mod pagestore;
 mod pagetable;
 mod tree;

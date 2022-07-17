@@ -1,6 +1,15 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    alloc::Layout,
+    ops::{Deref, DerefMut},
+};
 
 use super::{PageBuf, PageIter, PageLayout, PageRef};
+
+#[repr(u8)]
+pub enum DataKind {
+    Put = 0,
+    Delete = 1,
+}
 
 pub enum DataValue<'a> {
     Put(&'a [u8]),
@@ -45,7 +54,11 @@ impl DataPageLayout {
     }
 }
 
-impl PageLayout for DataPageLayout {}
+impl PageLayout for DataPageLayout {
+    fn layout(&self) -> Layout {
+        todo!()
+    }
+}
 
 pub struct DataPageBuf(PageBuf);
 

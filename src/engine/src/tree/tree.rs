@@ -4,21 +4,28 @@ use super::{
         DataPageBuf, DataPageLayout, DataPageRef, DataRecord, IndexPageRef, MergeIterBuilder,
         PageBuf, PageKind, PageLayout, PagePtr, PageRef,
     },
+    pagealloc::PageAlloc,
     pagestore::PageStore,
     pagetable::PageTable,
     Error, Ghost, Options, Result,
 };
 
 pub struct Tree {
+    alloc: PageAlloc,
     table: PageTable,
     store: PageStore,
 }
 
 impl Tree {
     pub async fn open(opts: Options) -> Result<Self> {
+        let alloc = PageAlloc::default();
         let table = PageTable::default();
         let store = PageStore::open(opts).await?;
-        let tree = Self { table, store };
+        let tree = Self {
+            alloc,
+            table,
+            store,
+        };
         tree.recover().await?;
         Ok(tree)
     }
@@ -61,7 +68,7 @@ impl Tree {
     async fn update<'g>(&self, record: &DataRecord<'g>, ghost: &'g Ghost) -> Result<()> {
         let mut layout = DataPageLayout::default();
         layout.add(&record);
-        let mut page: DataPageBuf = self.alloc_page(&layout);
+        let mut page: DataPageBuf = self.alloc.alloc(&layout);
         page.add(&record);
         loop {
             match self.try_update(record.key, page.as_ptr(), ghost).await {
@@ -71,7 +78,7 @@ impl Tree {
                 }
                 Err(Error::Conflict) => continue,
                 Err(err) => {
-                    self.dealloc_page(page.into());
+                    self.alloc.dealloc(page.into());
                     return Err(err);
                 }
             }
@@ -121,14 +128,6 @@ impl Tree {
         self.table
             .cas(id.into(), old.into(), new.into())
             .map(|now| now.into())
-    }
-
-    fn alloc_page<L: PageLayout, B: From<PageBuf>>(&self, layout: &L) -> B {
-        todo!()
-    }
-
-    fn dealloc_page(&self, page: PageBuf) {
-        todo!()
     }
 
     fn swapin_page<'g>(
@@ -273,7 +272,7 @@ impl Tree {
         for record in iter {
             layout.add(&record);
         }
-        let mut page: DataPageBuf = self.alloc_page(&layout);
+        let mut page: DataPageBuf = self.alloc.alloc(&layout);
         if self
             .update_node(node.id, node.view.as_ptr(), page.as_ptr())
             .is_some()
