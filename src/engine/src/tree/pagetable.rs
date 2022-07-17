@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use crossbeam_epoch::Guard;
+use super::Guard;
 
 #[derive(Clone)]
 pub struct PageTable {

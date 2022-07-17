@@ -1,4 +1,4 @@
-use std::iter::Iterator;
+use std::{iter::Iterator, ops::Deref};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum PagePtr {
@@ -46,8 +46,16 @@ pub trait PageLayout {}
 pub struct PageBuf(Box<[u8]>);
 
 impl PageBuf {
+    pub fn ver(&self) -> u64 {
+        self.as_ref().ver()
+    }
+
     pub fn as_ptr(&self) -> PagePtr {
-        todo!()
+        self.as_ref().into()
+    }
+
+    pub fn as_ref(&self) -> PageRef<'_> {
+        PageRef(self.0.as_ref())
     }
 }
 
@@ -69,6 +77,10 @@ impl<'a> PageRef<'a> {
         todo!()
     }
 
+    pub fn size(&self) -> usize {
+        todo!()
+    }
+
     pub fn kind(&self) -> PageKind {
         todo!()
     }
@@ -87,6 +99,12 @@ impl<'a> From<u64> for PageRef<'a> {
 impl<'a> Into<u64> for PageRef<'a> {
     fn into(self) -> u64 {
         todo!()
+    }
+}
+
+impl<'a> Into<PagePtr> for PageRef<'a> {
+    fn into(self) -> PagePtr {
+        PagePtr::Mem(self.into())
     }
 }
 

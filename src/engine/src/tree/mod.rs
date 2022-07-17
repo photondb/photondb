@@ -4,22 +4,14 @@ pub use table::Table;
 mod error;
 pub use error::{Error, Result};
 
+mod ghost;
+use ghost::{Ghost, Guard};
+
 mod node;
 mod page;
 mod pagestore;
 mod pagetable;
 mod tree;
-
-struct Ghost {
-    guard: crossbeam_epoch::Guard,
-}
-
-impl Ghost {
-    pub fn pin() -> Self {
-        let guard = crossbeam_epoch::pin();
-        Self { guard }
-    }
-}
 
 pub struct Options {
     pub data_node_size: usize,

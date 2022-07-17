@@ -18,13 +18,20 @@ impl Tree {
     pub async fn open(opts: Options) -> Result<Self> {
         let table = PageTable::default();
         let store = PageStore::open(opts).await?;
-        Ok(Self { table, store })
+        let tree = Self { table, store };
+        tree.recover().await?;
+        Ok(tree)
+    }
+
+    async fn recover(&self) -> Result<()> {
+        // TODO: recovers the page table from the page store.
+        Ok(())
     }
 
     pub async fn get<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         loop {
             match self.try_get(key, ghost).await {
-                Err(Error::Again) => continue,
+                Err(Error::Conflict) => continue,
                 other => return other,
             }
         }
@@ -32,7 +39,7 @@ impl Tree {
 
     async fn try_get<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_data_node(key, ghost).await?;
-        self.search_data_node(key, &node, ghost).await
+        self.search_data_node(&node, key, ghost).await
     }
 
     pub async fn put<'g>(
@@ -62,11 +69,11 @@ impl Tree {
                     std::mem::forget(page);
                     return Ok(());
                 }
+                Err(Error::Conflict) => continue,
                 Err(err) => {
                     self.dealloc_page(page.into());
                     return Err(err);
                 }
-                Err(Error::Again) => continue,
             }
         }
     }
@@ -78,8 +85,8 @@ impl Tree {
                 None => return Ok(()),
                 Some(now) => {
                     let view = self.page_view(now, ghost);
-                    if view.ver() != node.ver() {
-                        return Err(Error::Again);
+                    if view.ver() != node.view.ver() {
+                        return Err(Error::Conflict);
                     }
                     node.view = view;
                 }
@@ -164,7 +171,11 @@ impl Tree {
             PageView::Disk(addr, ref info) => {
                 let ptr = PagePtr::Disk(addr.into());
                 let buf = self.store.load_page_with_handle(&info.handle).await?;
-                self.swapin_page(id, ptr, buf.into(), ghost)
+                let page = PageBuf::from(buf);
+                if page.ver() != view.ver() {
+                    return Err(Error::Conflict);
+                }
+                self.swapin_page(id, ptr, page, ghost)
             }
         }
     }
@@ -174,14 +185,14 @@ impl Tree {
         let mut parent = None;
         loop {
             let node = self.node_pair(cursor.id, ghost);
-            if node.ver() != cursor.ver {
+            if node.view.ver() != cursor.ver {
                 self.try_help_pending_smo(&node, parent.as_ref(), ghost)?;
-                return Err(Error::Again);
+                return Err(Error::Conflict);
             }
             if node.is_data() {
                 return Ok(node);
             }
-            cursor = self.search_index_node(key, &node, ghost).await?;
+            cursor = self.search_index_node(&node, key, ghost).await?;
             parent = Some(node);
         }
     }
@@ -220,8 +231,8 @@ impl Tree {
 
     async fn search_data_node<'g>(
         &self,
-        key: &[u8],
         node: &NodePair<'g>,
+        key: &[u8],
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
@@ -243,6 +254,15 @@ impl Tree {
         }
     }
 
+    async fn try_split_data_node<'g>(
+        &self,
+        node: &NodePair<'g>,
+        key: &[u8],
+        ghost: &'g Ghost,
+    ) -> Result<()> {
+        todo!()
+    }
+
     async fn try_consolidate_data_node<'g>(
         &self,
         node: &NodePair<'g>,
@@ -254,6 +274,19 @@ impl Tree {
             layout.add(&record);
         }
         let mut page: DataPageBuf = self.alloc_page(&layout);
+        if self
+            .update_node(node.id, node.view.as_ptr(), page.as_ptr())
+            .is_some()
+        {
+            return Err(Error::Conflict);
+        }
+        /*
+        if page.size() >= self.opts.data_node_size {
+            if let Some(split_key) = page.split_key() {
+                self.try_split_data_node(node, split_key, ghost).await?;
+            }
+        }
+        */
         todo!()
     }
 
@@ -282,8 +315,8 @@ impl Tree {
 
     async fn search_index_node<'g>(
         &self,
-        key: &[u8],
         node: &NodePair<'g>,
+        key: &[u8],
         ghost: &'g Ghost,
     ) -> Result<NodeIndex> {
         todo!()

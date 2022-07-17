@@ -2,8 +2,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Again")]
-    Again,
+    #[error("Conflict")]
+    Conflict,
     #[error("Corrupted: {0}")]
     Corrupted(String),
     #[error(transparent)]

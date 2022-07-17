@@ -62,10 +62,6 @@ impl<'a> NodePair<'a> {
         Self { id, view }
     }
 
-    pub fn ver(&self) -> u64 {
-        self.view.ver()
-    }
-
     pub fn is_data(&self) -> bool {
         self.view.kind().is_data()
     }
