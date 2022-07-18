@@ -7,10 +7,11 @@ use super::{
     pagealloc::PageAlloc,
     pagestore::PageStore,
     pagetable::PageTable,
-    Error, Ghost, Options, ReadOptions, Result,
+    Error, Ghost, Options, Result,
 };
 
 pub struct Tree {
+    opts: Options,
     alloc: PageAlloc,
     table: PageTable,
     store: PageStore,
@@ -20,8 +21,9 @@ impl Tree {
     pub async fn open(opts: Options) -> Result<Self> {
         let alloc = PageAlloc::default();
         let table = PageTable::default();
-        let store = PageStore::open(opts).await?;
+        let store = PageStore::open(opts.clone()).await?;
         let tree = Self {
+            opts,
             alloc,
             table,
             store,
@@ -37,12 +39,12 @@ impl Tree {
 
     pub async fn get<'g>(
         &self,
+        lsn: u64,
         key: &[u8],
-        opts: &ReadOptions,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         loop {
-            match self.try_get(key, opts, ghost).await {
+            match self.try_get(lsn, key, ghost).await {
                 Err(Error::Conflict) => continue,
                 other => return other,
             }
@@ -51,37 +53,37 @@ impl Tree {
 
     async fn try_get<'g>(
         &self,
+        lsn: u64,
         key: &[u8],
-        opts: &ReadOptions,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_data_node(key, ghost).await?;
-        self.search_data_node(&node, key, opts.lsn, ghost).await
+        self.search_data_node(&node, lsn, key, ghost).await
     }
 
     pub async fn put<'g>(
         &self,
-        key: &[u8],
         lsn: u64,
+        key: &[u8],
         value: &[u8],
         ghost: &'g Ghost,
     ) -> Result<()> {
-        let record = DataRecord::put(key, lsn, value);
+        let record = DataRecord::put(lsn, key, value);
         self.update(&record, ghost).await
     }
 
-    pub async fn delete<'g>(&self, key: &[u8], lsn: u64, ghost: &'g Ghost) -> Result<()> {
-        let record = DataRecord::delete(key, lsn);
+    pub async fn delete<'g>(&self, lsn: u64, key: &[u8], ghost: &'g Ghost) -> Result<()> {
+        let record = DataRecord::delete(lsn, key);
         self.update(&record, ghost).await
     }
 
-    async fn update<'g>(&self, record: &DataRecord<'g>, ghost: &'g Ghost) -> Result<()> {
+    async fn update<'g>(&self, record: &DataRecord<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut layout = DataPageLayout::default();
         layout.add(&record);
         let mut page: DataPageBuf = self.alloc_page(layout.size());
         page.add(&record);
         loop {
-            match self.try_update(record.key, page.as_ptr(), ghost).await {
+            match self.try_update(record.key, &mut page, ghost).await {
                 Ok(_) => {
                     std::mem::forget(page);
                     return Ok(());
@@ -95,13 +97,27 @@ impl Tree {
         }
     }
 
-    async fn try_update<'g>(&self, key: &[u8], delta: PagePtr, ghost: &'g Ghost) -> Result<()> {
+    async fn try_update<'g>(
+        &self,
+        key: &[u8],
+        delta: &mut PageBuf,
+        ghost: &'g Ghost,
+    ) -> Result<()> {
         let mut node = self.try_find_data_node(key, ghost).await?;
         loop {
-            match self.update_node(node.id, node.view.as_ptr(), delta) {
-                None => return Ok(()),
-                Some(now) => {
-                    let view = self.page_view(now, ghost);
+            let next_ptr = node.view.as_ptr();
+            delta.set_ver(node.view.ver());
+            delta.set_len(node.view.len() + 1);
+            delta.set_next(next_ptr);
+            match self.update_node(node.id, next_ptr, delta.as_ptr()) {
+                None => {
+                    if delta.len() >= self.opts.data_delta_length {
+                        let _ = self.try_consolidate_data_node(&node, ghost).await;
+                    }
+                    return Ok(());
+                }
+                Some(ptr) => {
+                    let view = self.page_view(ptr, ghost);
                     if view.ver() != node.view.ver() {
                         return Err(Error::Conflict);
                     }
@@ -131,7 +147,7 @@ impl Tree {
     fn node_pair<'g>(&self, id: NodeId, ghost: &'g Ghost) -> NodePair<'g> {
         let ptr = self.page_ptr(id);
         let view = self.page_view(ptr, ghost);
-        NodePair::new(id, view)
+        NodePair { id, view }
     }
 
     fn update_node<'g>(&self, id: NodeId, old: PagePtr, new: PagePtr) -> Option<PagePtr> {
@@ -206,7 +222,7 @@ impl Tree {
                 self.try_help_pending_smo(&node, parent.as_ref(), ghost)?;
                 return Err(Error::Conflict);
             }
-            if node.is_data() {
+            if node.view.is_data() {
                 return Ok(node);
             }
             cursor = self.search_index_node(&node, key, ghost).await?;
@@ -249,8 +265,8 @@ impl Tree {
     async fn search_data_node<'g>(
         &self,
         node: &NodePair<'g>,
-        key: &[u8],
         lsn: u64,
+        key: &[u8],
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;

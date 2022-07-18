@@ -5,6 +5,7 @@ use super::{
 
 pub struct PageInfo {
     pub ver: u64,
+    pub len: u8,
     pub kind: PageKind,
     pub handle: PageHandle,
 }
@@ -55,7 +56,7 @@ impl PageStore {
         todo!()
     }
 
-    pub fn highest_stable_page(&self) -> PageAddr {
+    pub fn highest_stable_addr(&self) -> PageAddr {
         todo!()
     }
 

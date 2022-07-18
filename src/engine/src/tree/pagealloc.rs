@@ -29,7 +29,7 @@ impl PageAlloc {
 
     pub fn alloc(&self, size: usize) -> Option<PageBuf> {
         let layout = page_layout(size);
-        if self.limit > 0 && self.size.load(Ordering::Relaxed) + size > self.limit {
+        if self.size.load(Ordering::Relaxed) + size > self.limit {
             return None;
         }
         unsafe {

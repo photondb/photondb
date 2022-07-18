@@ -1,10 +1,10 @@
 use std::ops::{Deref, DerefMut};
 
-use super::{PageBuf, PageIter, PagePtr, PageRef};
+use super::{PageBuf, PageIter, PageRef};
 
 pub struct IndexValue {
-    id: u64,
-    ver: u64,
+    pub id: u64,
+    pub ver: u64,
 }
 
 pub struct IndexRecord<'a> {
@@ -66,6 +66,7 @@ impl From<IndexPageBuf> for PageBuf {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct IndexPageRef<'a>(PageRef<'a>);
 
 impl<'a> IndexPageRef<'a> {
@@ -98,7 +99,7 @@ impl<'a> From<IndexPageRef<'a>> for PageRef<'a> {
     }
 }
 
-pub struct IndexPageIter<'a>(&'a [u8]);
+pub struct IndexPageIter<'a>(PageRef<'a>);
 
 impl<'a> PageIter for IndexPageIter<'a> {
     type Item = IndexRecord<'a>;

@@ -14,23 +14,23 @@ mod pagestore;
 mod pagetable;
 mod tree;
 
+#[derive(Clone, Debug)]
 pub struct Options {
+    pub cache_size: usize,
     pub data_node_size: usize,
-    pub data_delta_length: usize,
+    pub data_delta_length: u8,
     pub index_node_size: usize,
-    pub index_delta_length: usize,
+    pub index_delta_length: u8,
 }
 
-pub struct ReadOptions {
-    pub lsn: u64,
-    pub fill_cache: bool,
-}
-
-impl Default for ReadOptions {
+impl Default for Options {
     fn default() -> Self {
         Self {
-            lsn: u64::MAX,
-            fill_cache: true,
+            cache_size: usize::MAX,
+            data_node_size: 8 * 1024,
+            data_delta_length: 8,
+            index_node_size: 4 * 1024,
+            index_delta_length: 4,
         }
     }
 }

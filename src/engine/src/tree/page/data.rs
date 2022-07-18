@@ -14,24 +14,24 @@ pub enum DataValue<'a> {
 }
 
 pub struct DataRecord<'a> {
-    pub key: &'a [u8],
     pub lsn: u64,
+    pub key: &'a [u8],
     pub value: DataValue<'a>,
 }
 
 impl<'a> DataRecord<'a> {
-    pub fn put(key: &'a [u8], lsn: u64, value: &'a [u8]) -> Self {
+    pub fn put(lsn: u64, key: &'a [u8], value: &'a [u8]) -> Self {
         Self {
-            key,
             lsn,
+            key,
             value: DataValue::Put(value),
         }
     }
 
-    pub fn delete(key: &'a [u8], lsn: u64) -> Self {
+    pub fn delete(lsn: u64, key: &'a [u8]) -> Self {
         Self {
-            key,
             lsn,
+            key,
             value: DataValue::Delete,
         }
     }
@@ -89,14 +89,15 @@ impl From<DataPageBuf> for PageBuf {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct DataPageRef<'a>(PageRef<'a>);
 
 impl<'a> DataPageRef<'a> {
-    pub fn get(self, key: &[u8], lsn: u64) -> Option<DataValue<'a>> {
+    pub fn get(&self, key: &[u8], lsn: u64) -> Option<DataValue<'a>> {
         todo!()
     }
 
-    pub fn iter(self) -> DataPageIter<'a> {
+    pub fn iter(&self) -> DataPageIter<'a> {
         todo!()
     }
 }
@@ -121,7 +122,7 @@ impl<'a> From<DataPageRef<'a>> for PageRef<'a> {
     }
 }
 
-pub struct DataPageIter<'a>(&'a [u8]);
+pub struct DataPageIter<'a>(PageRef<'a>);
 
 impl<'a> PageIter for DataPageIter<'a> {
     type Item = DataRecord<'a>;

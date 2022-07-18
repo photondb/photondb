@@ -37,11 +37,22 @@ impl<'a> PageView<'a> {
         }
     }
 
+    pub fn len(&self) -> u8 {
+        match self {
+            Self::Mem(page) => page.len(),
+            Self::Disk(_, page) => page.len,
+        }
+    }
+
     pub fn kind(&self) -> PageKind {
         match self {
             Self::Mem(page) => page.kind(),
             Self::Disk(_, page) => page.kind,
         }
+    }
+
+    pub fn is_data(&self) -> bool {
+        self.kind().is_data()
     }
 
     pub fn as_ptr(&self) -> PagePtr {
@@ -55,16 +66,6 @@ impl<'a> PageView<'a> {
 pub struct NodePair<'a> {
     pub id: NodeId,
     pub view: PageView<'a>,
-}
-
-impl<'a> NodePair<'a> {
-    pub fn new(id: NodeId, view: PageView<'a>) -> Self {
-        Self { id, view }
-    }
-
-    pub fn is_data(&self) -> bool {
-        self.view.kind().is_data()
-    }
 }
 
 pub struct NodeIndex {
