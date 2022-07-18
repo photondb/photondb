@@ -1,13 +1,13 @@
 use super::{
     node::{DataNodeIter, IndexNodeIter, NodeId, NodeIndex, NodePair, PageView},
     page::{
-        DataPageBuf, DataPageLayout, DataPageRef, DataRecord, IndexPageRef, MergeIterBuilder,
-        PageBuf, PageKind, PagePtr, PageRef,
+        DataPageBuf, DataPageLayout, DataPageRef, DataRecord, DataValue, IndexPageRef,
+        MergeIterBuilder, PageBuf, PageKind, PagePtr, PageRef,
     },
     pagealloc::PageAlloc,
     pagestore::PageStore,
     pagetable::PageTable,
-    Error, Ghost, Options, Result,
+    Error, Ghost, Options, ReadOptions, Result,
 };
 
 pub struct Tree {
@@ -35,33 +35,43 @@ impl Tree {
         Ok(())
     }
 
-    pub async fn get<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
+    pub async fn get<'g>(
+        &self,
+        key: &[u8],
+        opts: &ReadOptions,
+        ghost: &'g Ghost,
+    ) -> Result<Option<&'g [u8]>> {
         loop {
-            match self.try_get(key, ghost).await {
+            match self.try_get(key, opts, ghost).await {
                 Err(Error::Conflict) => continue,
                 other => return other,
             }
         }
     }
 
-    async fn try_get<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
+    async fn try_get<'g>(
+        &self,
+        key: &[u8],
+        opts: &ReadOptions,
+        ghost: &'g Ghost,
+    ) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_data_node(key, ghost).await?;
-        self.search_data_node(&node, key, ghost).await
+        self.search_data_node(&node, key, opts.lsn, ghost).await
     }
 
     pub async fn put<'g>(
         &self,
-        lsn: u64,
         key: &[u8],
+        lsn: u64,
         value: &[u8],
         ghost: &'g Ghost,
     ) -> Result<()> {
-        let record = DataRecord::put(lsn, key, value);
+        let record = DataRecord::put(key, lsn, value);
         self.update(&record, ghost).await
     }
 
-    pub async fn delete<'g>(&self, lsn: u64, key: &[u8], ghost: &'g Ghost) -> Result<()> {
-        let record = DataRecord::delete(lsn, key);
+    pub async fn delete<'g>(&self, key: &[u8], lsn: u64, ghost: &'g Ghost) -> Result<()> {
+        let record = DataRecord::delete(key, lsn);
         self.update(&record, ghost).await
     }
 
@@ -78,7 +88,7 @@ impl Tree {
                 }
                 Err(Error::Conflict) => continue,
                 Err(err) => {
-                    self.alloc.dealloc(page.into());
+                    self.dealloc_page(page);
                     return Err(err);
                 }
             }
@@ -131,6 +141,7 @@ impl Tree {
     }
 
     fn alloc_page<P: From<PageBuf>>(&self, size: usize) -> P {
+        // TODO: swap out pages when allocation fails.
         self.alloc.alloc(size).unwrap().into()
     }
 
@@ -161,8 +172,8 @@ impl Tree {
         match ptr {
             PagePtr::Mem(addr) => Ok(addr.into()),
             PagePtr::Disk(addr) => {
-                let buf = self.store.load_page_with_addr(addr.into()).await?;
-                self.swapin_page(id, ptr, buf.into(), ghost)
+                let page = self.store.load_page_with_addr(addr.into()).await?;
+                self.swapin_page(id, ptr, page, ghost)
             }
         }
     }
@@ -177,8 +188,7 @@ impl Tree {
             PageView::Mem(page) => Ok(page),
             PageView::Disk(addr, ref info) => {
                 let ptr = PagePtr::Disk(addr.into());
-                let buf = self.store.load_page_with_handle(&info.handle).await?;
-                let page = PageBuf::from(buf);
+                let page = self.store.load_page_with_handle(&info.handle).await?;
                 if page.ver() != view.ver() {
                     return Err(Error::Conflict);
                 }
@@ -240,6 +250,7 @@ impl Tree {
         &self,
         node: &NodePair<'g>,
         key: &[u8],
+        lsn: u64,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
@@ -247,8 +258,11 @@ impl Tree {
             match page.kind() {
                 PageKind::Data => {
                     let page = DataPageRef::from(page);
-                    if let Some(record) = page.get(key) {
-                        todo!()
+                    if let Some(value) = page.get(key, lsn) {
+                        match value {
+                            DataValue::Put(value) => return Ok(Some(value)),
+                            DataValue::Delete => return Ok(None),
+                        }
                     }
                 }
                 _ => unreachable!(),

@@ -1,4 +1,17 @@
-use super::{page::PageKind, Options, Result};
+use super::{
+    page::{PageBuf, PageKind},
+    Options, Result,
+};
+
+pub struct PageInfo {
+    pub ver: u64,
+    pub kind: PageKind,
+    pub handle: PageHandle,
+}
+
+pub struct PageDesc {
+    pub buf: PageBuf,
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct PageAddr(u64);
@@ -13,18 +26,6 @@ impl Into<u64> for PageAddr {
     fn into(self) -> u64 {
         self.0
     }
-}
-
-pub struct PageInfo {
-    pub ver: u64,
-    pub kind: PageKind,
-    pub handle: PageHandle,
-}
-
-pub struct PageDesc {
-    pub ver: u64,
-    pub kind: PageKind,
-    pub data: Vec<u8>,
 }
 
 pub struct PageHandle {
@@ -58,11 +59,11 @@ impl PageStore {
         todo!()
     }
 
-    pub async fn load_page_with_addr(&self, addr: PageAddr) -> Result<Box<[u8]>> {
+    pub async fn load_page_with_addr(&self, addr: PageAddr) -> Result<PageBuf> {
         todo!()
     }
 
-    pub async fn load_page_with_handle(&self, handle: &PageHandle) -> Result<Box<[u8]>> {
+    pub async fn load_page_with_handle(&self, handle: &PageHandle) -> Result<PageBuf> {
         todo!()
     }
 }
