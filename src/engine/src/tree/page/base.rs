@@ -41,16 +41,6 @@ impl PageKind {
     }
 }
 
-#[repr(C)]
-pub struct PageHeader {
-    pub ver: u64,
-    pub next: u64,
-}
-
-pub trait PageLayout {
-    fn layout(&self) -> Layout;
-}
-
 pub struct PageBuf(Box<[u8]>);
 
 impl PageBuf {
@@ -70,6 +60,12 @@ impl PageBuf {
 impl From<Box<[u8]>> for PageBuf {
     fn from(buf: Box<[u8]>) -> Self {
         Self(buf)
+    }
+}
+
+impl Into<Box<[u8]>> for PageBuf {
+    fn into(self) -> Box<[u8]> {
+        self.0
     }
 }
 

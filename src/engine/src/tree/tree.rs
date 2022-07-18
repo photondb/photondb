@@ -2,7 +2,7 @@ use super::{
     node::{DataNodeIter, IndexNodeIter, NodeId, NodeIndex, NodePair, PageView},
     page::{
         DataPageBuf, DataPageLayout, DataPageRef, DataRecord, IndexPageRef, MergeIterBuilder,
-        PageBuf, PageKind, PageLayout, PagePtr, PageRef,
+        PageBuf, PageKind, PagePtr, PageRef,
     },
     pagealloc::PageAlloc,
     pagestore::PageStore,
@@ -68,7 +68,7 @@ impl Tree {
     async fn update<'g>(&self, record: &DataRecord<'g>, ghost: &'g Ghost) -> Result<()> {
         let mut layout = DataPageLayout::default();
         layout.add(&record);
-        let mut page: DataPageBuf = self.alloc.alloc(&layout);
+        let mut page: DataPageBuf = self.alloc_page(layout.size());
         page.add(&record);
         loop {
             match self.try_update(record.key, page.as_ptr(), ghost).await {
@@ -128,6 +128,14 @@ impl Tree {
         self.table
             .cas(id.into(), old.into(), new.into())
             .map(|now| now.into())
+    }
+
+    fn alloc_page<P: From<PageBuf>>(&self, size: usize) -> P {
+        self.alloc.alloc(size).unwrap().into()
+    }
+
+    fn dealloc_page<P: Into<PageBuf>>(&self, page: P) {
+        self.alloc.dealloc(page.into());
     }
 
     fn swapin_page<'g>(
@@ -272,7 +280,7 @@ impl Tree {
         for record in iter {
             layout.add(&record);
         }
-        let mut page: DataPageBuf = self.alloc.alloc(&layout);
+        let page: DataPageBuf = self.alloc_page(layout.size());
         if self
             .update_node(node.id, node.view.as_ptr(), page.as_ptr())
             .is_some()

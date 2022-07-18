@@ -1,9 +1,6 @@
-use std::{
-    alloc::Layout,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
-use super::{PageBuf, PageIter, PageLayout, PageRef};
+use super::{PageBuf, PageIter, PageRef};
 
 #[repr(u8)]
 pub enum DataKind {
@@ -52,10 +49,8 @@ impl DataPageLayout {
     pub fn add(&mut self, record: &DataRecord) {
         todo!()
     }
-}
 
-impl PageLayout for DataPageLayout {
-    fn layout(&self) -> Layout {
+    pub fn size(&self) -> usize {
         todo!()
     }
 }

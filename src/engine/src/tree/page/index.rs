@@ -1,9 +1,6 @@
-use std::{
-    alloc::Layout,
-    ops::{Deref, DerefMut},
-};
+use std::ops::{Deref, DerefMut};
 
-use super::{PageBuf, PageIter, PageLayout, PagePtr, PageRef};
+use super::{PageBuf, PageIter, PagePtr, PageRef};
 
 pub struct IndexValue {
     id: u64,
@@ -29,10 +26,8 @@ impl IndexPageLayout {
     pub fn add(&mut self, record: &IndexRecord) {
         todo!()
     }
-}
 
-impl PageLayout for IndexPageLayout {
-    fn layout(&self) -> Layout {
+    pub fn size(&self) -> usize {
         todo!()
     }
 }
