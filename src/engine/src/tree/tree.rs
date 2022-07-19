@@ -84,10 +84,7 @@ impl Tree {
         page.add(&record);
         loop {
             match self.try_update(record.key, &mut page, ghost).await {
-                Ok(_) => {
-                    std::mem::forget(page);
-                    return Ok(());
-                }
+                Ok(_) => return Ok(()),
                 Err(Error::Conflict) => continue,
                 Err(err) => {
                     self.dealloc_page(page);
