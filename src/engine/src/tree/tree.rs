@@ -147,7 +147,7 @@ impl Tree {
         NodePair { id, view }
     }
 
-    fn update_node<'g>(&self, id: NodeId, old: PagePtr, new: PagePtr) -> Option<PagePtr> {
+    fn update_node(&self, id: NodeId, old: PagePtr, new: PagePtr) -> Option<PagePtr> {
         self.table
             .cas(id.into(), old.into(), new.into())
             .map(|now| now.into())
@@ -216,7 +216,7 @@ impl Tree {
         loop {
             let node = self.node_pair(cursor.id, ghost);
             if node.view.ver() != cursor.ver {
-                self.try_help_pending_smo(&node, parent.as_ref(), ghost)?;
+                self.try_help_pending_smo(&node, parent, ghost)?;
                 return Err(Error::Conflict);
             }
             if node.view.is_data() {
@@ -230,7 +230,7 @@ impl Tree {
     fn try_help_pending_smo<'g>(
         &self,
         node: &NodePair<'g>,
-        parent: Option<&NodePair<'g>>,
+        parent: Option<NodePair<'g>>,
         ghost: &'g Ghost,
     ) -> Result<()> {
         todo!()

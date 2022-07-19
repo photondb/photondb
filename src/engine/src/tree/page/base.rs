@@ -85,7 +85,7 @@ impl PageBuf {
         self.page.into()
     }
 
-    pub fn as_ref(&self) -> PageRef<'_> {
+    pub fn as_ref(&self) -> PageRef {
         PageRef::new(self.page)
     }
 }
@@ -130,19 +130,19 @@ impl<'a> PageRef<'a> {
     }
 }
 
-impl<'a> From<u64> for PageRef<'a> {
+impl From<u64> for PageRef<'_> {
     fn from(ptr: u64) -> Self {
         Self::new(ptr.into())
     }
 }
 
-impl<'a> Into<u64> for PageRef<'a> {
+impl Into<u64> for PageRef<'_> {
     fn into(self) -> u64 {
         self.page.into()
     }
 }
 
-impl<'a> Into<PagePtr> for PageRef<'a> {
+impl Into<PagePtr> for PageRef<'_> {
     fn into(self) -> PagePtr {
         self.page.into()
     }

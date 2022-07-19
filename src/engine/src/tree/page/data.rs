@@ -30,7 +30,7 @@ pub enum Value<'a> {
 }
 
 impl<'a> Value<'a> {
-    pub fn decode_from(r: &'a mut BufReader) -> Self {
+    fn decode_from(mut r: BufReader) -> Self {
         let kind: ValueKind = r.get_u8().into();
         match kind {
             ValueKind::Put => {
@@ -41,7 +41,7 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn encode_to(&self, w: &mut BufWriter) {
+    fn encode_to(&self, w: &mut BufWriter) {
         match self {
             Value::Put(value) => {
                 w.put_u8(ValueKind::Put as u8);
@@ -51,7 +51,7 @@ impl<'a> Value<'a> {
         }
     }
 
-    pub fn encode_size(&self) -> usize {
+    fn encode_size(&self) -> usize {
         1 + match self {
             Value::Put(value) => BufWriter::length_prefixed_slice_size(value),
             Value::Delete => 0,
@@ -82,20 +82,20 @@ impl<'a> Record<'a> {
         }
     }
 
-    pub fn decode_from(r: &'a mut BufReader) -> Self {
+    fn decode_from(mut r: BufReader) -> Self {
         let key = r.get_length_prefixed_slice();
         let lsn = r.get_u64();
         let value = Value::decode_from(r);
         Self { key, lsn, value }
     }
 
-    pub fn encode_to(&self, w: &mut BufWriter) {
+    fn encode_to(&self, w: &mut BufWriter) {
         w.put_length_prefixed_slice(self.key);
         w.put_u64(self.lsn);
         self.value.encode_to(w);
     }
 
-    pub fn encode_size(&self) -> usize {
+    fn encode_size(&self) -> usize {
         BufWriter::length_prefixed_slice_size(self.key)
             + size_of::<u64>()
             + self.value.encode_size()
@@ -127,6 +127,7 @@ pub struct DataPageBuf {
     writer: BufWriter,
 }
 
+// TODO: handle endianness
 impl DataPageBuf {
     fn new(mut base: PageBuf) -> Self {
         let writer = BufWriter::new(base.content_mut());
@@ -177,7 +178,7 @@ impl<'a> DataPageRef<'a> {
     }
 
     pub fn iter(&self) -> DataPageIter<'a> {
-        todo!()
+        DataPageIter::new(self.0)
     }
 }
 
@@ -201,12 +202,51 @@ impl<'a> From<DataPageRef<'a>> for PageRef<'a> {
     }
 }
 
-pub struct DataPageIter<'a>(PageRef<'a>);
+#[derive(Clone)]
+pub struct DataPageIter<'a> {
+    offsets: &'a [u32],
+    payload: *const u8,
+    current: usize,
+}
+
+impl<'a> DataPageIter<'a> {
+    fn new(base: PageRef<'a>) -> Self {
+        unsafe {
+            let ptr = base.content() as *const u32;
+            let len = ptr.read() as usize;
+            let offsets = std::slice::from_raw_parts(ptr.add(1), len);
+            let payload = base.content().add(size_of::<u32>() * (len + 1));
+            Self {
+                offsets,
+                payload,
+                current: 0,
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.offsets.len()
+    }
+
+    fn record(&mut self, index: usize) -> Option<Record<'a>> {
+        if let Some(&offset) = self.offsets.get(index) {
+            unsafe {
+                let ptr = self.payload.add(offset as usize);
+                Some(Record::decode_from(BufReader::new(ptr)))
+            }
+        } else {
+            None
+        }
+    }
+}
 
 impl<'a> Iterator for DataPageIter<'a> {
     type Item = Record<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        self.record(self.current).map(|record| {
+            self.current += 1;
+            record
+        })
     }
 }
