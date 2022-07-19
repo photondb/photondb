@@ -38,6 +38,10 @@ impl IndexPageBuf {
     pub fn add(&mut self, record: &IndexRecord) {
         todo!()
     }
+
+    pub fn as_ref(&self) -> IndexPageRef<'_> {
+        self.0.as_ref().into()
+    }
 }
 
 impl Deref for IndexPageBuf {

@@ -34,7 +34,7 @@ impl PageAlloc {
         unsafe {
             let ptr = Jemalloc.alloc(layout);
             self.size.fetch_add(usable_size(ptr), Ordering::Relaxed);
-            Some(PageBuf::new(ptr, size))
+            Some(PageBuf::from_raw(ptr, size))
         }
     }
 

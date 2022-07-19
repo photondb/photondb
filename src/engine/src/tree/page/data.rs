@@ -14,24 +14,24 @@ pub enum DataValue<'a> {
 }
 
 pub struct DataRecord<'a> {
-    pub lsn: u64,
     pub key: &'a [u8],
+    pub lsn: u64,
     pub value: DataValue<'a>,
 }
 
 impl<'a> DataRecord<'a> {
-    pub fn put(lsn: u64, key: &'a [u8], value: &'a [u8]) -> Self {
+    pub fn put(key: &'a [u8], lsn: u64, value: &'a [u8]) -> Self {
         Self {
-            lsn,
             key,
+            lsn,
             value: DataValue::Put(value),
         }
     }
 
-    pub fn delete(lsn: u64, key: &'a [u8]) -> Self {
+    pub fn delete(key: &'a [u8], lsn: u64) -> Self {
         Self {
-            lsn,
             key,
+            lsn,
             value: DataValue::Delete,
         }
     }
@@ -60,6 +60,10 @@ pub struct DataPageBuf(PageBuf);
 impl DataPageBuf {
     pub fn add(&mut self, record: &DataRecord) {
         todo!()
+    }
+
+    pub fn as_ref(&self) -> DataPageRef<'_> {
+        self.0.as_ref().into()
     }
 }
 

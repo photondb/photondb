@@ -34,7 +34,7 @@ pub struct PageBuf {
 }
 
 impl PageBuf {
-    pub unsafe fn new(ptr: *mut u8, size: usize) -> Self {
+    pub unsafe fn from_raw(ptr: *mut u8, size: usize) -> Self {
         Self {
             page: (ptr as u64).into(),
             size,
@@ -73,12 +73,20 @@ impl PageBuf {
         self.page.set_next(next.into());
     }
 
+    pub(super) fn content_mut(&mut self) -> *mut u8 {
+        self.page.content_mut()
+    }
+
     pub fn size(&self) -> usize {
         self.size
     }
 
     pub fn as_ptr(&self) -> PagePtr {
         self.page.into()
+    }
+
+    pub fn as_ref(&self) -> PageRef<'_> {
+        PageRef::new(self.page)
     }
 }
 
@@ -115,6 +123,10 @@ impl<'a> PageRef<'a> {
         } else {
             Some(ptr.into())
         }
+    }
+
+    pub(super) fn content(&self) -> *const u8 {
+        self.page.content()
     }
 }
 
@@ -158,11 +170,13 @@ impl From<u8> for PageKind {
     }
 }
 
-// Page format: | ver (6B) | len (1B) | kind (1B) | next (8B) |
+// Page header: | ver (6B) | len (1B) | kind (1B) | next (8B) |
+const PAGE_HEADER_SIZE: usize = 16;
 
 #[derive(Copy, Clone, Debug)]
 struct PageInner(u64);
 
+// TODO: handle endianness
 impl PageInner {
     fn ver(&self) -> u64 {
         unsafe {
@@ -217,6 +231,20 @@ impl PageInner {
         unsafe {
             let ptr = self.0 as *mut u64;
             ptr.add(1).write(next);
+        }
+    }
+
+    fn content(&self) -> *const u8 {
+        unsafe {
+            let ptr = self.0 as *const u8;
+            ptr.add(PAGE_HEADER_SIZE)
+        }
+    }
+
+    fn content_mut(&mut self) -> *mut u8 {
+        unsafe {
+            let ptr = self.0 as *mut u8;
+            ptr.add(PAGE_HEADER_SIZE)
         }
     }
 }

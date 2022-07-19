@@ -1,8 +1,8 @@
 use super::{
     node::{DataNodeIter, IndexNodeIter, NodeId, NodeIndex, NodePair, PageView},
     page::{
-        DataPageBuf, DataPageLayout, DataPageRef, DataRecord, DataValue, IndexPageRef,
-        MergeIterBuilder, PageBuf, PageKind, PagePtr, PageRef,
+        DataPageBuf, DataPageLayout, DataPageRef, DataRecord, DataValue, IndexPageBuf,
+        IndexPageLayout, IndexPageRef, MergeIterBuilder, PageBuf, PageKind, PagePtr, PageRef,
     },
     pagealloc::PageAlloc,
     pagestore::PageStore,
@@ -19,7 +19,7 @@ pub struct Tree {
 
 impl Tree {
     pub async fn open(opts: Options) -> Result<Self> {
-        let alloc = PageAlloc::default();
+        let alloc = PageAlloc::with_limit(opts.cache_size);
         let table = PageTable::default();
         let store = PageStore::open(opts.clone()).await?;
         let tree = Self {
@@ -39,12 +39,12 @@ impl Tree {
 
     pub async fn get<'g>(
         &self,
-        lsn: u64,
         key: &[u8],
+        lsn: u64,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         loop {
-            match self.try_get(lsn, key, ghost).await {
+            match self.try_get(key, lsn, ghost).await {
                 Err(Error::Conflict) => continue,
                 other => return other,
             }
@@ -53,27 +53,27 @@ impl Tree {
 
     async fn try_get<'g>(
         &self,
-        lsn: u64,
         key: &[u8],
+        lsn: u64,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_data_node(key, ghost).await?;
-        self.search_data_node(&node, lsn, key, ghost).await
+        self.search_data_node(&node, key, lsn, ghost).await
     }
 
     pub async fn put<'g>(
         &self,
-        lsn: u64,
         key: &[u8],
+        lsn: u64,
         value: &[u8],
         ghost: &'g Ghost,
     ) -> Result<()> {
-        let record = DataRecord::put(lsn, key, value);
+        let record = DataRecord::put(key, lsn, value);
         self.update(&record, ghost).await
     }
 
-    pub async fn delete<'g>(&self, lsn: u64, key: &[u8], ghost: &'g Ghost) -> Result<()> {
-        let record = DataRecord::delete(lsn, key);
+    pub async fn delete<'g>(&self, key: &[u8], lsn: u64, ghost: &'g Ghost) -> Result<()> {
+        let record = DataRecord::delete(key, lsn);
         self.update(&record, ghost).await
     }
 
@@ -262,8 +262,8 @@ impl Tree {
     async fn search_data_node<'g>(
         &self,
         node: &NodePair<'g>,
-        lsn: u64,
         key: &[u8],
+        lsn: u64,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
@@ -290,11 +290,12 @@ impl Tree {
 
     async fn try_split_data_node<'g>(
         &self,
-        node: &NodePair<'g>,
-        key: &[u8],
+        id: NodeId,
+        page: DataPageRef<'g>,
         ghost: &'g Ghost,
     ) -> Result<()> {
-        todo!()
+        // TODO
+        Ok(())
     }
 
     async fn try_consolidate_data_node<'g>(
@@ -308,20 +309,19 @@ impl Tree {
             layout.add(&record);
         }
         let page: DataPageBuf = self.alloc_page(layout.size());
+        // TODO: builds data page
         if self
             .update_node(node.id, node.view.as_ptr(), page.as_ptr())
             .is_some()
         {
             return Err(Error::Conflict);
         }
-        /*
         if page.size() >= self.opts.data_node_size {
-            if let Some(split_key) = page.split_key() {
-                self.try_split_data_node(node, split_key, ghost).await?;
-            }
+            let _ = self
+                .try_split_data_node(node.id, page.as_ref(), ghost)
+                .await;
         }
-        */
-        todo!()
+        Ok(())
     }
 
     async fn iter_index_node<'g>(
@@ -353,7 +353,33 @@ impl Tree {
         key: &[u8],
         ghost: &'g Ghost,
     ) -> Result<NodeIndex> {
-        todo!()
+        let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
+        loop {
+            match page.kind() {
+                PageKind::Data => {
+                    let page = IndexPageRef::from(page);
+                    if let Some(value) = page.get(key) {
+                        todo!()
+                    }
+                }
+                _ => unreachable!(),
+            }
+            if let Some(next) = page.next() {
+                page = self.load_page_with_ptr(node.id, next, ghost).await?;
+            } else {
+                todo!()
+            }
+        }
+    }
+
+    async fn try_split_index_node<'g>(
+        &self,
+        id: NodeId,
+        page: IndexPageRef<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<()> {
+        // TODO
+        Ok(())
     }
 
     async fn try_consolidate_index_node<'g>(
@@ -361,6 +387,24 @@ impl Tree {
         node: &NodePair<'g>,
         ghost: &'g Ghost,
     ) -> Result<()> {
-        todo!()
+        let iter = self.iter_index_node(node, ghost).await?;
+        let mut layout = IndexPageLayout::default();
+        for record in iter {
+            layout.add(&record);
+        }
+        let page: IndexPageBuf = self.alloc_page(layout.size());
+        // TODO: builds the index page
+        if self
+            .update_node(node.id, node.view.as_ptr(), page.as_ptr())
+            .is_some()
+        {
+            return Err(Error::Conflict);
+        }
+        if page.size() >= self.opts.index_node_size {
+            let _ = self
+                .try_split_index_node(node.id, page.as_ref(), ghost)
+                .await;
+        }
+        Ok(())
     }
 }
