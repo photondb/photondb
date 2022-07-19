@@ -1,8 +1,8 @@
 use super::{
     node::{DataNodeIter, IndexNodeIter, NodeId, NodeIndex, NodePair, PageView},
     page::{
-        DataPageBuf, DataPageLayout, DataPageRef, DataRecord, DataValue, IndexPageBuf,
-        IndexPageLayout, IndexPageRef, MergeIterBuilder, PageBuf, PageKind, PagePtr, PageRef,
+        DataPageBuf, DataPageLayout, DataPageRef, IndexPageBuf, IndexPageLayout, IndexPageRef,
+        MergeIterBuilder, PageBuf, PageKind, PagePtr, PageRef, Record, Value,
     },
     pagealloc::PageAlloc,
     pagestore::PageStore,
@@ -68,26 +68,26 @@ impl Tree {
         value: &[u8],
         ghost: &'g Ghost,
     ) -> Result<()> {
-        let record = DataRecord::put(key, lsn, value);
+        let record = Record::from_put(key, lsn, value);
         self.update(&record, ghost).await
     }
 
     pub async fn delete<'g>(&self, key: &[u8], lsn: u64, ghost: &'g Ghost) -> Result<()> {
-        let record = DataRecord::delete(key, lsn);
+        let record = Record::from_delete(key, lsn);
         self.update(&record, ghost).await
     }
 
-    async fn update<'g>(&self, record: &DataRecord<'_>, ghost: &'g Ghost) -> Result<()> {
+    async fn update<'g>(&self, record: &Record<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut layout = DataPageLayout::default();
         layout.add(&record);
-        let mut page: DataPageBuf = self.alloc_page(layout.size());
-        page.add(&record);
+        let mut buf: DataPageBuf = self.alloc_page(layout.size());
+        buf.add(&record);
         loop {
-            match self.try_update(record.key, &mut page, ghost).await {
+            match self.try_update(record.key, &mut buf, ghost).await {
                 Ok(_) => return Ok(()),
                 Err(Error::Conflict) => continue,
                 Err(err) => {
-                    self.dealloc_page(page);
+                    self.dealloc_page(buf);
                     return Err(err);
                 }
             }
@@ -273,8 +273,8 @@ impl Tree {
                     let page = DataPageRef::from(page);
                     if let Some(value) = page.get(key, lsn) {
                         match value {
-                            DataValue::Put(value) => return Ok(Some(value)),
-                            DataValue::Delete => return Ok(None),
+                            Value::Put(value) => return Ok(Some(value)),
+                            Value::Delete => return Ok(None),
                         }
                     }
                 }
@@ -389,8 +389,8 @@ impl Tree {
     ) -> Result<()> {
         let iter = self.iter_index_node(node, ghost).await?;
         let mut layout = IndexPageLayout::default();
-        for record in iter {
-            layout.add(&record);
+        for (key, index) in iter {
+            layout.add(key, index);
         }
         let page: IndexPageBuf = self.alloc_page(layout.size());
         // TODO: builds the index page

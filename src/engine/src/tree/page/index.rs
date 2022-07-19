@@ -1,18 +1,12 @@
 use std::ops::{Deref, DerefMut};
 
-use super::{PageBuf, PageIter, PageRef};
+use super::{PageBuf, PageRef};
 
-pub struct IndexValue {
+#[derive(Copy, Clone, Debug)]
+pub struct Index {
     pub id: u64,
     pub ver: u64,
 }
-
-pub struct IndexRecord<'a> {
-    pub key: &'a [u8],
-    pub value: IndexValue,
-}
-
-impl<'a> IndexRecord<'a> {}
 
 pub struct IndexPageLayout {}
 
@@ -23,7 +17,7 @@ impl Default for IndexPageLayout {
 }
 
 impl IndexPageLayout {
-    pub fn add(&mut self, record: &IndexRecord) {
+    pub fn add(&mut self, key: &[u8], index: Index) {
         todo!()
     }
 
@@ -35,7 +29,7 @@ impl IndexPageLayout {
 pub struct IndexPageBuf(PageBuf);
 
 impl IndexPageBuf {
-    pub fn add(&mut self, record: &IndexRecord) {
+    pub fn add(&mut self, key: &[u8], index: Index) {
         todo!()
     }
 
@@ -74,7 +68,7 @@ impl From<IndexPageBuf> for PageBuf {
 pub struct IndexPageRef<'a>(PageRef<'a>);
 
 impl<'a> IndexPageRef<'a> {
-    pub fn get(self, key: &[u8]) -> Option<IndexValue> {
+    pub fn get(self, key: &[u8]) -> Option<Index> {
         todo!()
     }
 
@@ -105,16 +99,8 @@ impl<'a> From<IndexPageRef<'a>> for PageRef<'a> {
 
 pub struct IndexPageIter<'a>(PageRef<'a>);
 
-impl<'a> PageIter for IndexPageIter<'a> {
-    type Item = IndexRecord<'a>;
-
-    fn seek(&mut self, key: &[u8]) {
-        todo!()
-    }
-}
-
 impl<'a> Iterator for IndexPageIter<'a> {
-    type Item = IndexRecord<'a>;
+    type Item = (&'a [u8], Index);
 
     fn next(&mut self) -> Option<Self::Item> {
         todo!()

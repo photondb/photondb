@@ -1,10 +1,8 @@
 use std::iter::Iterator;
 
-pub trait PageIter: Iterator {
-    type Item;
+pub trait PageIter: Iterator {}
 
-    fn seek(&mut self, key: &[u8]);
-}
+impl<T: Iterator> PageIter for T {}
 
 pub struct MergeIter<I>
 where
@@ -13,22 +11,11 @@ where
     children: Vec<I>,
 }
 
-impl<I> PageIter for MergeIter<I>
-where
-    I: PageIter,
-{
-    type Item = <I as PageIter>::Item;
-
-    fn seek(&mut self, key: &[u8]) {
-        todo!()
-    }
-}
-
 impl<I> Iterator for MergeIter<I>
 where
     I: PageIter,
 {
-    type Item = <I as PageIter>::Item;
+    type Item = <I as Iterator>::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
         todo!()
