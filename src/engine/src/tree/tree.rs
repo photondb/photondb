@@ -43,21 +43,16 @@ impl Tree {
         lsn: u64,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
+        let key = Key::new(key, lsn);
         loop {
-            match self.try_get(key, lsn, ghost).await {
+            match self.try_get(key, ghost).await {
                 Err(Error::Conflict) => continue,
                 other => return other,
             }
         }
     }
 
-    async fn try_get<'g>(
-        &self,
-        key: &'g [u8],
-        lsn: u64,
-        ghost: &'g Ghost,
-    ) -> Result<Option<&'g [u8]>> {
-        let key = Key::new(key, lsn);
+    async fn try_get<'g>(&self, key: Key<'g>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_data_node(key.raw, ghost).await?;
         self.search_data_node(&node, key, ghost).await
     }

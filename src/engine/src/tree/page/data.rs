@@ -308,6 +308,22 @@ impl<'a> PageIter for DataPageIter<'a> {
     }
 
     fn seek(&mut self, target: Self::Key) -> Option<(Self::Key, Self::Value)> {
-        todo!()
+        let mut left = 0;
+        let mut right = self.len();
+        while left < right {
+            let mid = (left + right) / 2;
+            let ptr = unsafe { self.payload.add(self.offsets[mid] as usize) };
+            let mut buf = BufReader::new(ptr);
+            let key = Key::decode_from(&mut buf);
+            match key.cmp(&target) {
+                Ordering::Less => left = mid + 1,
+                Ordering::Greater => right = mid,
+                Ordering::Equal => {
+                    let value = Value::decode_from(&mut buf);
+                    return Some((key, value));
+                }
+            }
+        }
+        None
     }
 }
