@@ -5,7 +5,7 @@ use std::{
 
 use super::{
     format::{BufReader, BufWriter},
-    PageBuf, PageRef,
+    PageBuf, PageIter, PageLayout, PageRef,
 };
 
 #[repr(u8)]
@@ -104,38 +104,76 @@ impl<'a> Record<'a> {
 
 pub struct DataPageLayout {
     size: usize,
+    num_records: usize,
 }
 
 impl Default for DataPageLayout {
     fn default() -> Self {
-        Self { size: 0 }
+        Self {
+            size: 0,
+            num_records: 0,
+        }
     }
 }
 
 impl DataPageLayout {
     pub fn add(&mut self, record: &Record) {
         self.size += record.encode_size();
+        self.num_records += 1;
     }
 
-    pub fn size(&self) -> usize {
-        self.size
+    pub fn num_records(&self) -> usize {
+        self.num_records
+    }
+}
+
+impl PageLayout for DataPageLayout {
+    type Buf = DataPageBuf;
+
+    fn size(&self) -> usize {
+        size_of::<u32>() * (self.num_records + 1) + self.size
+    }
+
+    fn build(self, base: PageBuf) -> DataPageBuf {
+        DataPageBuf::new(base, self)
     }
 }
 
 pub struct DataPageBuf {
     base: PageBuf,
-    writer: BufWriter,
+    layout: DataPageLayout,
+    offsets: *mut u32,
+    payload: BufWriter,
+    current: usize,
 }
 
 // TODO: handle endianness
 impl DataPageBuf {
-    fn new(mut base: PageBuf) -> Self {
-        let writer = BufWriter::new(base.content_mut());
-        Self { base, writer }
+    fn new(mut base: PageBuf, layout: DataPageLayout) -> Self {
+        unsafe {
+            let ptr = base.content_mut() as *mut u32;
+            ptr.write(layout.num_records() as u32);
+            let offsets = ptr.add(1);
+            let payload = BufWriter::new(ptr.add(layout.num_records() + 1) as *mut u8);
+            Self {
+                base,
+                layout,
+                offsets,
+                payload,
+                current: 0,
+            }
+        }
     }
 
     pub fn add(&mut self, record: &Record) {
-        record.encode_to(&mut self.writer);
+        assert!(self.current < self.layout.num_records());
+        unsafe {
+            self.offsets
+                .add(self.current)
+                .write(self.payload.pos() as u32);
+            self.current += 1;
+        }
+        record.encode_to(&mut self.payload);
     }
 
     pub fn as_ref(&self) -> DataPageRef<'_> {
@@ -157,15 +195,9 @@ impl DerefMut for DataPageBuf {
     }
 }
 
-impl From<PageBuf> for DataPageBuf {
-    fn from(base: PageBuf) -> Self {
-        Self::new(base)
-    }
-}
-
 impl From<DataPageBuf> for PageBuf {
-    fn from(page: DataPageBuf) -> Self {
-        page.base
+    fn from(buf: DataPageBuf) -> Self {
+        buf.base
     }
 }
 
@@ -223,13 +255,17 @@ impl<'a> DataPageIter<'a> {
             }
         }
     }
+}
 
-    pub fn len(&self) -> usize {
+impl<'a> PageIter for DataPageIter<'a> {
+    type Item = Record<'a>;
+
+    fn len(&self) -> usize {
         self.offsets.len()
     }
 
-    fn record(&mut self, index: usize) -> Option<Record<'a>> {
-        if let Some(&offset) = self.offsets.get(index) {
+    fn get(&self, n: usize) -> Option<Self::Item> {
+        if let Some(&offset) = self.offsets.get(n) {
             unsafe {
                 let ptr = self.payload.add(offset as usize);
                 Some(Record::decode_from(BufReader::new(ptr)))
@@ -238,13 +274,9 @@ impl<'a> DataPageIter<'a> {
             None
         }
     }
-}
-
-impl<'a> Iterator for DataPageIter<'a> {
-    type Item = Record<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.record(self.current).map(|record| {
+        self.get(self.current).map(|record| {
             self.current += 1;
             record
         })

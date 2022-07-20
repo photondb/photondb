@@ -1,8 +1,12 @@
-use std::iter::Iterator;
+pub trait PageIter {
+    type Item;
 
-pub trait PageIter: Iterator {}
+    fn len(&self) -> usize;
 
-impl<T: Iterator> PageIter for T {}
+    fn get(&self, n: usize) -> Option<Self::Item>;
+
+    fn next(&mut self) -> Option<Self::Item>;
+}
 
 pub struct MergeIter<I>
 where
@@ -11,11 +15,19 @@ where
     children: Vec<I>,
 }
 
-impl<I> Iterator for MergeIter<I>
+impl<I> PageIter for MergeIter<I>
 where
     I: PageIter,
 {
-    type Item = <I as Iterator>::Item;
+    type Item = I::Item;
+
+    fn len(&self) -> usize {
+        todo!()
+    }
+
+    fn get(&self, n: usize) -> Option<Self::Item> {
+        todo!()
+    }
 
     fn next(&mut self) -> Option<Self::Item> {
         todo!()

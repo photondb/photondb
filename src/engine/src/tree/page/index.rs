@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-use super::{PageBuf, PageRef};
+use super::{PageBuf, PageIter, PageLayout, PageRef};
 
 #[derive(Copy, Clone, Debug)]
 pub struct Index {
@@ -20,8 +20,16 @@ impl IndexPageLayout {
     pub fn add(&mut self, key: &[u8], index: Index) {
         todo!()
     }
+}
 
-    pub fn size(&self) -> usize {
+impl PageLayout for IndexPageLayout {
+    type Buf = IndexPageBuf;
+
+    fn size(&self) -> usize {
+        todo!()
+    }
+
+    fn build(self, base: PageBuf) -> IndexPageBuf {
         todo!()
     }
 }
@@ -99,8 +107,16 @@ impl<'a> From<IndexPageRef<'a>> for PageRef<'a> {
 
 pub struct IndexPageIter<'a>(PageRef<'a>);
 
-impl<'a> Iterator for IndexPageIter<'a> {
+impl<'a> PageIter for IndexPageIter<'a> {
     type Item = (&'a [u8], Index);
+
+    fn len(&self) -> usize {
+        todo!()
+    }
+
+    fn get(&self, n: usize) -> Option<Self::Item> {
+        todo!()
+    }
 
     fn next(&mut self) -> Option<Self::Item> {
         todo!()

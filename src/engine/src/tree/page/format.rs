@@ -22,6 +22,10 @@ impl BufReader {
         Self { ptr, pos: 0 }
     }
 
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+
     impl_get!(get_u8, u8);
     impl_get!(get_u16, u16);
     impl_get!(get_u32, u32);
@@ -61,6 +65,10 @@ macro_rules! impl_put {
 impl BufWriter {
     pub fn new(ptr: *mut u8) -> Self {
         Self { ptr, pos: 0 }
+    }
+
+    pub fn pos(&self) -> usize {
+        self.pos
     }
 
     impl_put!(put_u8, u8);

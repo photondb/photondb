@@ -2,9 +2,10 @@ use super::{
     node::{DataNodeIter, IndexNodeIter, NodeId, NodeIndex, NodePair, PageView},
     page::{
         DataPageBuf, DataPageLayout, DataPageRef, IndexPageBuf, IndexPageLayout, IndexPageRef,
-        MergeIterBuilder, PageBuf, PageKind, PagePtr, PageRef, Record, Value,
+        MergeIterBuilder, PageAlloc, PageBuf, PageIter, PageKind, PageLayout, PagePtr, PageRef,
+        Record, Value,
     },
-    pagealloc::PageAlloc,
+    pagecache::PageCache,
     pagestore::PageStore,
     pagetable::PageTable,
     Error, Ghost, Options, Result,
@@ -12,20 +13,20 @@ use super::{
 
 pub struct Tree {
     opts: Options,
-    alloc: PageAlloc,
     table: PageTable,
+    cache: PageCache,
     store: PageStore,
 }
 
 impl Tree {
     pub async fn open(opts: Options) -> Result<Self> {
-        let alloc = PageAlloc::with_limit(opts.cache_size);
         let table = PageTable::default();
+        let cache = PageCache::with_limit(opts.cache_size);
         let store = PageStore::open(opts.clone()).await?;
         let tree = Self {
             opts,
-            alloc,
             table,
+            cache,
             store,
         };
         tree.recover().await?;
@@ -80,14 +81,16 @@ impl Tree {
     async fn update<'g>(&self, record: &Record<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut layout = DataPageLayout::default();
         layout.add(&record);
-        let mut buf: DataPageBuf = self.alloc_page(layout.size());
+        let mut buf = unsafe { self.alloc_page(layout) };
         buf.add(&record);
         loop {
             match self.try_update(record.key, &mut buf, ghost).await {
                 Ok(_) => return Ok(()),
                 Err(Error::Conflict) => continue,
                 Err(err) => {
-                    self.dealloc_page(buf);
+                    unsafe {
+                        self.dealloc_page(buf);
+                    }
                     return Err(err);
                 }
             }
@@ -153,13 +156,13 @@ impl Tree {
             .map(|now| now.into())
     }
 
-    fn alloc_page<P: From<PageBuf>>(&self, size: usize) -> P {
-        // TODO: swap out pages when allocation fails.
-        self.alloc.alloc(size).unwrap().into()
+    unsafe fn alloc_page<L: PageLayout>(&self, layout: L) -> L::Buf {
+        // TODO: evicts pages from the cache when allocation fails.
+        self.cache.alloc_page(layout).unwrap()
     }
 
-    fn dealloc_page<P: Into<PageBuf>>(&self, page: P) {
-        self.alloc.dealloc(page.into());
+    unsafe fn dealloc_page(&self, buf: impl Into<PageBuf>) {
+        self.cache.dealloc_page(buf.into());
     }
 
     fn swapin_page<'g>(
@@ -303,12 +306,12 @@ impl Tree {
         node: &NodePair<'g>,
         ghost: &'g Ghost,
     ) -> Result<()> {
-        let iter = self.iter_data_node(node, ghost).await?;
+        let mut iter = self.iter_data_node(node, ghost).await?;
         let mut layout = DataPageLayout::default();
-        for record in iter {
+        while let Some(record) = iter.next() {
             layout.add(&record);
         }
-        let page: DataPageBuf = self.alloc_page(layout.size());
+        let page = unsafe { self.alloc_page(layout) };
         // TODO: builds data page
         if self
             .update_node(node.id, node.view.as_ptr(), page.as_ptr())
@@ -387,12 +390,12 @@ impl Tree {
         node: &NodePair<'g>,
         ghost: &'g Ghost,
     ) -> Result<()> {
-        let iter = self.iter_index_node(node, ghost).await?;
+        let mut iter = self.iter_index_node(node, ghost).await?;
         let mut layout = IndexPageLayout::default();
-        for (key, index) in iter {
+        while let Some((key, index)) = iter.next() {
             layout.add(key, index);
         }
-        let page: IndexPageBuf = self.alloc_page(layout.size());
+        let page = unsafe { self.alloc_page(layout) };
         // TODO: builds the index page
         if self
             .update_node(node.id, node.view.as_ptr(), page.as_ptr())
