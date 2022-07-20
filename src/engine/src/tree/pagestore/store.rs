@@ -1,6 +1,6 @@
-use super::{
+use crate::tree::{
     page::{PageBuf, PageKind},
-    Options, Result,
+    Result,
 };
 
 pub struct PageInfo {
@@ -35,13 +35,11 @@ pub struct PageHandle {
     size: u64,
 }
 
-pub struct PageStore {
-    opts: Options,
-}
+pub struct PageStore {}
 
 impl PageStore {
-    pub async fn open(opts: Options) -> Result<Self> {
-        Ok(Self { opts })
+    pub async fn open() -> Result<Self> {
+        Ok(Self {})
     }
 
     pub fn page_info(&self, addr: PageAddr) -> Option<PageInfo> {

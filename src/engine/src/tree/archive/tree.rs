@@ -1,28 +1,3 @@
-use std::thread;
-
-use crossbeam_epoch::{unprotected, Guard};
-
-use crate::{
-    BaseData, BaseIndex, DeltaData, DeltaIndex, MergeNode, PageBuf, PageCache, PageContent,
-    PageHandle, PageId, PageIndex, PageRef, SplitNode,
-};
-
-pub struct Options {
-    pub node_split_size: usize,
-    pub node_merge_size: usize,
-    pub delta_chain_length: usize,
-}
-
-impl Default for Options {
-    fn default() -> Self {
-        Self {
-            node_split_size: 1024 * 16,
-            node_merge_size: 1024,
-            delta_chain_length: 8,
-        }
-    }
-}
-
 pub struct Tree {
     opts: Options,
     cache: PageCache,

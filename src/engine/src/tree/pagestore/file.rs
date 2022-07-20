@@ -1,18 +1,20 @@
-use super::{RandomRead, Result, SequentialWrite};
+use std::io::Result;
 
-struct Footer {
+use super::env::{RandomRead, SequentialWrite};
+
+struct BlockHandle {
+    pub offset: u64,
+    pub size: u64,
+}
+
+struct PageFileFooter {
     pub meta_handle: BlockHandle,
     pub index_handle: BlockHandle,
     pub magic_number: u64,
 }
 
-impl Footer {
+impl PageFileFooter {
     const ENCODED_SIZE: usize = 40;
-}
-
-struct BlockHandle {
-    pub offset: u64,
-    pub size: u64,
 }
 
 struct PageFileReader<R> {
@@ -43,34 +45,10 @@ impl<W: SequentialWrite> PageFileWriter<W> {
     pub fn add_obsolete_page(&mut self) {}
 }
 
-pub struct PageStore {}
-
-impl PageStore {
-    pub async fn open(path: &str) -> Result<Self> {
-        Ok(Self {})
-    }
-
-    pub async fn read_page(&self, addr: u64) -> Result<Vec<u8>> {
-        todo!()
-    }
-
-    pub async fn write_page(&self, id: u64, page: &[u8]) -> Result<u64> {
-        todo!()
-    }
-}
-
 struct PageFile {}
 
 impl PageFile {
     pub fn read_page(&self, index: usize) -> Result<Vec<u8>> {
         todo!()
     }
-}
-
-#[derive(Copy, Clone, Debug)]
-struct PageAddr {
-    // The file number.
-    file: u32,
-    // The index of the page in the file.
-    index: u16,
 }

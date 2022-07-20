@@ -103,27 +103,24 @@ impl<'a> Record<'a> {
 }
 
 pub struct DataPageLayout {
+    len: usize,
     size: usize,
-    num_records: usize,
 }
 
 impl Default for DataPageLayout {
     fn default() -> Self {
-        Self {
-            size: 0,
-            num_records: 0,
-        }
+        Self { len: 0, size: 0 }
     }
 }
 
 impl DataPageLayout {
-    pub fn add(&mut self, record: &Record) {
-        self.size += record.encode_size();
-        self.num_records += 1;
+    pub fn len(&self) -> usize {
+        self.len
     }
 
-    pub fn num_records(&self) -> usize {
-        self.num_records
+    pub fn add(&mut self, record: &Record) {
+        self.len += 1;
+        self.size += record.encode_size();
     }
 }
 
@@ -131,7 +128,7 @@ impl PageLayout for DataPageLayout {
     type Buf = DataPageBuf;
 
     fn size(&self) -> usize {
-        size_of::<u32>() * (self.num_records + 1) + self.size
+        size_of::<u32>() * (self.len + 1) + self.size
     }
 
     fn build(self, base: PageBuf) -> DataPageBuf {
@@ -152,21 +149,21 @@ impl DataPageBuf {
     fn new(mut base: PageBuf, layout: DataPageLayout) -> Self {
         unsafe {
             let ptr = base.content_mut() as *mut u32;
-            ptr.write(layout.num_records() as u32);
+            ptr.write(layout.len() as u32);
             let offsets = ptr.add(1);
-            let payload = BufWriter::new(ptr.add(layout.num_records() + 1) as *mut u8);
+            let payload = ptr.add(layout.len() + 1) as *mut u8;
             Self {
                 base,
                 layout,
                 offsets,
-                payload,
+                payload: BufWriter::new(payload),
                 current: 0,
             }
         }
     }
 
     pub fn add(&mut self, record: &Record) {
-        assert!(self.current < self.layout.num_records());
+        assert!(self.current < self.layout.len());
         unsafe {
             self.offsets
                 .add(self.current)

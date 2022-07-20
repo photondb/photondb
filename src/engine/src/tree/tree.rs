@@ -1,9 +1,8 @@
 use super::{
     node::{DataNodeIter, IndexNodeIter, NodeId, NodeIndex, NodePair, PageView},
     page::{
-        DataPageBuf, DataPageLayout, DataPageRef, IndexPageBuf, IndexPageLayout, IndexPageRef,
-        MergeIterBuilder, PageAlloc, PageBuf, PageIter, PageKind, PageLayout, PagePtr, PageRef,
-        Record, Value,
+        DataPageLayout, DataPageRef, IndexPageLayout, IndexPageRef, MergeIterBuilder, PageAlloc,
+        PageBuf, PageIter, PageKind, PageLayout, PagePtr, PageRef, Record, Value,
     },
     pagecache::PageCache,
     pagestore::PageStore,
@@ -22,7 +21,7 @@ impl Tree {
     pub async fn open(opts: Options) -> Result<Self> {
         let table = PageTable::default();
         let cache = PageCache::with_limit(opts.cache_size);
-        let store = PageStore::open(opts.clone()).await?;
+        let store = PageStore::open().await?;
         let tree = Self {
             opts,
             table,
@@ -105,11 +104,11 @@ impl Tree {
     ) -> Result<()> {
         let mut node = self.try_find_data_node(key, ghost).await?;
         loop {
-            let next_ptr = node.view.as_ptr();
+            let next = node.view.as_ptr();
             delta.set_ver(node.view.ver());
             delta.set_len(node.view.len() + 1);
-            delta.set_next(next_ptr);
-            match self.update_node(node.id, next_ptr, delta.as_ptr()) {
+            delta.set_next(next);
+            match self.update_node(node.id, next, delta.as_ptr()) {
                 None => {
                     if delta.len() >= self.opts.data_delta_length {
                         let _ = self.try_consolidate_data_node(&node, ghost).await;
@@ -188,8 +187,8 @@ impl Tree {
         match ptr {
             PagePtr::Mem(addr) => Ok(addr.into()),
             PagePtr::Disk(addr) => {
-                let page = self.store.load_page_with_addr(addr.into()).await?;
-                self.swapin_page(id, ptr, page, ghost)
+                let buf = self.store.load_page_with_addr(addr.into()).await?;
+                self.swapin_page(id, ptr, buf, ghost)
             }
         }
     }
@@ -204,11 +203,11 @@ impl Tree {
             PageView::Mem(page) => Ok(page),
             PageView::Disk(addr, ref info) => {
                 let ptr = PagePtr::Disk(addr.into());
-                let page = self.store.load_page_with_handle(&info.handle).await?;
-                if page.ver() != view.ver() {
+                let buf = self.store.load_page_with_handle(&info.handle).await?;
+                if buf.ver() != view.ver() {
                     return Err(Error::Conflict);
                 }
-                self.swapin_page(id, ptr, page, ghost)
+                self.swapin_page(id, ptr, buf, ghost)
             }
         }
     }
