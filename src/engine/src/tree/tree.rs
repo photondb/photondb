@@ -1,8 +1,8 @@
 use super::{
     node::{DataNodeIter, IndexNodeIter, NodeId, NodeIndex, NodePair, PageView},
     page::{
-        DataPageLayout, DataPageRef, IndexPageLayout, IndexPageRef, MergeIterBuilder, PageAlloc,
-        PageBuf, PageIter, PageKind, PageLayout, PagePtr, PageRef, Record, Value,
+        DataPageLayout, DataPageRef, IndexPageLayout, IndexPageRef, Key, MergeIterBuilder,
+        PageAlloc, PageBuf, PageIter, PageKind, PageLayout, PagePtr, PageRef, Value,
     },
     pagecache::PageCache,
     pagestore::PageStore,
@@ -39,7 +39,7 @@ impl Tree {
 
     pub async fn get<'g>(
         &self,
-        key: &[u8],
+        key: &'g [u8],
         lsn: u64,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
@@ -53,12 +53,13 @@ impl Tree {
 
     async fn try_get<'g>(
         &self,
-        key: &[u8],
+        key: &'g [u8],
         lsn: u64,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
-        let node = self.try_find_data_node(key, ghost).await?;
-        self.search_data_node(&node, key, lsn, ghost).await
+        let key = Key::new(key, lsn);
+        let node = self.try_find_data_node(key.raw, ghost).await?;
+        self.search_data_node(&node, key, ghost).await
     }
 
     pub async fn put<'g>(
@@ -68,22 +69,24 @@ impl Tree {
         value: &[u8],
         ghost: &'g Ghost,
     ) -> Result<()> {
-        let record = Record::from_put(key, lsn, value);
-        self.update(&record, ghost).await
+        let key = Key::new(key, lsn);
+        let value = Value::Put(value);
+        self.update(key, value, ghost).await
     }
 
     pub async fn delete<'g>(&self, key: &[u8], lsn: u64, ghost: &'g Ghost) -> Result<()> {
-        let record = Record::from_delete(key, lsn);
-        self.update(&record, ghost).await
+        let key = Key::new(key, lsn);
+        let value = Value::Delete;
+        self.update(key, value, ghost).await
     }
 
-    async fn update<'g>(&self, record: &Record<'_>, ghost: &'g Ghost) -> Result<()> {
+    async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut layout = DataPageLayout::default();
-        layout.add(&record);
+        layout.add(key, value);
         let mut buf = unsafe { self.alloc_page(layout) };
-        buf.add(&record);
+        buf.add(key, value);
         loop {
-            match self.try_update(record.key, &mut buf, ghost).await {
+            match self.try_update(key.raw, &mut buf, ghost).await {
                 Ok(_) => return Ok(()),
                 Err(Error::Conflict) => continue,
                 Err(err) => {
@@ -264,8 +267,7 @@ impl Tree {
     async fn search_data_node<'g>(
         &self,
         node: &NodePair<'g>,
-        key: &[u8],
-        lsn: u64,
+        key: Key<'g>,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
@@ -273,7 +275,7 @@ impl Tree {
             match page.kind() {
                 PageKind::Data => {
                     let page = DataPageRef::from(page);
-                    if let Some(value) = page.get(key, lsn) {
+                    if let Some(value) = page.get(key) {
                         match value {
                             Value::Put(value) => return Ok(Some(value)),
                             Value::Delete => return Ok(None),
@@ -307,8 +309,8 @@ impl Tree {
     ) -> Result<()> {
         let mut iter = self.iter_data_node(node, ghost).await?;
         let mut layout = DataPageLayout::default();
-        while let Some(record) = iter.next() {
-            layout.add(&record);
+        while let Some((k, v)) = iter.next() {
+            layout.add(k, v);
         }
         let page = unsafe { self.alloc_page(layout) };
         // TODO: builds data page
@@ -391,8 +393,8 @@ impl Tree {
     ) -> Result<()> {
         let mut iter = self.iter_index_node(node, ghost).await?;
         let mut layout = IndexPageLayout::default();
-        while let Some((key, index)) = iter.next() {
-            layout.add(key, index);
+        while let Some((k, v)) = iter.next() {
+            layout.add(k, v);
         }
         let page = unsafe { self.alloc_page(layout) };
         // TODO: builds the index page

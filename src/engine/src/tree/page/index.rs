@@ -108,17 +108,22 @@ impl<'a> From<IndexPageRef<'a>> for PageRef<'a> {
 pub struct IndexPageIter<'a>(PageRef<'a>);
 
 impl<'a> PageIter for IndexPageIter<'a> {
-    type Item = (&'a [u8], Index);
+    type Key = &'a [u8];
+    type Value = Index;
 
     fn len(&self) -> usize {
         todo!()
     }
 
-    fn get(&self, n: usize) -> Option<Self::Item> {
+    fn peek(&self) -> Option<(Self::Key, Self::Value)> {
         todo!()
     }
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<(Self::Key, Self::Value)> {
+        todo!()
+    }
+
+    fn seek(&mut self, target: Self::Key) -> Option<(Self::Key, Self::Value)> {
         todo!()
     }
 }

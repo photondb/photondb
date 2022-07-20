@@ -22,7 +22,7 @@ impl From<u64> for PagePtr {
     }
 }
 
-impl<'a> Into<u64> for PagePtr {
+impl Into<u64> for PagePtr {
     fn into(self) -> u64 {
         match self {
             Self::Mem(addr) => addr,
@@ -100,7 +100,7 @@ pub struct PageRef<'a> {
     mark: PhantomData<&'a ()>,
 }
 
-impl<'a> PageRef<'a> {
+impl PageRef<'_> {
     fn new(page: PageInner) -> Self {
         Self {
             page,
