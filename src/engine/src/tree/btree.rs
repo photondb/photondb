@@ -3,14 +3,14 @@ use super::{
     Ghost, Options, Result,
 };
 
-pub struct Tree {
+pub struct BTree {
     opts: Options,
     table: PageTable,
     cache: PageCache,
     store: PageStore,
 }
 
-impl Tree {
+impl BTree {
     pub async fn open(opts: Options) -> Result<Self> {
         let table = PageTable::default();
         let cache = PageCache::with_limit(opts.cache_size);
@@ -119,7 +119,7 @@ impl Tree {
     }
 }
 
-impl Tree {
+impl BTree {
     const fn root() -> Index {
         Index { id: 0, ver: 0 }
     }

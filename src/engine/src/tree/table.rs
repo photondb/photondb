@@ -1,12 +1,12 @@
-use super::{tree::Tree, Ghost, Options, Result};
+use super::{BTree, Ghost, Options, Result};
 
 pub struct Table {
-    tree: Tree,
+    tree: BTree,
 }
 
 impl Table {
     pub async fn open(opts: Options) -> Result<Self> {
-        let tree = Tree::open(opts).await?;
+        let tree = BTree::open(opts).await?;
         Ok(Self { tree })
     }
 
