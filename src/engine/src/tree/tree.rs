@@ -125,7 +125,7 @@ impl Tree {
     }
 
     fn page_ptr(&self, id: NodeId) -> PagePtr {
-        self.table.get(id.into()).into()
+        self.table.get(id).into()
     }
 
     fn page_view<'g>(&self, ptr: PagePtr, _: &'g Ghost) -> PageView<'g> {

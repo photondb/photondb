@@ -22,11 +22,11 @@ impl From<u64> for PagePtr {
     }
 }
 
-impl Into<u64> for PagePtr {
-    fn into(self) -> u64 {
-        match self {
-            Self::Mem(addr) => addr,
-            Self::Disk(addr) => addr | MEM_DISK_MASK,
+impl From<PagePtr> for u64 {
+    fn from(ptr: PagePtr) -> u64 {
+        match ptr {
+            PagePtr::Mem(addr) => addr,
+            PagePtr::Disk(addr) => addr | MEM_DISK_MASK,
         }
     }
 }
@@ -183,10 +183,10 @@ impl<T: GlobalAlloc> PageAlloc for T {
     unsafe fn alloc_page(&self, size: usize) -> Option<PageBuf> {
         let layout = alloc_layout(size);
         let ptr = self.alloc(layout);
-        if !ptr.is_null() {
-            Some(PageBuf::from_raw(ptr, size))
-        } else {
+        if ptr.is_null() {
             None
+        } else {
+            Some(PageBuf::from_raw(ptr, size))
         }
     }
 

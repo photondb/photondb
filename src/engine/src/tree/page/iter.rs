@@ -7,13 +7,17 @@ pub trait PageIter {
     type Key: Ord;
     type Value;
 
-    fn len(&self) -> usize;
-
+    // Returns the current entry.
     fn peek(&self) -> Option<&(Self::Key, Self::Value)>;
 
+    // Advances to the next entry.
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)>;
 
-    fn seek(&mut self, target: &Self::Key) -> Option<&(Self::Key, Self::Value)>;
+    // Positions at the first entry that is no less than the target.
+    fn seek(&mut self, target: &Self::Key);
+
+    // Positions at the first entry.
+    fn rewind(&mut self);
 }
 
 struct ReverseIter<I>(I);
@@ -59,13 +63,41 @@ where
             heap: children.into(),
         }
     }
+}
 
-    pub fn next(&mut self) -> Option<&(I::Key, I::Value)> {
+impl<I> PageIter for MergeIter<I>
+where
+    I: PageIter,
+{
+    type Key = I::Key;
+    type Value = I::Value;
+
+    fn peek(&self) -> Option<&(I::Key, I::Value)> {
+        self.heap.peek().and_then(|iter| iter.0.peek())
+    }
+
+    fn next(&mut self) -> Option<&(I::Key, I::Value)> {
         if let Some(mut iter) = self.heap.pop() {
-            todo!()
-        } else {
-            None
+            iter.0.next();
+            self.heap.push(iter);
         }
+        self.peek()
+    }
+
+    fn seek(&mut self, target: &I::Key) {
+        let mut children = Vec::from(std::mem::take(&mut self.heap));
+        for iter in children.iter_mut() {
+            iter.0.seek(target);
+        }
+        std::mem::swap(&mut self.heap, &mut BinaryHeap::from(children));
+    }
+
+    fn rewind(&mut self) {
+        let mut children = Vec::from(std::mem::take(&mut self.heap));
+        for iter in children.iter_mut() {
+            iter.0.rewind();
+        }
+        std::mem::swap(&mut self.heap, &mut BinaryHeap::from(children));
     }
 }
 

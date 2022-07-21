@@ -110,6 +110,8 @@ impl BufWriter {
     }
 }
 
+// TODO: Optimizes the page layout with
+// https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
 #[derive(Default)]
 pub struct SortedPageLayout {
     len: usize,
@@ -227,12 +229,9 @@ where
         self.offsets.len()
     }
 
+    // Returns the first entry at or past the target.
     pub fn seek(&self, target: &K) -> Option<(K, V)> {
-        if let Some((_, key, value)) = self.search(target) {
-            Some((key, value))
-        } else {
-            None
-        }
+        self.index(self.rank(target))
     }
 
     pub fn iter(&self) -> SortedPageIter<'a, K, V> {
@@ -241,6 +240,23 @@ where
 
     pub fn into_iter(self) -> SortedPageIter<'a, K, V> {
         SortedPageIter::new(self)
+    }
+
+    fn rank(&self, target: &K) -> usize {
+        let mut left = 0;
+        let mut right = self.len();
+        while left < right {
+            let mid = (left + right) / 2;
+            let ptr = unsafe { self.payload.add(self.offsets[mid] as usize) };
+            let mut buf = BufReader::new(ptr);
+            let key = K::decode_from(&mut buf);
+            match key.cmp(target) {
+                Ordering::Less => left = mid + 1,
+                Ordering::Greater => right = mid,
+                Ordering::Equal => return mid,
+            }
+        }
+        left
     }
 
     fn index(&self, index: usize) -> Option<(K, V)> {
@@ -256,32 +272,12 @@ where
             None
         }
     }
-
-    fn search(&self, target: &K) -> Option<(usize, K, V)> {
-        let mut left = 0;
-        let mut right = self.len();
-        while left < right {
-            let mid = (left + right) / 2;
-            let ptr = unsafe { self.payload.add(self.offsets[mid] as usize) };
-            let mut buf = BufReader::new(ptr);
-            let key = K::decode_from(&mut buf);
-            match key.cmp(&target) {
-                Ordering::Less => left = mid + 1,
-                Ordering::Greater => right = mid,
-                Ordering::Equal => {
-                    let value = V::decode_from(&mut buf);
-                    return Some((mid, key, value));
-                }
-            }
-        }
-        None
-    }
 }
 
 impl<'a, K, V> Clone for SortedPageRef<'a, K, V> {
     fn clone(&self) -> Self {
         Self {
-            base: self.base.clone(),
+            base: self.base,
             offsets: self.offsets,
             payload: self.payload,
             _mark: PhantomData,
@@ -331,11 +327,6 @@ where
             entry: None,
         }
     }
-
-    fn reset(&mut self) {
-        self.index = 0;
-        self.entry = None;
-    }
 }
 
 impl<'a, K, V> PageIter for SortedPageIter<'a, K, V>
@@ -346,30 +337,25 @@ where
     type Key = K;
     type Value = V;
 
-    fn len(&self) -> usize {
-        self.page.len()
-    }
-
     fn peek(&self) -> Option<&(K, V)> {
         self.entry.as_ref()
     }
 
     fn next(&mut self) -> Option<&(K, V)> {
-        self.entry = self.page.index(self.index);
-        if self.entry.is_some() {
+        self.entry = self.page.index(self.index).map(|entry| {
             self.index += 1;
-        }
+            entry
+        });
         self.entry.as_ref()
     }
 
-    fn seek(&mut self, target: &K) -> Option<&(K, V)> {
-        if let Some((index, key, value)) = self.page.search(target) {
-            self.index = index;
-            self.entry = (key, value).into();
-            self.entry.as_ref()
-        } else {
-            self.reset();
-            None
-        }
+    fn seek(&mut self, target: &K) {
+        self.index = self.page.rank(target);
+        self.entry = None;
+    }
+
+    fn rewind(&mut self) {
+        self.index = 0;
+        self.entry = None;
     }
 }
