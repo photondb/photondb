@@ -1,4 +1,20 @@
-use std::mem::size_of;
+use std::{
+    cmp::Ordering,
+    marker::PhantomData,
+    mem::size_of,
+    ops::{Deref, DerefMut},
+};
+
+use super::{PageBuf, PageIter, PageRef, PAGE_HEADER_SIZE};
+
+pub trait Encodable {
+    fn encode_to(&self, w: &mut BufWriter);
+    fn encode_size(&self) -> usize;
+}
+
+pub trait Decodable {
+    fn decode_from(r: &mut BufReader) -> Self;
+}
 
 pub struct BufReader {
     ptr: *const u8,
@@ -91,5 +107,269 @@ impl BufWriter {
 
     pub fn length_prefixed_slice_size(slice: &[u8]) -> usize {
         size_of::<u32>() + slice.len()
+    }
+}
+
+#[derive(Default)]
+pub struct SortedPageLayout {
+    len: usize,
+    size: usize,
+}
+
+impl SortedPageLayout {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn add<K, V>(&mut self, key: &K, value: &V)
+    where
+        K: Encodable,
+        V: Encodable,
+    {
+        self.len += 1;
+        self.size += key.encode_size() + value.encode_size();
+    }
+
+    pub fn size(&self) -> usize {
+        PAGE_HEADER_SIZE + (self.len + 1) * size_of::<u64>() + self.size
+    }
+
+    pub fn into_buf(self, base: PageBuf) -> SortedPageBuf {
+        assert_eq!(base.size(), self.size());
+        unsafe { SortedPageBuf::new(base, self) }
+    }
+}
+
+pub struct SortedPageBuf {
+    base: PageBuf,
+    offsets: *mut u32,
+    payload: BufWriter,
+    current: usize,
+}
+
+// TODO: handle endianness
+impl SortedPageBuf {
+    unsafe fn new(mut base: PageBuf, layout: SortedPageLayout) -> Self {
+        let ptr = base.content_mut() as *mut u32;
+        ptr.write(layout.len() as u32);
+        let offsets = ptr.add(1);
+        let payload = ptr.add(layout.len() + 1) as *mut u8;
+        Self {
+            base,
+            offsets,
+            payload: BufWriter::new(payload),
+            current: 0,
+        }
+    }
+
+    pub fn add<K, V>(&mut self, key: &K, value: &V)
+    where
+        K: Encodable,
+        V: Encodable,
+    {
+        unsafe {
+            self.offsets
+                .add(self.current)
+                .write(self.payload.pos() as u32);
+            self.current += 1;
+        }
+        key.encode_to(&mut self.payload);
+        value.encode_to(&mut self.payload);
+    }
+}
+
+impl Deref for SortedPageBuf {
+    type Target = PageBuf;
+
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
+
+impl DerefMut for SortedPageBuf {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.base
+    }
+}
+
+impl From<SortedPageBuf> for PageBuf {
+    fn from(page: SortedPageBuf) -> Self {
+        page.base
+    }
+}
+
+pub struct SortedPageRef<'a, K, V> {
+    base: PageRef<'a>,
+    offsets: &'a [u32],
+    payload: *const u8,
+    _mark: PhantomData<(K, V)>,
+}
+
+impl<'a, K, V> SortedPageRef<'a, K, V>
+where
+    K: Decodable + Ord,
+    V: Decodable,
+{
+    unsafe fn new(base: PageRef<'a>) -> Self {
+        let ptr = base.content() as *const u32;
+        let len = ptr.read() as usize;
+        let offsets = std::slice::from_raw_parts(ptr.add(1), len);
+        let payload = base.content().add(size_of::<u32>() * (len + 1));
+        Self {
+            base,
+            offsets,
+            payload,
+            _mark: PhantomData,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.offsets.len()
+    }
+
+    pub fn seek(&self, target: &K) -> Option<(K, V)> {
+        if let Some((_, key, value)) = self.search(target) {
+            Some((key, value))
+        } else {
+            None
+        }
+    }
+
+    pub fn iter(&self) -> SortedPageIter<'a, K, V> {
+        SortedPageIter::new(self.clone())
+    }
+
+    pub fn into_iter(self) -> SortedPageIter<'a, K, V> {
+        SortedPageIter::new(self)
+    }
+
+    fn index(&self, index: usize) -> Option<(K, V)> {
+        if let Some(&offset) = self.offsets.get(index) {
+            unsafe {
+                let ptr = self.payload.add(offset as usize);
+                let mut buf = BufReader::new(ptr);
+                let key = K::decode_from(&mut buf);
+                let value = V::decode_from(&mut buf);
+                Some((key, value))
+            }
+        } else {
+            None
+        }
+    }
+
+    fn search(&self, target: &K) -> Option<(usize, K, V)> {
+        let mut left = 0;
+        let mut right = self.len();
+        while left < right {
+            let mid = (left + right) / 2;
+            let ptr = unsafe { self.payload.add(self.offsets[mid] as usize) };
+            let mut buf = BufReader::new(ptr);
+            let key = K::decode_from(&mut buf);
+            match key.cmp(&target) {
+                Ordering::Less => left = mid + 1,
+                Ordering::Greater => right = mid,
+                Ordering::Equal => {
+                    let value = V::decode_from(&mut buf);
+                    return Some((mid, key, value));
+                }
+            }
+        }
+        None
+    }
+}
+
+impl<'a, K, V> Clone for SortedPageRef<'a, K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            base: self.base.clone(),
+            offsets: self.offsets,
+            payload: self.payload,
+            _mark: PhantomData,
+        }
+    }
+}
+
+impl<'a, K, V> Deref for SortedPageRef<'a, K, V> {
+    type Target = PageRef<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.base
+    }
+}
+
+impl<'a, K, V> From<PageRef<'a>> for SortedPageRef<'a, K, V>
+where
+    K: Decodable + Ord,
+    V: Decodable,
+{
+    fn from(page: PageRef<'a>) -> Self {
+        unsafe { Self::new(page) }
+    }
+}
+
+impl<'a, K, V> From<SortedPageRef<'a, K, V>> for PageRef<'a> {
+    fn from(page: SortedPageRef<'a, K, V>) -> Self {
+        page.base
+    }
+}
+
+pub struct SortedPageIter<'a, K, V> {
+    page: SortedPageRef<'a, K, V>,
+    index: usize,
+    entry: Option<(K, V)>,
+}
+
+impl<'a, K, V> SortedPageIter<'a, K, V>
+where
+    K: Decodable + Ord,
+    V: Decodable,
+{
+    pub fn new(page: SortedPageRef<'a, K, V>) -> Self {
+        Self {
+            page,
+            index: 0,
+            entry: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.index = 0;
+        self.entry = None;
+    }
+}
+
+impl<'a, K, V> PageIter for SortedPageIter<'a, K, V>
+where
+    K: Decodable + Ord,
+    V: Decodable,
+{
+    type Key = K;
+    type Value = V;
+
+    fn len(&self) -> usize {
+        self.page.len()
+    }
+
+    fn peek(&self) -> Option<&(K, V)> {
+        self.entry.as_ref()
+    }
+
+    fn next(&mut self) -> Option<&(K, V)> {
+        self.entry = self.page.index(self.index);
+        if self.entry.is_some() {
+            self.index += 1;
+        }
+        self.entry.as_ref()
+    }
+
+    fn seek(&mut self, target: &K) -> Option<&(K, V)> {
+        if let Some((index, key, value)) = self.page.search(target) {
+            self.index = index;
+            self.entry = (key, value).into();
+            self.entry.as_ref()
+        } else {
+            self.reset();
+            None
+        }
     }
 }

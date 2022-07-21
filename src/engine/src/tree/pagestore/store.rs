@@ -23,9 +23,9 @@ impl From<u64> for PageAddr {
     }
 }
 
-impl Into<u64> for PageAddr {
-    fn into(self) -> u64 {
-        self.0
+impl From<PageAddr> for u64 {
+    fn from(addr: PageAddr) -> u64 {
+        addr.0
     }
 }
 

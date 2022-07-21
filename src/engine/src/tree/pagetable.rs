@@ -9,17 +9,9 @@ use std::{
 
 use super::Guard;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct PageTable {
     inner: Arc<Inner>,
-}
-
-impl Default for PageTable {
-    fn default() -> Self {
-        Self {
-            inner: Arc::default(),
-        }
-    }
 }
 
 impl PageTable {

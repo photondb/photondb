@@ -1,13 +1,6 @@
 use super::{
-    node::{DataNodeIter, IndexNodeIter, NodeId, NodeIndex, NodePair, PageView},
-    page::{
-        DataPageLayout, DataPageRef, IndexPageLayout, IndexPageRef, Key, MergeIterBuilder,
-        PageAlloc, PageBuf, PageIter, PageKind, PageLayout, PagePtr, PageRef, Value,
-    },
-    pagecache::PageCache,
-    pagestore::PageStore,
-    pagetable::PageTable,
-    Error, Ghost, Options, Result,
+    node::*, page::*, pagecache::PageCache, pagestore::PageStore, pagetable::PageTable, Error,
+    Ghost, Options, Result,
 };
 
 pub struct Tree {
@@ -77,9 +70,10 @@ impl Tree {
 
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut layout = DataPageLayout::default();
-        layout.add(key, value);
-        let mut buf = unsafe { self.alloc_page(layout) };
-        buf.add(key, value);
+        layout.add(&key, &value);
+        let buf = self.alloc_page(layout.size());
+        let mut buf = layout.into_buf(buf);
+        buf.add(&key, &value);
         loop {
             match self.try_update(key.raw, &mut buf, ghost).await {
                 Ok(_) => return Ok(()),
@@ -126,6 +120,10 @@ impl Tree {
 }
 
 impl Tree {
+    const fn root() -> Index {
+        Index { id: 0, ver: 0 }
+    }
+
     fn page_ptr(&self, id: NodeId) -> PagePtr {
         self.table.get(id.into()).into()
     }
@@ -149,17 +147,17 @@ impl Tree {
 
     fn update_node(&self, id: NodeId, old: PagePtr, new: PagePtr) -> Option<PagePtr> {
         self.table
-            .cas(id.into(), old.into(), new.into())
+            .cas(id, old.into(), new.into())
             .map(|now| now.into())
     }
 
-    unsafe fn alloc_page<L: PageLayout>(&self, layout: L) -> L::Buf {
+    fn alloc_page(&self, size: usize) -> PageBuf {
         // TODO: evicts pages from the cache when allocation fails.
-        self.cache.alloc_page(layout).unwrap()
+        unsafe { self.cache.alloc_page(size).unwrap() }
     }
 
-    unsafe fn dealloc_page(&self, buf: impl Into<PageBuf>) {
-        self.cache.dealloc_page(buf.into());
+    fn dealloc_page(&self, page: impl Into<PageBuf>) {
+        unsafe { self.cache.dealloc_page(page.into()) }
     }
 
     fn swapin_page<'g>(
@@ -211,7 +209,7 @@ impl Tree {
     }
 
     async fn try_find_data_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<NodePair<'g>> {
-        let mut cursor = NodeIndex::root();
+        let mut cursor = Self::root();
         let mut parent = None;
         loop {
             let node = self.node_pair(cursor.id, ghost);
@@ -269,13 +267,7 @@ impl Tree {
         loop {
             match page.kind() {
                 PageKind::Data => {
-                    let page = DataPageRef::from(page);
-                    if let Some(value) = page.get(key) {
-                        match value {
-                            Value::Put(value) => return Ok(Some(value)),
-                            Value::Delete => return Ok(None),
-                        }
-                    }
+                    todo!()
                 }
                 _ => unreachable!(),
             }
@@ -307,7 +299,8 @@ impl Tree {
         while let Some((k, v)) = iter.next() {
             layout.add(k, v);
         }
-        let page = unsafe { self.alloc_page(layout) };
+        let page = self.alloc_page(layout.size());
+        let page = layout.into_buf(page);
         // TODO: builds data page
         if self
             .update_node(node.id, node.view.as_ptr(), page.as_ptr())
@@ -316,9 +309,7 @@ impl Tree {
             return Err(Error::Conflict);
         }
         if page.size() >= self.opts.data_node_size {
-            let _ = self
-                .try_split_data_node(node.id, page.as_ref(), ghost)
-                .await;
+            // self.try_split_data_node(node.id, page.as_ref(), ghost).await;
         }
         Ok(())
     }
@@ -349,15 +340,15 @@ impl Tree {
     async fn search_index_node<'g>(
         &self,
         node: &NodePair<'g>,
-        key: &[u8],
+        target: &[u8],
         ghost: &'g Ghost,
-    ) -> Result<NodeIndex> {
+    ) -> Result<Index> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
         loop {
             match page.kind() {
                 PageKind::Data => {
                     let page = IndexPageRef::from(page);
-                    if let Some(value) = page.get(key) {
+                    if let Some((key, value)) = page.seek(&target) {
                         todo!()
                     }
                 }
@@ -391,7 +382,8 @@ impl Tree {
         while let Some((k, v)) = iter.next() {
             layout.add(k, v);
         }
-        let page = unsafe { self.alloc_page(layout) };
+        let page = self.alloc_page(layout.size());
+        let page = layout.into_buf(page);
         // TODO: builds the index page
         if self
             .update_node(node.id, node.view.as_ptr(), page.as_ptr())
@@ -400,9 +392,7 @@ impl Tree {
             return Err(Error::Conflict);
         }
         if page.size() >= self.opts.index_node_size {
-            let _ = self
-                .try_split_index_node(node.id, page.as_ref(), ghost)
-                .await;
+            // self.try_split_index_node(node.id, page.as_ref(), ghost).await;
         }
         Ok(())
     }

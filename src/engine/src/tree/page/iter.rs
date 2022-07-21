@@ -9,11 +9,11 @@ pub trait PageIter {
 
     fn len(&self) -> usize;
 
-    fn peek(&self) -> Option<(Self::Key, Self::Value)>;
+    fn peek(&self) -> Option<&(Self::Key, Self::Value)>;
 
-    fn next(&mut self) -> Option<(Self::Key, Self::Value)>;
+    fn next(&mut self) -> Option<&(Self::Key, Self::Value)>;
 
-    fn seek(&mut self, target: Self::Key) -> Option<(Self::Key, Self::Value)>;
+    fn seek(&mut self, target: &Self::Key) -> Option<&(Self::Key, Self::Value)>;
 }
 
 struct ReverseIter<I>(I);
@@ -43,7 +43,10 @@ impl<I: PageIter> PartialOrd for ReverseIter<I> {
     }
 }
 
-pub struct MergeIter<I> {
+pub struct MergeIter<I>
+where
+    I: PageIter,
+{
     heap: BinaryHeap<ReverseIter<I>>,
 }
 
@@ -57,11 +60,9 @@ where
         }
     }
 
-    pub fn next(&mut self) -> Option<(I::Key, I::Value)> {
+    pub fn next(&mut self) -> Option<&(I::Key, I::Value)> {
         if let Some(mut iter) = self.heap.pop() {
-            let next = iter.0.next();
-            self.heap.push(iter);
-            next
+            todo!()
         } else {
             None
         }

@@ -3,26 +3,7 @@ use super::{
     pagestore::{PageAddr, PageInfo},
 };
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct NodeId(u64);
-
-impl NodeId {
-    pub const fn root() -> Self {
-        Self(0)
-    }
-}
-
-impl From<u64> for NodeId {
-    fn from(id: u64) -> Self {
-        Self(id)
-    }
-}
-
-impl Into<u64> for NodeId {
-    fn into(self) -> u64 {
-        self.0
-    }
-}
+pub type NodeId = u64;
 
 pub enum PageView<'a> {
     Mem(PageRef<'a>),
@@ -66,20 +47,6 @@ impl<'a> PageView<'a> {
 pub struct NodePair<'a> {
     pub id: NodeId,
     pub view: PageView<'a>,
-}
-
-pub struct NodeIndex {
-    pub id: NodeId,
-    pub ver: u64,
-}
-
-impl NodeIndex {
-    pub const fn root() -> Self {
-        Self {
-            id: NodeId::root(),
-            ver: 0,
-        }
-    }
 }
 
 pub type DataNodeIter<'a> = MergeIter<DataPageIter<'a>>;

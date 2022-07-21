@@ -32,53 +32,52 @@ impl Into<u64> for PagePtr {
 }
 
 pub struct PageBuf {
-    page: PageInner,
+    raw: RawPage,
     size: usize,
 }
 
 impl PageBuf {
     unsafe fn from_raw(ptr: *mut u8, size: usize) -> Self {
-        assert!(size >= PAGE_HEADER_SIZE);
         Self {
-            page: (ptr as u64).into(),
+            raw: RawPage(ptr as u64),
             size,
         }
     }
 
     unsafe fn into_raw(self) -> *mut u8 {
-        self.page.0 as *mut u8
+        self.raw.0 as *mut u8
     }
 
     pub fn ver(&self) -> u64 {
-        self.page.ver()
+        self.raw.ver()
     }
 
     pub fn set_ver(&mut self, ver: u64) {
-        self.page.set_ver(ver);
+        self.raw.set_ver(ver);
     }
 
     pub fn len(&self) -> u8 {
-        self.page.len()
+        self.raw.len()
     }
 
     pub fn set_len(&mut self, len: u8) {
-        self.page.set_len(len);
+        self.raw.set_len(len);
     }
 
     pub fn kind(&self) -> PageKind {
-        self.page.kind().into()
+        self.raw.kind()
     }
 
     pub fn set_kind(&mut self, kind: PageKind) {
-        self.page.set_kind(kind as u8);
+        self.raw.set_kind(kind);
     }
 
     pub fn set_next(&mut self, next: PagePtr) {
-        self.page.set_next(next.into());
+        self.raw.set_next(next.into());
     }
 
     pub(super) fn content_mut(&mut self) -> *mut u8 {
-        self.page.content_mut()
+        self.raw.content_mut()
     }
 
     pub fn size(&self) -> usize {
@@ -86,42 +85,42 @@ impl PageBuf {
     }
 
     pub fn as_ptr(&self) -> PagePtr {
-        self.page.into()
+        PagePtr::Mem(self.raw.0)
     }
 
     pub fn as_ref(&self) -> PageRef {
-        PageRef::new(self.page)
+        PageRef::new(self.raw.0)
     }
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct PageRef<'a> {
-    page: PageInner,
-    mark: PhantomData<&'a ()>,
+    raw: RawPage,
+    _mark: PhantomData<&'a ()>,
 }
 
 impl PageRef<'_> {
-    fn new(page: PageInner) -> Self {
+    fn new(ptr: u64) -> Self {
         Self {
-            page,
-            mark: PhantomData,
+            raw: RawPage(ptr),
+            _mark: PhantomData,
         }
     }
 
     pub fn ver(&self) -> u64 {
-        self.page.ver()
+        self.raw.ver()
     }
 
     pub fn len(&self) -> u8 {
-        self.page.len()
+        self.raw.len()
     }
 
     pub fn kind(&self) -> PageKind {
-        self.page.kind().into()
+        self.raw.kind()
     }
 
     pub fn next(&self) -> Option<PagePtr> {
-        let ptr = self.page.next();
+        let ptr = self.raw.next();
         if ptr == 0 {
             None
         } else {
@@ -130,25 +129,25 @@ impl PageRef<'_> {
     }
 
     pub(super) fn content(&self) -> *const u8 {
-        self.page.content()
+        self.raw.content()
     }
 }
 
 impl From<u64> for PageRef<'_> {
     fn from(ptr: u64) -> Self {
-        Self::new(ptr.into())
+        Self::new(ptr)
     }
 }
 
-impl Into<u64> for PageRef<'_> {
-    fn into(self) -> u64 {
-        self.page.into()
+impl From<PageRef<'_>> for u64 {
+    fn from(page: PageRef) -> u64 {
+        page.raw.0
     }
 }
 
-impl Into<PagePtr> for PageRef<'_> {
-    fn into(self) -> PagePtr {
-        self.page.into()
+impl From<PageRef<'_>> for PagePtr {
+    fn from(page: PageRef) -> Self {
+        PagePtr::Mem(page.raw.0)
     }
 }
 
@@ -174,14 +173,42 @@ impl From<u8> for PageKind {
     }
 }
 
+pub trait PageAlloc {
+    unsafe fn alloc_page(&self, size: usize) -> Option<PageBuf>;
+
+    unsafe fn dealloc_page(&self, page: PageBuf);
+}
+
+impl<T: GlobalAlloc> PageAlloc for T {
+    unsafe fn alloc_page(&self, size: usize) -> Option<PageBuf> {
+        let layout = alloc_layout(size);
+        let ptr = self.alloc(layout);
+        if !ptr.is_null() {
+            Some(PageBuf::from_raw(ptr, size))
+        } else {
+            None
+        }
+    }
+
+    unsafe fn dealloc_page(&self, page: PageBuf) {
+        let layout = alloc_layout(page.size());
+        self.dealloc(page.into_raw(), layout);
+    }
+}
+
+unsafe fn alloc_layout(size: usize) -> Layout {
+    Layout::from_size_align_unchecked(size, PAGE_HEADER_ALIGNMENT)
+}
+
 // Page header: | ver (6B) | len (1B) | kind (1B) | next (8B) |
-const PAGE_HEADER_SIZE: usize = 16;
+pub(super) const PAGE_HEADER_SIZE: usize = 16;
+pub(super) const PAGE_HEADER_ALIGNMENT: usize = 8;
 
 #[derive(Copy, Clone, Debug)]
-struct PageInner(u64);
+struct RawPage(u64);
 
 // TODO: handle endianness
-impl PageInner {
+impl RawPage {
     fn ver(&self) -> u64 {
         unsafe {
             let ptr = self.0 as *const u64;
@@ -210,17 +237,17 @@ impl PageInner {
         }
     }
 
-    fn kind(&self) -> u8 {
+    fn kind(&self) -> PageKind {
         unsafe {
             let ptr = self.0 as *const u8;
-            ptr.add(7).read()
+            ptr.add(7).read().into()
         }
     }
 
-    fn set_kind(&mut self, kind: u8) {
+    fn set_kind(&mut self, kind: PageKind) {
         unsafe {
             let ptr = self.0 as *mut u8;
-            ptr.add(7).write(kind);
+            ptr.add(7).write(kind as u8);
         }
     }
 
@@ -251,58 +278,4 @@ impl PageInner {
             ptr.add(PAGE_HEADER_SIZE)
         }
     }
-}
-
-impl From<u64> for PageInner {
-    fn from(ptr: u64) -> Self {
-        Self(ptr)
-    }
-}
-
-impl Into<u64> for PageInner {
-    fn into(self) -> u64 {
-        self.0
-    }
-}
-
-impl Into<PagePtr> for PageInner {
-    fn into(self) -> PagePtr {
-        PagePtr::Mem(self.0)
-    }
-}
-
-pub trait PageAlloc {
-    unsafe fn alloc_page<L: PageLayout>(&self, layout: L) -> Option<L::Buf>;
-
-    unsafe fn dealloc_page(&self, buf: PageBuf);
-}
-
-unsafe fn alloc_layout(size: usize) -> Layout {
-    Layout::from_size_align_unchecked(size, 8)
-}
-
-impl<T: GlobalAlloc> PageAlloc for T {
-    unsafe fn alloc_page<L: PageLayout>(&self, layout: L) -> Option<L::Buf> {
-        let size = PAGE_HEADER_SIZE + layout.size();
-        let ptr = self.alloc(alloc_layout(size));
-        if ptr.is_null() {
-            None
-        } else {
-            let buf = PageBuf::from_raw(ptr, size);
-            Some(layout.build(buf))
-        }
-    }
-
-    unsafe fn dealloc_page(&self, buf: PageBuf) {
-        let layout = alloc_layout(buf.size());
-        self.dealloc(buf.into_raw(), layout);
-    }
-}
-
-pub trait PageLayout {
-    type Buf: Into<PageBuf>;
-
-    fn size(&self) -> usize;
-
-    fn build(self, buf: PageBuf) -> Self::Buf;
 }
