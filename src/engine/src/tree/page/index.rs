@@ -42,7 +42,7 @@ impl Decodable for Index {
     }
 }
 
-pub type IndexPageLayout = SortedPageLayout;
 pub type IndexPageBuf = SortedPageBuf;
+pub type IndexPageBuilder = SortedPageBuilder;
 pub type IndexPageRef<'a> = SortedPageRef<'a, &'a [u8], Index>;
 pub type IndexPageIter<'a> = SortedPageIter<'a, &'a [u8], Index>;

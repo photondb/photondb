@@ -69,18 +69,16 @@ impl BTree {
     }
 
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
-        let mut layout = DataPageLayout::default();
-        layout.add(&key, &value);
-        let buf = self.alloc_page(layout.size());
-        let mut buf = layout.into_buf(buf);
-        buf.add(&key, &value);
+        let mut page = DataPageBuilder::default()
+            .build_with_entry(&key, &value, &self.cache)
+            .unwrap();
         loop {
-            match self.try_update(key.raw, &mut buf, ghost).await {
+            match self.try_update(key.raw, &mut page, ghost).await {
                 Ok(_) => return Ok(()),
                 Err(Error::Conflict) => continue,
                 Err(err) => {
                     unsafe {
-                        self.dealloc_page(buf);
+                        self.cache.dealloc_page(page.into());
                     }
                     return Err(err);
                 }
@@ -149,15 +147,6 @@ impl BTree {
         self.table
             .cas(id, old.into(), new.into())
             .map(|now| now.into())
-    }
-
-    fn alloc_page(&self, size: usize) -> PageBuf {
-        // TODO: evicts pages from the cache when allocation fails.
-        unsafe { self.cache.alloc_page(size).unwrap() }
-    }
-
-    fn dealloc_page(&self, page: impl Into<PageBuf>) {
-        unsafe { self.cache.dealloc_page(page.into()) }
     }
 
     fn swapin_page<'g>(
@@ -295,12 +284,9 @@ impl BTree {
         ghost: &'g Ghost,
     ) -> Result<()> {
         let mut iter = self.iter_data_node(node, ghost).await?;
-        let mut layout = DataPageLayout::default();
-        while let Some((k, v)) = iter.next() {
-            layout.add(k, v);
-        }
-        let page = self.alloc_page(layout.size());
-        let page = layout.into_buf(page);
+        let page = DataPageBuilder::default()
+            .build_from_iter(&mut iter, &self.cache)
+            .unwrap();
         // TODO: builds data page
         if self
             .update_node(node.id, node.view.as_ptr(), page.as_ptr())
@@ -378,13 +364,9 @@ impl BTree {
         ghost: &'g Ghost,
     ) -> Result<()> {
         let mut iter = self.iter_index_node(node, ghost).await?;
-        let mut layout = IndexPageLayout::default();
-        while let Some((k, v)) = iter.next() {
-            layout.add(k, v);
-        }
-        let page = self.alloc_page(layout.size());
-        let page = layout.into_buf(page);
-        // TODO: builds the index page
+        let page = IndexPageBuilder::default()
+            .build_from_iter(&mut iter, &self.cache)
+            .unwrap();
         if self
             .update_node(node.id, node.view.as_ptr(), page.as_ptr())
             .is_some()

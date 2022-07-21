@@ -114,7 +114,7 @@ impl From<u8> for ValueKind {
     }
 }
 
-pub type DataPageLayout = SortedPageLayout;
 pub type DataPageBuf = SortedPageBuf;
+pub type DataPageBuilder = SortedPageBuilder;
 pub type DataPageRef<'a> = SortedPageRef<'a, Key<'a>, Value<'a>>;
 pub type DataPageIter<'a> = SortedPageIter<'a, Key<'a>, Value<'a>>;

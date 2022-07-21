@@ -5,7 +5,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use super::{PageBuf, PageIter, PageRef, PAGE_HEADER_SIZE};
+use super::{PageAlloc, PageBuf, PageIter, PageRef, PAGE_HEADER_SIZE};
 
 pub trait Encodable {
     fn encode_to(&self, w: &mut BufWriter);
@@ -113,17 +113,17 @@ impl BufWriter {
 // TODO: Optimizes the page layout with
 // https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
 #[derive(Default)]
-pub struct SortedPageLayout {
+pub struct SortedPageBuilder {
     len: usize,
     size: usize,
 }
 
-impl SortedPageLayout {
-    pub fn len(&self) -> usize {
+impl SortedPageBuilder {
+    fn len(&self) -> usize {
         self.len
     }
 
-    pub fn add<K, V>(&mut self, key: &K, value: &V)
+    fn add<K, V>(&mut self, key: &K, value: &V)
     where
         K: Encodable,
         V: Encodable,
@@ -132,13 +132,52 @@ impl SortedPageLayout {
         self.size += key.encode_size() + value.encode_size();
     }
 
-    pub fn size(&self) -> usize {
+    fn size(&self) -> usize {
         PAGE_HEADER_SIZE + (self.len + 1) * size_of::<u64>() + self.size
     }
 
-    pub fn into_buf(self, base: PageBuf) -> SortedPageBuf {
-        assert_eq!(base.size(), self.size());
-        unsafe { SortedPageBuf::new(base, self) }
+    pub fn build_from_iter<I, A>(mut self, iter: &mut I, alloc: &A) -> Option<SortedPageBuf>
+    where
+        I: PageIter,
+        I::Key: Encodable,
+        I::Value: Encodable,
+        A: PageAlloc,
+    {
+        iter.rewind();
+        while let Some((key, value)) = iter.next() {
+            self.add(key, value);
+        }
+        if let Some(buf) = unsafe { alloc.alloc_page(self.size()) } {
+            iter.rewind();
+            let mut page = unsafe { SortedPageBuf::new(buf, self) };
+            while let Some((key, value)) = iter.next() {
+                page.add(key, value);
+            }
+            Some(page)
+        } else {
+            None
+        }
+    }
+
+    pub fn build_with_entry<K, V, A>(
+        mut self,
+        key: &K,
+        value: &V,
+        alloc: &A,
+    ) -> Option<SortedPageBuf>
+    where
+        K: Encodable,
+        V: Encodable,
+        A: PageAlloc,
+    {
+        self.add(key, value);
+        if let Some(buf) = unsafe { alloc.alloc_page(self.size()) } {
+            let mut page = unsafe { SortedPageBuf::new(buf, self) };
+            page.add(key, value);
+            Some(page)
+        } else {
+            None
+        }
     }
 }
 
@@ -151,11 +190,11 @@ pub struct SortedPageBuf {
 
 // TODO: handle endianness
 impl SortedPageBuf {
-    unsafe fn new(mut base: PageBuf, layout: SortedPageLayout) -> Self {
+    unsafe fn new(mut base: PageBuf, builder: SortedPageBuilder) -> Self {
         let ptr = base.content_mut() as *mut u32;
-        ptr.write(layout.len() as u32);
+        ptr.write(builder.len() as u32);
         let offsets = ptr.add(1);
-        let payload = ptr.add(layout.len() + 1) as *mut u8;
+        let payload = ptr.add(builder.len() + 1) as *mut u8;
         Self {
             base,
             offsets,
@@ -164,7 +203,7 @@ impl SortedPageBuf {
         }
     }
 
-    pub fn add<K, V>(&mut self, key: &K, value: &V)
+    fn add<K, V>(&mut self, key: &K, value: &V)
     where
         K: Encodable,
         V: Encodable,
@@ -311,8 +350,8 @@ impl<'a, K, V> From<SortedPageRef<'a, K, V>> for PageRef<'a> {
 
 pub struct SortedPageIter<'a, K, V> {
     page: SortedPageRef<'a, K, V>,
-    index: usize,
-    entry: Option<(K, V)>,
+    next: usize,
+    current: Option<(K, V)>,
 }
 
 impl<'a, K, V> SortedPageIter<'a, K, V>
@@ -323,8 +362,8 @@ where
     pub fn new(page: SortedPageRef<'a, K, V>) -> Self {
         Self {
             page,
-            index: 0,
-            entry: None,
+            next: 0,
+            current: None,
         }
     }
 }
@@ -338,24 +377,24 @@ where
     type Value = V;
 
     fn peek(&self) -> Option<&(K, V)> {
-        self.entry.as_ref()
+        self.current.as_ref()
     }
 
     fn next(&mut self) -> Option<&(K, V)> {
-        self.entry = self.page.index(self.index).map(|entry| {
-            self.index += 1;
+        self.current = self.page.index(self.next).map(|entry| {
+            self.next += 1;
             entry
         });
-        self.entry.as_ref()
+        self.current.as_ref()
     }
 
     fn seek(&mut self, target: &K) {
-        self.index = self.page.rank(target);
-        self.entry = None;
+        self.next = self.page.rank(target);
+        self.current = None;
     }
 
     fn rewind(&mut self) {
-        self.index = 0;
-        self.entry = None;
+        self.next = 0;
+        self.current = None;
     }
 }
