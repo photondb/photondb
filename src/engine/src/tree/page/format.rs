@@ -1,5 +1,6 @@
 use std::{
     cmp::Ordering,
+    iter::Iterator,
     marker::PhantomData,
     mem::size_of,
     ops::{Deref, DerefMut},
@@ -148,32 +149,11 @@ impl SortedPageBuilder {
             self.add(key, value);
         }
         if let Some(buf) = unsafe { alloc.alloc_page(self.size()) } {
-            iter.rewind();
             let mut page = unsafe { SortedPageBuf::new(buf, self) };
+            iter.rewind();
             while let Some((key, value)) = iter.next() {
                 page.add(key, value);
             }
-            Some(page)
-        } else {
-            None
-        }
-    }
-
-    pub fn build_with_entry<K, V, A>(
-        mut self,
-        key: &K,
-        value: &V,
-        alloc: &A,
-    ) -> Option<SortedPageBuf>
-    where
-        K: Encodable,
-        V: Encodable,
-        A: PageAlloc,
-    {
-        self.add(key, value);
-        if let Some(buf) = unsafe { alloc.alloc_page(self.size()) } {
-            let mut page = unsafe { SortedPageBuf::new(buf, self) };
-            page.add(key, value);
             Some(page)
         } else {
             None
@@ -268,7 +248,7 @@ where
         self.offsets.len()
     }
 
-    // Returns the first entry at or past the target.
+    // Returns the first entry that is no less than the target.
     pub fn seek(&self, target: &K) -> Option<(K, V)> {
         self.index(self.rank(target))
     }
@@ -376,15 +356,15 @@ where
     type Key = K;
     type Value = V;
 
-    fn peek(&self) -> Option<&(K, V)> {
+    fn current(&self) -> Option<&(K, V)> {
         self.current.as_ref()
     }
 
     fn next(&mut self) -> Option<&(K, V)> {
-        self.current = self.page.index(self.next).map(|entry| {
+        self.current = self.page.index(self.next);
+        if self.current.is_some() {
             self.next += 1;
-            entry
-        });
+        }
         self.current.as_ref()
     }
 

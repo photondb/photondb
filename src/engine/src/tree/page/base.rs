@@ -3,6 +3,7 @@ use std::{
     marker::PhantomData,
 };
 
+// A non-null page pointer.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum PagePtr {
     Mem(u64),
@@ -13,7 +14,7 @@ const MEM_DISK_MASK: u64 = 1 << 63;
 
 impl From<u64> for PagePtr {
     fn from(addr: u64) -> Self {
-        assert!(addr != 0);
+        debug_assert!(addr != 0);
         if addr & MEM_DISK_MASK == 0 {
             Self::Mem(addr)
         } else {
@@ -31,6 +32,7 @@ impl From<PagePtr> for u64 {
     }
 }
 
+// A mutable page buffer.
 pub struct PageBuf {
     raw: RawPage,
     size: usize,
@@ -38,6 +40,7 @@ pub struct PageBuf {
 
 impl PageBuf {
     unsafe fn from_raw(ptr: *mut u8, size: usize) -> Self {
+        debug_assert!(size >= PAGE_HEADER_SIZE);
         Self {
             raw: RawPage(ptr as u64),
             size,
@@ -93,6 +96,7 @@ impl PageBuf {
     }
 }
 
+// An immutable page reference.
 #[derive(Copy, Clone, Debug)]
 pub struct PageRef<'a> {
     raw: RawPage,
@@ -151,6 +155,7 @@ impl From<PageRef<'_>> for PagePtr {
     }
 }
 
+#[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum PageKind {
     Data = 0,
@@ -173,6 +178,7 @@ impl From<u8> for PageKind {
     }
 }
 
+// A page allocator.
 pub trait PageAlloc {
     unsafe fn alloc_page(&self, size: usize) -> Option<PageBuf>;
 
@@ -204,6 +210,7 @@ unsafe fn alloc_layout(size: usize) -> Layout {
 pub(super) const PAGE_HEADER_SIZE: usize = 16;
 pub(super) const PAGE_HEADER_ALIGNMENT: usize = 8;
 
+// An internal type to do unsafe operations on a page.
 #[derive(Copy, Clone, Debug)]
 struct RawPage(u64);
 

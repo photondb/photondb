@@ -69,8 +69,9 @@ impl BTree {
     }
 
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
+        let mut iter = SingleIter::from((key, value));
         let mut page = DataPageBuilder::default()
-            .build_with_entry(&key, &value, &self.cache)
+            .build_from_iter(&mut iter, &self.cache)
             .unwrap();
         loop {
             match self.try_update(key.raw, &mut page, ghost).await {
@@ -229,7 +230,7 @@ impl BTree {
         ghost: &'g Ghost,
     ) -> Result<DataNodeIter<'g>> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
-        let mut merger = MergeIterBuilder::default();
+        let mut merger = MergingIterBuilder::default();
         loop {
             match page.kind() {
                 PageKind::Data => {
@@ -306,7 +307,7 @@ impl BTree {
         ghost: &'g Ghost,
     ) -> Result<IndexNodeIter<'g>> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
-        let mut merger = MergeIterBuilder::default();
+        let mut merger = MergingIterBuilder::default();
         loop {
             match page.kind() {
                 PageKind::Index => {

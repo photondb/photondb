@@ -1,5 +1,5 @@
 use super::{
-    page::{DataPageIter, IndexPageIter, MergeIter, PageKind, PagePtr, PageRef},
+    page::{DataPageIter, IndexPageIter, MergingIter, PageKind, PagePtr, PageRef},
     pagestore::{PageAddr, PageInfo},
 };
 
@@ -49,5 +49,5 @@ pub struct NodePair<'a> {
     pub view: PageView<'a>,
 }
 
-pub type DataNodeIter<'a> = MergeIter<DataPageIter<'a>>;
-pub type IndexNodeIter<'a> = MergeIter<IndexPageIter<'a>>;
+pub type DataNodeIter<'a> = MergingIter<DataPageIter<'a>>;
+pub type IndexNodeIter<'a> = MergingIter<IndexPageIter<'a>>;
