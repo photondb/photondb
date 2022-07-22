@@ -3,7 +3,7 @@ use std::{
     marker::PhantomData,
 };
 
-// A non-null page pointer.
+// A page pointer.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum PagePtr {
     Mem(u64),
@@ -12,9 +12,22 @@ pub enum PagePtr {
 
 const MEM_DISK_MASK: u64 = 1 << 63;
 
+impl PagePtr {
+    pub const fn null() -> Self {
+        Self::Mem(0)
+    }
+
+    pub fn is_null(&self) -> bool {
+        if let Self::Mem(0) = self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
 impl From<u64> for PagePtr {
     fn from(addr: u64) -> Self {
-        debug_assert!(addr != 0);
         if addr & MEM_DISK_MASK == 0 {
             Self::Mem(addr)
         } else {
@@ -75,8 +88,16 @@ impl PageBuf {
         self.raw.set_kind(kind);
     }
 
+    pub fn next(&self) -> PagePtr {
+        self.raw.next()
+    }
+
     pub fn set_next(&mut self, next: PagePtr) {
         self.raw.set_next(next.into());
+    }
+
+    pub(super) fn content(&self) -> *const u8 {
+        self.raw.content()
     }
 
     pub(super) fn content_mut(&mut self) -> *mut u8 {
@@ -123,13 +144,8 @@ impl PageRef<'_> {
         self.raw.kind()
     }
 
-    pub fn next(&self) -> Option<PagePtr> {
-        let ptr = self.raw.next();
-        if ptr == 0 {
-            None
-        } else {
-            Some(ptr.into())
-        }
+    pub fn next(&self) -> PagePtr {
+        self.raw.next()
     }
 
     pub(super) fn content(&self) -> *const u8 {
@@ -258,17 +274,17 @@ impl RawPage {
         }
     }
 
-    fn next(&self) -> u64 {
+    fn next(&self) -> PagePtr {
         unsafe {
             let ptr = self.0 as *const u64;
-            ptr.add(1).read()
+            ptr.add(1).read().into()
         }
     }
 
-    fn set_next(&mut self, next: u64) {
+    fn set_next(&mut self, next: PagePtr) {
         unsafe {
             let ptr = self.0 as *mut u64;
-            ptr.add(1).write(next);
+            ptr.add(1).write(next.into());
         }
     }
 

@@ -21,18 +21,14 @@ impl BTree {
             cache,
             store,
         };
-        tree.recover().await?;
-        Ok(tree)
-    }
-
-    async fn recover(&self) -> Result<()> {
+        tree.init();
         // TODO: recovers the page table from the page store.
-        Ok(())
+        Ok(tree)
     }
 
     pub async fn get<'g>(
         &self,
-        key: &'g [u8],
+        key: &[u8],
         lsn: u64,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
@@ -45,7 +41,7 @@ impl BTree {
         }
     }
 
-    async fn try_get<'g>(&self, key: Key<'g>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
+    async fn try_get<'g>(&self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_data_node(key.raw, ghost).await?;
         self.search_data_node(&node, key, ghost).await
     }
@@ -118,9 +114,32 @@ impl BTree {
     }
 }
 
+const ROOT_ID: u64 = 0;
+const ROOT_INDEX: Index = Index {
+    id: ROOT_ID,
+    ver: 0,
+};
+
 impl BTree {
-    const fn root() -> Index {
-        Index { id: 0, ver: 0 }
+    fn init(&self) {
+        let ghost = Ghost::pin();
+        let root_id = self.table.alloc(ghost.guard()).unwrap();
+        assert_eq!(root_id, ROOT_ID);
+        let data_id = self.table.alloc(ghost.guard()).unwrap();
+        let data_page = DataPageBuilder::default().build(&self.cache).unwrap();
+        self.update_node(data_id, PagePtr::null(), data_page.as_ptr())
+            .unwrap();
+        let data_index = Index::new(data_id, 0);
+        let mut iter = SingleIter::from(([].as_slice(), data_index));
+        let root_page = IndexPageBuilder::default()
+            .build_from_iter(&mut iter, &self.cache)
+            .unwrap();
+        self.update_node(root_id, PagePtr::null(), root_page.as_ptr())
+            .unwrap();
+    }
+
+    async fn recover(&self) -> Result<()> {
+        Ok(())
     }
 
     fn page_ptr(&self, id: NodeId) -> PagePtr {
@@ -160,10 +179,6 @@ impl BTree {
         todo!()
     }
 
-    fn swapout_page<'g>(&self, id: NodeId, ptr: PagePtr, ghost: &'g Ghost) -> Result<PageRef<'g>> {
-        todo!()
-    }
-
     async fn load_page_with_ptr<'g>(
         &self,
         id: NodeId,
@@ -199,7 +214,7 @@ impl BTree {
     }
 
     async fn try_find_data_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<NodePair<'g>> {
-        let mut cursor = Self::root();
+        let mut cursor = ROOT_INDEX;
         let mut parent = None;
         loop {
             let node = self.node_pair(cursor.id, ghost);
@@ -239,7 +254,8 @@ impl BTree {
                 }
                 _ => unreachable!(),
             }
-            if let Some(next) = page.next() {
+            let next = page.next();
+            if !next.is_null() {
                 page = self.load_page_with_ptr(node.id, next, ghost).await?;
             } else {
                 return Ok(merger.build());
@@ -250,7 +266,7 @@ impl BTree {
     async fn search_data_node<'g>(
         &self,
         node: &NodePair<'g>,
-        key: Key<'g>,
+        key: Key<'_>,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
@@ -261,7 +277,8 @@ impl BTree {
                 }
                 _ => unreachable!(),
             }
-            if let Some(next) = page.next() {
+            let next = page.next();
+            if !next.is_null() {
                 page = self.load_page_with_ptr(node.id, next, ghost).await?;
             } else {
                 return Ok(None);
@@ -316,7 +333,8 @@ impl BTree {
                 }
                 _ => unreachable!(),
             }
-            if let Some(next) = page.next() {
+            let next = page.next();
+            if !next.is_null() {
                 page = self.load_page_with_ptr(node.id, next, ghost).await?;
             } else {
                 return Ok(merger.build());
@@ -341,7 +359,8 @@ impl BTree {
                 }
                 _ => unreachable!(),
             }
-            if let Some(next) = page.next() {
+            let next = page.next();
+            if !next.is_null() {
                 page = self.load_page_with_ptr(node.id, next, ghost).await?;
             } else {
                 todo!()

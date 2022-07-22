@@ -9,4 +9,8 @@ impl Ghost {
         let guard = crossbeam_epoch::pin();
         Self { guard }
     }
+
+    pub fn guard(&self) -> &Guard {
+        &self.guard
+    }
 }

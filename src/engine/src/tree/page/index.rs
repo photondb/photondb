@@ -23,6 +23,12 @@ pub struct Index {
     pub ver: u64,
 }
 
+impl Index {
+    pub fn new(id: u64, ver: u64) -> Self {
+        Self { id, ver }
+    }
+}
+
 impl Encodable for Index {
     fn encode_to(&self, w: &mut BufWriter) {
         w.put_u64(self.id);

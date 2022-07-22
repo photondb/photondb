@@ -1,12 +1,11 @@
 use std::{
     cmp::Ordering,
-    iter::Iterator,
     marker::PhantomData,
     mem::size_of,
     ops::{Deref, DerefMut},
 };
 
-use super::{PageAlloc, PageBuf, PageIter, PageRef, PAGE_HEADER_SIZE};
+use super::{PageAlloc, PageBuf, PageIter, PageRef, SingleIter, PAGE_HEADER_SIZE};
 
 pub trait Encodable {
     fn encode_to(&self, w: &mut BufWriter);
@@ -135,6 +134,17 @@ impl SortedPageBuilder {
 
     fn size(&self) -> usize {
         PAGE_HEADER_SIZE + (self.len + 1) * size_of::<u64>() + self.size
+    }
+
+    pub fn build<A>(mut self, alloc: &A) -> Option<SortedPageBuf>
+    where
+        A: PageAlloc,
+    {
+        if let Some(buf) = unsafe { alloc.alloc_page(self.size()) } {
+            Some(unsafe { SortedPageBuf::new(buf, self) })
+        } else {
+            None
+        }
     }
 
     pub fn build_from_iter<I, A>(mut self, iter: &mut I, alloc: &A) -> Option<SortedPageBuf>
