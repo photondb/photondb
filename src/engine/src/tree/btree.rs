@@ -222,11 +222,13 @@ impl BTree {
                 self.try_help_pending_smo(&node, parent, ghost)?;
                 return Err(Error::Conflict);
             }
-            if node.view.kind().is_leaf() {
-                return Ok(node);
+            match node.view.tag() {
+                PageTag::Leaf(_) => return Ok(node),
+                PageTag::Internal(_) => {
+                    cursor = self.search_index_node(&node, key, ghost).await?;
+                    parent = Some(node);
+                }
             }
-            cursor = self.search_index_node(&node, key, ghost).await?;
-            parent = Some(node);
         }
     }
 

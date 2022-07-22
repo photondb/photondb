@@ -10,28 +10,25 @@ pub enum PagePtr {
     Disk(u64),
 }
 
-const MEM_DISK_MASK: u64 = 1 << 63;
+const DISK_PTR_MASK: u64 = 1 << 63;
+const DISK_ADDR_MASK: u64 = !DISK_PTR_MASK;
 
 impl PagePtr {
     pub const fn null() -> Self {
         Self::Mem(0)
     }
 
-    pub fn is_null(&self) -> bool {
-        if let Self::Mem(0) = self {
-            true
-        } else {
-            false
-        }
+    pub fn is_null(self) -> bool {
+        self == Self::null()
     }
 }
 
 impl From<u64> for PagePtr {
-    fn from(addr: u64) -> Self {
-        if addr & MEM_DISK_MASK == 0 {
-            Self::Mem(addr)
+    fn from(ptr: u64) -> Self {
+        if ptr & DISK_PTR_MASK == 0 {
+            Self::Mem(ptr)
         } else {
-            Self::Disk(addr & !MEM_DISK_MASK)
+            Self::Disk(ptr & DISK_ADDR_MASK)
         }
     }
 }
@@ -40,7 +37,7 @@ impl From<PagePtr> for u64 {
     fn from(ptr: PagePtr) -> u64 {
         match ptr {
             PagePtr::Mem(addr) => addr,
-            PagePtr::Disk(addr) => addr | MEM_DISK_MASK,
+            PagePtr::Disk(addr) => addr | DISK_PTR_MASK,
         }
     }
 }
@@ -80,16 +77,16 @@ impl PageBuf {
         self.raw.set_len(len);
     }
 
-    pub fn kind(&self) -> PageKind {
-        self.raw.kind().into()
+    pub fn tag(&self) -> PageTag {
+        self.raw.tag().into()
     }
 
-    pub fn set_kind(&mut self, kind: PageKind) {
-        self.raw.set_kind(kind.into());
+    pub fn set_tag(&mut self, tag: PageTag) {
+        self.raw.set_tag(tag.into());
     }
 
     pub fn next(&self) -> PagePtr {
-        self.raw.next()
+        self.raw.next().into()
     }
 
     pub fn set_next(&mut self, next: PagePtr) {
@@ -140,12 +137,12 @@ impl PageRef<'_> {
         self.raw.len()
     }
 
-    pub fn kind(&self) -> PageKind {
-        self.raw.kind().into()
+    pub fn tag(&self) -> PageTag {
+        self.raw.tag().into()
     }
 
     pub fn next(&self) -> PagePtr {
-        self.raw.next()
+        self.raw.next().into()
     }
 
     pub(super) fn content(&self) -> *const u8 {
@@ -172,45 +169,46 @@ impl From<PageRef<'_>> for PagePtr {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct PageKind(u8);
+pub enum PageTag {
+    Leaf(PageKind),
+    Internal(PageKind),
+}
 
-const PAGE_KIND_MASK: u8 = 1 << 7;
+const INTERNAL_TAG_MASK: u8 = 1 << 7;
+const INTERNAL_KIND_MASK: u8 = !INTERNAL_TAG_MASK;
 
-impl PageKind {
-    pub fn is_leaf(self) -> bool {
-        self.0 & PAGE_KIND_MASK == 0
-    }
-
-    pub fn subkind(self) -> PageSubKind {
-        self.0.into()
+impl From<u8> for PageTag {
+    fn from(tag: u8) -> Self {
+        if tag & INTERNAL_TAG_MASK == 0 {
+            PageTag::Leaf(tag.into())
+        } else {
+            PageTag::Internal((tag & INTERNAL_KIND_MASK).into())
+        }
     }
 }
 
-impl From<u8> for PageKind {
-    fn from(kind: u8) -> Self {
-        Self(kind)
-    }
-}
-
-impl From<PageKind> for u8 {
-    fn from(kind: PageKind) -> u8 {
-        kind.0
+impl From<PageTag> for u8 {
+    fn from(tag: PageTag) -> u8 {
+        match tag {
+            PageTag::Leaf(kind) => kind as u8,
+            PageTag::Internal(kind) => kind as u8 | INTERNAL_TAG_MASK,
+        }
     }
 }
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub enum PageSubKind {
+pub enum PageKind {
     Data = 0,
     Split = 1,
 }
 
-impl From<u8> for PageSubKind {
+impl From<u8> for PageKind {
     fn from(kind: u8) -> Self {
-        match kind & !PAGE_KIND_MASK {
+        match kind {
             0 => Self::Data,
             1 => Self::Split,
-            _ => panic!("invalid page sub kind"),
+            _ => panic!("invalid page kind"),
         }
     }
 }
@@ -243,7 +241,7 @@ unsafe fn alloc_layout(size: usize) -> Layout {
     Layout::from_size_align_unchecked(size, PAGE_HEADER_ALIGNMENT)
 }
 
-// Page header: | ver (6B) | len (1B) | kind (1B) | next (8B) |
+// Page header: | ver (6B) | len (1B) | tag (1B) | next (8B) |
 pub(super) const PAGE_HEADER_SIZE: usize = 16;
 pub(super) const PAGE_HEADER_ALIGNMENT: usize = 8;
 
@@ -263,7 +261,7 @@ impl RawPage {
     fn set_ver(&mut self, ver: u64) {
         unsafe {
             let ptr = self.0 as *mut u64;
-            ptr.write(ver << 16 | (self.len() as u64) << 8 | self.kind() as u64);
+            ptr.write(ver << 16 | (self.len() as u64) << 8 | self.tag() as u64);
         }
     }
 
@@ -281,31 +279,31 @@ impl RawPage {
         }
     }
 
-    fn kind(&self) -> u8 {
+    fn tag(&self) -> u8 {
         unsafe {
             let ptr = self.0 as *const u8;
             ptr.add(7).read()
         }
     }
 
-    fn set_kind(&mut self, kind: u8) {
+    fn set_tag(&mut self, tag: u8) {
         unsafe {
             let ptr = self.0 as *mut u8;
-            ptr.add(7).write(kind);
+            ptr.add(7).write(tag);
         }
     }
 
-    fn next(&self) -> PagePtr {
+    fn next(&self) -> u64 {
         unsafe {
             let ptr = self.0 as *const u64;
-            ptr.add(1).read().into()
+            ptr.add(1).read()
         }
     }
 
-    fn set_next(&mut self, next: PagePtr) {
+    fn set_next(&mut self, next: u64) {
         unsafe {
             let ptr = self.0 as *mut u64;
-            ptr.add(1).write(next.into());
+            ptr.add(1).write(next);
         }
     }
 

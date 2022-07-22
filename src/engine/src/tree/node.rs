@@ -1,5 +1,5 @@
 use super::{
-    page::{DataPageIter, IndexPageIter, MergingIter, PageKind, PagePtr, PageRef},
+    page::{DataPageIter, IndexPageIter, MergingIter, PagePtr, PageRef, PageTag},
     pagestore::{PageAddr, PageInfo},
 };
 
@@ -25,10 +25,10 @@ impl<'a> PageView<'a> {
         }
     }
 
-    pub fn kind(&self) -> PageKind {
+    pub fn tag(&self) -> PageTag {
         match self {
-            Self::Mem(page) => page.kind(),
-            Self::Disk(_, page) => page.kind,
+            Self::Mem(page) => page.tag(),
+            Self::Disk(_, page) => page.tag,
         }
     }
 

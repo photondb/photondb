@@ -1,12 +1,12 @@
 use crate::tree::{
-    page::{PageBuf, PageKind},
+    page::{PageBuf, PageTag},
     Result,
 };
 
 pub struct PageInfo {
     pub ver: u64,
     pub len: u8,
-    pub kind: PageKind,
+    pub tag: PageTag,
     pub handle: PageHandle,
 }
 
