@@ -222,7 +222,7 @@ impl BTree {
                 self.try_help_pending_smo(&node, parent, ghost)?;
                 return Err(Error::Conflict);
             }
-            if node.view.is_data() {
+            if node.view.kind().is_leaf() {
                 return Ok(node);
             }
             cursor = self.search_index_node(&node, key, ghost).await?;
@@ -247,13 +247,6 @@ impl BTree {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
         let mut merger = MergingIterBuilder::default();
         loop {
-            match page.kind() {
-                PageKind::Data => {
-                    let page = DataPageRef::from(page);
-                    merger.add(page.iter());
-                }
-                _ => unreachable!(),
-            }
             let next = page.next();
             if !next.is_null() {
                 page = self.load_page_with_ptr(node.id, next, ghost).await?;
@@ -271,12 +264,6 @@ impl BTree {
     ) -> Result<Option<&'g [u8]>> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
         loop {
-            match page.kind() {
-                PageKind::Data => {
-                    todo!()
-                }
-                _ => unreachable!(),
-            }
             let next = page.next();
             if !next.is_null() {
                 page = self.load_page_with_ptr(node.id, next, ghost).await?;
@@ -326,13 +313,6 @@ impl BTree {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
         let mut merger = MergingIterBuilder::default();
         loop {
-            match page.kind() {
-                PageKind::Index => {
-                    let page = IndexPageRef::from(page);
-                    merger.add(page.iter());
-                }
-                _ => unreachable!(),
-            }
             let next = page.next();
             if !next.is_null() {
                 page = self.load_page_with_ptr(node.id, next, ghost).await?;
@@ -350,15 +330,6 @@ impl BTree {
     ) -> Result<Index> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
         loop {
-            match page.kind() {
-                PageKind::Data => {
-                    let page = IndexPageRef::from(page);
-                    if let Some((key, value)) = page.seek(&target) {
-                        todo!()
-                    }
-                }
-                _ => unreachable!(),
-            }
             let next = page.next();
             if !next.is_null() {
                 page = self.load_page_with_ptr(node.id, next, ghost).await?;

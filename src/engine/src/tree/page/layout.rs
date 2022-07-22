@@ -5,110 +5,9 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use super::{PageAlloc, PageBuf, PageIter, PageRef, SingleIter, PAGE_HEADER_SIZE};
-
-pub trait Encodable {
-    fn encode_to(&self, w: &mut BufWriter);
-    fn encode_size(&self) -> usize;
-}
-
-pub trait Decodable {
-    fn decode_from(r: &mut BufReader) -> Self;
-}
-
-pub struct BufReader {
-    ptr: *const u8,
-    pos: usize,
-}
-
-macro_rules! impl_get {
-    ($name:ident, $t:ty) => {
-        pub fn $name(&mut self) -> $t {
-            unsafe {
-                let ptr = self.ptr.add(self.pos) as *const $t;
-                self.pos += size_of::<$t>();
-                ptr.read()
-            }
-        }
-    };
-}
-
-impl BufReader {
-    pub fn new(ptr: *const u8) -> Self {
-        Self { ptr, pos: 0 }
-    }
-
-    pub fn pos(&self) -> usize {
-        self.pos
-    }
-
-    impl_get!(get_u8, u8);
-    impl_get!(get_u16, u16);
-    impl_get!(get_u32, u32);
-    impl_get!(get_u64, u64);
-
-    pub fn get_slice<'a>(&mut self, len: usize) -> &'a [u8] {
-        unsafe {
-            let ptr = self.ptr.add(self.pos);
-            self.pos += len;
-            std::slice::from_raw_parts(ptr, len)
-        }
-    }
-
-    pub fn get_length_prefixed_slice<'a>(&mut self) -> &'a [u8] {
-        let len = self.get_u32();
-        self.get_slice(len as usize)
-    }
-}
-
-pub struct BufWriter {
-    ptr: *mut u8,
-    pos: usize,
-}
-
-macro_rules! impl_put {
-    ($name:ident, $t:ty) => {
-        pub fn $name(&mut self, v: $t) {
-            unsafe {
-                let ptr = self.ptr.add(self.pos) as *mut $t;
-                ptr.write(v);
-                self.pos += size_of::<$t>();
-            }
-        }
-    };
-}
-
-impl BufWriter {
-    pub fn new(ptr: *mut u8) -> Self {
-        Self { ptr, pos: 0 }
-    }
-
-    pub fn pos(&self) -> usize {
-        self.pos
-    }
-
-    impl_put!(put_u8, u8);
-    impl_put!(put_u16, u16);
-    impl_put!(put_u32, u32);
-    impl_put!(put_u64, u64);
-
-    pub fn put_slice(&mut self, slice: &[u8]) {
-        unsafe {
-            let ptr = self.ptr.add(self.pos) as *mut u8;
-            ptr.copy_from(slice.as_ptr(), slice.len());
-            self.pos += slice.len();
-        }
-    }
-
-    pub fn put_length_prefixed_slice(&mut self, slice: &[u8]) {
-        self.put_u32(slice.len() as u32);
-        self.put_slice(slice);
-    }
-
-    pub fn length_prefixed_slice_size(slice: &[u8]) -> usize {
-        size_of::<u32>() + slice.len()
-    }
-}
+use super::{
+    base::PAGE_HEADER_SIZE, codec::*, util::*, PageAlloc, PageBuf, PageIter, PageRef, SingleIter,
+};
 
 // TODO: Optimizes the page layout with
 // https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
@@ -388,3 +287,12 @@ where
         self.current = None;
     }
 }
+
+pub type DataPageBuf = SortedPageBuf;
+pub type DataPageBuilder = SortedPageBuilder;
+pub type DataPageRef<'a> = SortedPageRef<'a, Key<'a>, Value<'a>>;
+pub type DataPageIter<'a> = SortedPageIter<'a, Key<'a>, Value<'a>>;
+pub type IndexPageBuf = SortedPageBuf;
+pub type IndexPageBuilder = SortedPageBuilder;
+pub type IndexPageRef<'a> = SortedPageRef<'a, &'a [u8], Index>;
+pub type IndexPageIter<'a> = SortedPageIter<'a, &'a [u8], Index>;

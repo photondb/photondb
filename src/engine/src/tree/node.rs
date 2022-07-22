@@ -32,10 +32,6 @@ impl<'a> PageView<'a> {
         }
     }
 
-    pub fn is_data(&self) -> bool {
-        self.kind().is_data()
-    }
-
     pub fn as_ptr(&self) -> PagePtr {
         match *self {
             Self::Mem(page) => PagePtr::Mem(page.into()),

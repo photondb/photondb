@@ -81,11 +81,11 @@ impl PageBuf {
     }
 
     pub fn kind(&self) -> PageKind {
-        self.raw.kind()
+        self.raw.kind().into()
     }
 
     pub fn set_kind(&mut self, kind: PageKind) {
-        self.raw.set_kind(kind);
+        self.raw.set_kind(kind.into());
     }
 
     pub fn next(&self) -> PagePtr {
@@ -141,7 +141,7 @@ impl PageRef<'_> {
     }
 
     pub fn kind(&self) -> PageKind {
-        self.raw.kind()
+        self.raw.kind().into()
     }
 
     pub fn next(&self) -> PagePtr {
@@ -171,25 +171,46 @@ impl From<PageRef<'_>> for PagePtr {
     }
 }
 
-#[repr(u8)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub enum PageKind {
-    Data = 0,
-    Index = 1,
-}
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct PageKind(u8);
+
+const PAGE_KIND_MASK: u8 = 1 << 7;
 
 impl PageKind {
-    pub fn is_data(self) -> bool {
-        self < Self::Index
+    pub fn is_leaf(self) -> bool {
+        self.0 & PAGE_KIND_MASK == 0
+    }
+
+    pub fn subkind(self) -> PageSubKind {
+        self.0.into()
     }
 }
 
 impl From<u8> for PageKind {
-    fn from(v: u8) -> Self {
-        match v {
+    fn from(kind: u8) -> Self {
+        Self(kind)
+    }
+}
+
+impl From<PageKind> for u8 {
+    fn from(kind: PageKind) -> u8 {
+        kind.0
+    }
+}
+
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum PageSubKind {
+    Data = 0,
+    Split = 1,
+}
+
+impl From<u8> for PageSubKind {
+    fn from(kind: u8) -> Self {
+        match kind & !PAGE_KIND_MASK {
             0 => Self::Data,
-            1 => Self::Index,
-            _ => panic!("invalid page kind"),
+            1 => Self::Split,
+            _ => panic!("invalid page sub kind"),
         }
     }
 }
@@ -260,17 +281,17 @@ impl RawPage {
         }
     }
 
-    fn kind(&self) -> PageKind {
+    fn kind(&self) -> u8 {
         unsafe {
             let ptr = self.0 as *const u8;
-            ptr.add(7).read().into()
+            ptr.add(7).read()
         }
     }
 
-    fn set_kind(&mut self, kind: PageKind) {
+    fn set_kind(&mut self, kind: u8) {
         unsafe {
             let ptr = self.0 as *mut u8;
-            ptr.add(7).write(kind as u8);
+            ptr.add(7).write(kind);
         }
     }
 

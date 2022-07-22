@@ -3,7 +3,32 @@ use std::{
     mem::size_of,
 };
 
-use super::format::*;
+use super::util::*;
+
+pub trait Encodable {
+    fn encode_to(&self, w: &mut BufWriter);
+    fn encode_size(&self) -> usize;
+}
+
+pub trait Decodable {
+    fn decode_from(r: &mut BufReader) -> Self;
+}
+
+impl Encodable for &[u8] {
+    fn encode_to(&self, w: &mut BufWriter) {
+        w.put_length_prefixed_slice(self);
+    }
+
+    fn encode_size(&self) -> usize {
+        BufWriter::length_prefixed_slice_size(self)
+    }
+}
+
+impl Decodable for &[u8] {
+    fn decode_from(r: &mut BufReader) -> Self {
+        r.get_length_prefixed_slice()
+    }
+}
 
 #[derive(Copy, Clone, Debug)]
 pub struct Key<'a> {
@@ -28,7 +53,7 @@ impl PartialEq for Key<'_> {
 impl Ord for Key<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.raw.cmp(other.raw) {
-            Ordering::Equal => self.lsn.cmp(&other.lsn).reverse(),
+            Ordering::Equal => other.lsn.cmp(&self.lsn),
             o => o,
         }
     }
@@ -86,7 +111,7 @@ impl Encodable for Value<'_> {
 
 impl Decodable for Value<'_> {
     fn decode_from(r: &mut BufReader) -> Self {
-        let kind: ValueKind = r.get_u8().into();
+        let kind = ValueKind::from(r.get_u8());
         match kind {
             ValueKind::Put => {
                 let value = r.get_length_prefixed_slice();
@@ -114,7 +139,33 @@ impl From<u8> for ValueKind {
     }
 }
 
-pub type DataPageBuf = SortedPageBuf;
-pub type DataPageBuilder = SortedPageBuilder;
-pub type DataPageRef<'a> = SortedPageRef<'a, Key<'a>, Value<'a>>;
-pub type DataPageIter<'a> = SortedPageIter<'a, Key<'a>, Value<'a>>;
+#[derive(Copy, Clone, Debug)]
+pub struct Index {
+    pub id: u64,
+    pub ver: u64,
+}
+
+impl Index {
+    pub fn new(id: u64, ver: u64) -> Self {
+        Self { id, ver }
+    }
+}
+
+impl Encodable for Index {
+    fn encode_to(&self, w: &mut BufWriter) {
+        w.put_u64(self.id);
+        w.put_u64(self.ver);
+    }
+
+    fn encode_size(&self) -> usize {
+        size_of::<u64>() * 2
+    }
+}
+
+impl Decodable for Index {
+    fn decode_from(r: &mut BufReader) -> Self {
+        let id = r.get_u64();
+        let ver = r.get_u64();
+        Self { id, ver }
+    }
+}
