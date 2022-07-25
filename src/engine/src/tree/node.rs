@@ -5,6 +5,43 @@ use super::{
 
 pub type NodeId = u64;
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum PageAddr {
+    Mem(u64),
+    Disk(u64),
+}
+
+const MEM_DISK_MASK: u64 = 1 << 63;
+
+impl PageAddr {
+    pub const fn null() -> Self {
+        Self::Mem(0)
+    }
+
+    pub const fn is_null(self) -> bool {
+        self == Self::null()
+    }
+}
+
+impl From<u64> for PageAddr {
+    fn from(addr: u64) -> Self {
+        if addr & MEM_DISK_MASK == 0 {
+            Self::Mem(addr)
+        } else {
+            Self::Disk(addr & !MEM_DISK_MASK)
+        }
+    }
+}
+
+impl From<PageAddr> for u64 {
+    fn from(addr: PageAddr) -> u64 {
+        match addr {
+            PageAddr::Mem(addr) => addr,
+            PageAddr::Disk(addr) => addr | MEM_DISK_MASK,
+        }
+    }
+}
+
 pub enum PageView<'a> {
     Mem(PageRef<'a>),
     Disk(PageAddr, PageInfo),

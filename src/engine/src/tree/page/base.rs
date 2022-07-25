@@ -1,323 +1,183 @@
-use std::{
-    alloc::{GlobalAlloc, Layout},
-    marker::PhantomData,
-};
+use std::{alloc::Layout, marker::PhantomData};
 
-// A page pointer.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum PagePtr {
-    Mem(u64),
-    Disk(u64),
-}
+use bitflags::bitflags;
 
-const DISK_PTR_MASK: u64 = 1 << 63;
-const DISK_ADDR_MASK: u64 = !DISK_PTR_MASK;
+// Page layout: | ver (6B) | tag (1B) | len (1B) | next (8B) | content |
+const PAGE_ALIGNMENT: usize = 8;
+const PAGE_HEADER_SIZE: usize = 16;
+const PAGE_VERSION_SIZE: usize = 6;
+
+#[derive(Copy, Clone, Debug)]
+pub struct PagePtr(*mut u8);
 
 impl PagePtr {
-    pub const fn null() -> Self {
-        Self::Mem(0)
-    }
-
-    pub fn is_null(self) -> bool {
-        self == Self::null()
-    }
-}
-
-impl From<u64> for PagePtr {
-    fn from(ptr: u64) -> Self {
-        if ptr & DISK_PTR_MASK == 0 {
-            Self::Mem(ptr)
-        } else {
-            Self::Disk(ptr & DISK_ADDR_MASK)
-        }
-    }
-}
-
-impl From<PagePtr> for u64 {
-    fn from(ptr: PagePtr) -> u64 {
-        match ptr {
-            PagePtr::Mem(addr) => addr,
-            PagePtr::Disk(addr) => addr | DISK_PTR_MASK,
-        }
-    }
-}
-
-// A mutable page buffer.
-pub struct PageBuf {
-    raw: RawPage,
-    size: usize,
-}
-
-impl PageBuf {
-    unsafe fn from_raw(ptr: *mut u8, size: usize) -> Self {
-        debug_assert!(size >= PAGE_HEADER_SIZE);
-        Self {
-            raw: RawPage(ptr as u64),
-            size,
-        }
+    unsafe fn from_raw(ptr: *mut u8) -> Self {
+        Self(ptr)
     }
 
     unsafe fn into_raw(self) -> *mut u8 {
-        self.raw.0 as *mut u8
+        self.0
+    }
+
+    unsafe fn ver_ptr(&self) -> *mut u8 {
+        self.0
+    }
+
+    unsafe fn tag_ptr(&self) -> *mut u8 {
+        self.0.add(PAGE_VERSION_SIZE)
+    }
+
+    unsafe fn len_ptr(&self) -> *mut u8 {
+        self.0.add(PAGE_VERSION_SIZE + 1)
+    }
+
+    unsafe fn next_ptr(&self) -> *mut u64 {
+        (self.0 as *mut u64).add(1)
+    }
+
+    unsafe fn content_ptr(&self) -> *mut u8 {
+        self.0.add(PAGE_HEADER_SIZE)
     }
 
     pub fn ver(&self) -> u64 {
-        self.raw.ver()
+        unsafe {
+            let mut ver = 0u64;
+            let ver_ptr = &mut ver as *mut u64 as *mut u8;
+            ver_ptr.copy_from_nonoverlapping(self.ver_ptr(), PAGE_VERSION_SIZE);
+            u64::from_le(ver)
+        }
     }
 
     pub fn set_ver(&mut self, ver: u64) {
-        self.raw.set_ver(ver);
-    }
-
-    pub fn len(&self) -> u8 {
-        self.raw.len()
-    }
-
-    pub fn set_len(&mut self, len: u8) {
-        self.raw.set_len(len);
+        unsafe {
+            let ver = ver.to_le();
+            let ver_ptr = &ver as *const u64 as *const u8;
+            ver_ptr.copy_to_nonoverlapping(self.ver_ptr(), PAGE_VERSION_SIZE);
+        }
     }
 
     pub fn tag(&self) -> PageTag {
-        self.raw.tag().into()
+        unsafe {
+            let bits = self.tag_ptr().read();
+            PageTag::from_bits_truncate(bits)
+        }
     }
 
     pub fn set_tag(&mut self, tag: PageTag) {
-        self.raw.set_tag(tag.into());
+        unsafe {
+            self.tag_ptr().write(tag.bits());
+        }
     }
 
-    pub fn next(&self) -> PagePtr {
-        self.raw.next().into()
+    pub fn len(&self) -> u8 {
+        unsafe { self.len_ptr().read() }
     }
 
-    pub fn set_next(&mut self, next: PagePtr) {
-        self.raw.set_next(next.into());
+    pub fn set_len(&mut self, len: u8) {
+        unsafe {
+            self.len_ptr().write(len);
+        }
     }
 
-    pub(super) fn content(&self) -> *const u8 {
-        self.raw.content()
+    pub fn next(&self) -> u64 {
+        unsafe { self.next_ptr().read().to_le() }
     }
 
-    pub(super) fn content_mut(&mut self) -> *mut u8 {
-        self.raw.content_mut()
+    pub fn set_next(&mut self, next: u64) {
+        unsafe {
+            self.next_ptr().write(next.to_le());
+        }
     }
 
-    pub fn size(&self) -> usize {
-        self.size
+    pub fn content(&self) -> *const u8 {
+        unsafe { self.content_ptr() }
     }
 
-    pub fn as_ptr(&self) -> PagePtr {
-        PagePtr::Mem(self.raw.0)
-    }
-
-    pub fn as_ref(&self) -> PageRef {
-        PageRef::new(self.raw.0)
+    pub fn content_mut(&mut self) -> *mut u8 {
+        unsafe { self.content_ptr() }
     }
 }
 
-// An immutable page reference.
 #[derive(Copy, Clone, Debug)]
 pub struct PageRef<'a> {
-    raw: RawPage,
+    ptr: PagePtr,
     _mark: PhantomData<&'a ()>,
 }
 
 impl PageRef<'_> {
-    fn new(ptr: u64) -> Self {
+    fn new(ptr: PagePtr) -> Self {
         Self {
-            raw: RawPage(ptr),
+            ptr,
             _mark: PhantomData,
         }
     }
 
     pub fn ver(&self) -> u64 {
-        self.raw.ver()
-    }
-
-    pub fn len(&self) -> u8 {
-        self.raw.len()
+        self.ptr.ver()
     }
 
     pub fn tag(&self) -> PageTag {
-        self.raw.tag().into()
+        self.ptr.tag()
     }
 
-    pub fn next(&self) -> PagePtr {
-        self.raw.next().into()
+    pub fn len(&self) -> u8 {
+        self.ptr.len()
     }
 
-    pub(super) fn content(&self) -> *const u8 {
-        self.raw.content()
+    pub fn next(&self) -> u64 {
+        self.ptr.next()
+    }
+
+    pub fn content(&self) -> *const u8 {
+        self.ptr.content()
     }
 }
 
-impl From<u64> for PageRef<'_> {
-    fn from(ptr: u64) -> Self {
+impl From<PagePtr> for PageRef<'_> {
+    fn from(ptr: PagePtr) -> Self {
         Self::new(ptr)
     }
 }
 
-impl From<PageRef<'_>> for u64 {
-    fn from(page: PageRef) -> u64 {
-        page.raw.0
+bitflags! {
+    pub struct PageTag: u8 {
+        const LEAF  = 0b10000000;
+        const DATA  = 0b00000000;
+        const SPLIT = 0b00000001;
     }
 }
 
-impl From<PageRef<'_>> for PagePtr {
-    fn from(page: PageRef) -> Self {
-        PagePtr::Mem(page.raw.0)
+impl PageTag {
+    pub const fn is_leaf(self) -> bool {
+        self.contains(Self::LEAF)
+    }
+
+    pub fn as_kind(self) -> Self {
+        self & !Self::LEAF
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum PageTag {
-    Leaf(PageKind),
-    Internal(PageKind),
-}
+pub unsafe trait Alloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8;
 
-const INTERNAL_TAG_MASK: u8 = 1 << 7;
-const INTERNAL_KIND_MASK: u8 = !INTERNAL_TAG_MASK;
-
-impl From<u8> for PageTag {
-    fn from(tag: u8) -> Self {
-        if tag & INTERNAL_TAG_MASK == 0 {
-            PageTag::Leaf(tag.into())
-        } else {
-            PageTag::Internal((tag & INTERNAL_KIND_MASK).into())
-        }
-    }
-}
-
-impl From<PageTag> for u8 {
-    fn from(tag: PageTag) -> u8 {
-        match tag {
-            PageTag::Leaf(kind) => kind as u8,
-            PageTag::Internal(kind) => kind as u8 | INTERNAL_TAG_MASK,
-        }
-    }
-}
-
-#[repr(u8)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-pub enum PageKind {
-    Data = 0,
-    Split = 1,
-}
-
-impl From<u8> for PageKind {
-    fn from(kind: u8) -> Self {
-        match kind {
-            0 => Self::Data,
-            1 => Self::Split,
-            _ => panic!("invalid page kind"),
-        }
-    }
-}
-
-// A page allocator.
-pub trait PageAlloc {
-    unsafe fn alloc_page(&self, size: usize) -> Option<PageBuf>;
-
-    unsafe fn dealloc_page(&self, page: PageBuf);
-}
-
-impl<T: GlobalAlloc> PageAlloc for T {
-    unsafe fn alloc_page(&self, size: usize) -> Option<PageBuf> {
-        let layout = alloc_layout(size);
-        let ptr = self.alloc(layout);
-        if ptr.is_null() {
-            None
-        } else {
-            Some(PageBuf::from_raw(ptr, size))
-        }
-    }
-
-    unsafe fn dealloc_page(&self, page: PageBuf) {
-        let layout = alloc_layout(page.size());
-        self.dealloc(page.into_raw(), layout);
-    }
+    unsafe fn dealloc(&self, ptr: *mut u8, align: usize);
 }
 
 unsafe fn alloc_layout(size: usize) -> Layout {
-    Layout::from_size_align_unchecked(size, PAGE_HEADER_ALIGNMENT)
+    Layout::from_size_align_unchecked(size, PAGE_ALIGNMENT)
 }
 
-// Page header: | ver (6B) | len (1B) | tag (1B) | next (8B) |
-pub(super) const PAGE_HEADER_SIZE: usize = 16;
-pub(super) const PAGE_HEADER_ALIGNMENT: usize = 8;
+pub struct PageAlloc<A: Alloc>(A);
 
-// An internal type to do unsafe operations on a page.
-#[derive(Copy, Clone, Debug)]
-struct RawPage(u64);
-
-// TODO: handle endianness
-impl RawPage {
-    fn ver(&self) -> u64 {
-        unsafe {
-            let ptr = self.0 as *const u64;
-            ptr.read() >> 16
-        }
+impl<A: Alloc> PageAlloc<A> {
+    unsafe fn alloc_page(&self, content_size: usize) -> PagePtr {
+        let size = PAGE_HEADER_SIZE + content_size;
+        let ptr = self.0.alloc(alloc_layout(size));
+        PagePtr::from_raw(ptr)
     }
 
-    fn set_ver(&mut self, ver: u64) {
-        unsafe {
-            let ptr = self.0 as *mut u64;
-            ptr.write(ver << 16 | (self.len() as u64) << 8 | self.tag() as u64);
-        }
-    }
-
-    fn len(&self) -> u8 {
-        unsafe {
-            let ptr = self.0 as *const u8;
-            ptr.add(6).read()
-        }
-    }
-
-    fn set_len(&mut self, len: u8) {
-        unsafe {
-            let ptr = self.0 as *mut u8;
-            ptr.add(6).write(len);
-        }
-    }
-
-    fn tag(&self) -> u8 {
-        unsafe {
-            let ptr = self.0 as *const u8;
-            ptr.add(7).read()
-        }
-    }
-
-    fn set_tag(&mut self, tag: u8) {
-        unsafe {
-            let ptr = self.0 as *mut u8;
-            ptr.add(7).write(tag);
-        }
-    }
-
-    fn next(&self) -> u64 {
-        unsafe {
-            let ptr = self.0 as *const u64;
-            ptr.add(1).read()
-        }
-    }
-
-    fn set_next(&mut self, next: u64) {
-        unsafe {
-            let ptr = self.0 as *mut u64;
-            ptr.add(1).write(next);
-        }
-    }
-
-    fn content(&self) -> *const u8 {
-        unsafe {
-            let ptr = self.0 as *const u8;
-            ptr.add(PAGE_HEADER_SIZE)
-        }
-    }
-
-    fn content_mut(&mut self) -> *mut u8 {
-        unsafe {
-            let ptr = self.0 as *mut u8;
-            ptr.add(PAGE_HEADER_SIZE)
-        }
+    unsafe fn dealloc_page(&self, page: PagePtr) {
+        let ptr = page.into_raw();
+        self.0.dealloc(ptr, PAGE_ALIGNMENT);
     }
 }

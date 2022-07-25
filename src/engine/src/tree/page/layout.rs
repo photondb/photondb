@@ -141,10 +141,11 @@ where
     V: Decodable,
 {
     unsafe fn new(base: PageRef<'a>) -> Self {
-        let ptr = base.content() as *const u32;
-        let len = ptr.read() as usize;
-        let offsets = std::slice::from_raw_parts(ptr.add(1), len);
-        let payload = base.content().add(size_of::<u32>() * (len + 1));
+        let offsets_ptr = base.content() as *const u32;
+        let offsets_size = offsets_ptr.read() as usize;
+        let len = payload_offset / size_of::<u32>();
+        let offsets = std::slice::from_raw_parts(ptr, len);
+        let payload = base.content().add(offsets_len);
         Self {
             base,
             offsets,
