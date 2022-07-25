@@ -6,10 +6,10 @@ pub use iter::{
     MergingIter, MergingIterBuilder, OptionIter, RandomAccessIterator, SequentialIterator,
 };
 
-// mod codec;
-// pub use codec::{Decodable, Encodable, Index, Key, Value};
+mod util;
+
+mod codec;
+pub use codec::{Decodable, Encodable, Index, Key, Value};
 
 // mod layout;
 // pub use layout::*;
-
-// mod util;

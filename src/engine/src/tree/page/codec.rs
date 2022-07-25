@@ -3,7 +3,7 @@ use std::{
     mem::size_of,
 };
 
-use super::util::*;
+use super::util::{BufReader, BufWriter};
 
 pub trait Encodable {
     fn encode_to(&self, w: &mut BufWriter);
