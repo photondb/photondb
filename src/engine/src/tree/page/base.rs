@@ -4,7 +4,6 @@ use bitflags::bitflags;
 
 // Page layout:
 // | ver (6B) | tags (1B) | chain_len (1B) | chain_next (8B) | access_freq (4B) | content |
-const PAGE_ALIGNMENT: usize = 8;
 const PAGE_HEADER_SIZE: usize = 20;
 const PAGE_VERSION_SIZE: usize = 6;
 
@@ -165,8 +164,7 @@ pub struct PageAlloc<A: Allocator>(A);
 
 impl<A: Allocator> PageAlloc<A> {
     pub unsafe fn alloc_page(&self, content_size: usize) -> Option<PagePtr> {
-        let size = PAGE_HEADER_SIZE + content_size;
-        let ptr = self.0.alloc(alloc_layout(size));
+        let ptr = self.0.alloc(PAGE_HEADER_SIZE + content_size);
         if !ptr.is_null() {
             Some(PagePtr::from_raw(ptr))
         } else {
@@ -175,17 +173,14 @@ impl<A: Allocator> PageAlloc<A> {
     }
 
     pub unsafe fn dealloc_page(&self, page: PagePtr) {
-        let ptr = page.into_raw();
-        self.0.dealloc(ptr, PAGE_ALIGNMENT);
+        self.0.dealloc(page.into_raw());
     }
 }
 
 pub unsafe trait Allocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8;
+    const PAGE_ALIGNMENT: usize = 8;
 
-    unsafe fn dealloc(&self, ptr: *mut u8, align: usize);
-}
+    unsafe fn alloc(&self, size: usize) -> *mut u8;
 
-unsafe fn alloc_layout(size: usize) -> Layout {
-    Layout::from_size_align_unchecked(size, PAGE_ALIGNMENT)
+    unsafe fn dealloc(&self, ptr: *mut u8);
 }

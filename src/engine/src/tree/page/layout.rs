@@ -55,12 +55,12 @@ impl SortedPageBuilder {
         self.offsets_len * size_of::<u32>() + self.payload_size
     }
 
-    pub unsafe fn build<A>(self, alloc: &PageAlloc<A>) -> Option<SortedPageBuf>
+    pub unsafe fn build<A>(self, alloc: &PageAlloc<A>) -> Option<SortedPage>
     where
         A: Allocator,
     {
         if let Some(ptr) = alloc.alloc_page(self.size()) {
-            Some(SortedPageBuf::new(ptr, self))
+            Some(SortedPage::new(ptr, self))
         } else {
             None
         }
@@ -70,7 +70,7 @@ impl SortedPageBuilder {
         mut self,
         alloc: &PageAlloc<A>,
         into_iter: impl Into<I>,
-    ) -> Option<SortedPageBuf>
+    ) -> Option<SortedPage>
     where
         A: Allocator,
         I: SequentialIterator<Item = &'a (K, V)>,
@@ -82,7 +82,7 @@ impl SortedPageBuilder {
             self.add(key, value);
         }
         if let Some(ptr) = alloc.alloc_page(self.size()) {
-            let mut buf = SortedPageBuf::new(ptr, self);
+            let mut buf = SortedPage::new(ptr, self);
             iter.rewind();
             while let Some((key, value)) = iter.next() {
                 buf.add(key, value);
@@ -94,14 +94,14 @@ impl SortedPageBuilder {
     }
 }
 
-pub struct SortedPageBuf {
+pub struct SortedPage {
     base: PagePtr,
     offsets: *mut u32,
     payload: BufWriter,
     current: usize,
 }
 
-impl SortedPageBuf {
+impl SortedPage {
     unsafe fn new(mut base: PagePtr, builder: SortedPageBuilder) -> Self {
         base.set_ver(builder.ver);
         base.set_tags(builder.tags);
@@ -130,7 +130,7 @@ impl SortedPageBuf {
     }
 }
 
-impl Deref for SortedPageBuf {
+impl Deref for SortedPage {
     type Target = PagePtr;
 
     fn deref(&self) -> &Self::Target {
@@ -138,7 +138,7 @@ impl Deref for SortedPageBuf {
     }
 }
 
-impl DerefMut for SortedPageBuf {
+impl DerefMut for SortedPage {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
     }
