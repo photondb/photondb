@@ -2,9 +2,11 @@ use std::{alloc::Layout, marker::PhantomData};
 
 use bitflags::bitflags;
 
-// Page layout: | tags (1B) | ver (6B) | len (1B) | next (8B) | content |
+// Page layout:
+// | ver (6B) | tags (1B) | chain_len (1B) | chain_next (8B) | access_freq (4B) | content |
 const PAGE_ALIGNMENT: usize = 8;
-const PAGE_HEADER_SIZE: usize = 16;
+const PAGE_HEADER_SIZE: usize = 20;
+const PAGE_VERSION_SIZE: usize = 6;
 
 #[derive(Copy, Clone, Debug)]
 pub struct PagePtr(*mut u8);
@@ -18,41 +20,31 @@ impl PagePtr {
         self.0
     }
 
-    unsafe fn ver_ptr(&self) -> *mut u8 {
-        self.0.add(1)
+    unsafe fn tags_ptr(self) -> *mut u8 {
+        self.0.add(PAGE_VERSION_SIZE)
     }
 
-    unsafe fn len_ptr(&self) -> *mut u8 {
-        self.0.add(2)
+    unsafe fn chain_len_ptr(self) -> *mut u8 {
+        self.0.add(PAGE_VERSION_SIZE + 1)
     }
 
-    unsafe fn next_ptr(&self) -> *mut u64 {
+    unsafe fn chain_next_ptr(self) -> *mut u64 {
         (self.0 as *mut u64).add(1)
     }
 
-    unsafe fn content_ptr(&self) -> *mut u8 {
+    unsafe fn access_freq_ptr(self) -> *mut u32 {
+        (self.0 as *mut u32).add(4)
+    }
+
+    unsafe fn content_ptr(self) -> *mut u8 {
         self.0.add(PAGE_HEADER_SIZE)
     }
 
-    pub fn tags(&self) -> PageTags {
-        unsafe {
-            let bits = self.0.read();
-            PageTags::from_bits_truncate(bits)
-        }
-    }
-
-    pub fn set_tags(&mut self, tags: PageTags) {
-        unsafe {
-            self.0.write(tags.bits());
-        }
-    }
-
-    // Returns the version number.
     pub fn ver(&self) -> u64 {
         unsafe {
             let mut ver = 0u64;
             let ver_ptr = &mut ver as *mut u64 as *mut u8;
-            ver_ptr.copy_from_nonoverlapping(self.ver_ptr(), 6);
+            ver_ptr.copy_from_nonoverlapping(self.0, PAGE_VERSION_SIZE);
             u64::from_le(ver)
         }
     }
@@ -61,29 +53,42 @@ impl PagePtr {
         unsafe {
             let ver = ver.to_le();
             let ver_ptr = &ver as *const u64 as *const u8;
-            ver_ptr.copy_to_nonoverlapping(self.ver_ptr(), 6);
+            ver_ptr.copy_to_nonoverlapping(self.0, PAGE_VERSION_SIZE);
+        }
+    }
+
+    pub fn tags(&self) -> PageTags {
+        unsafe {
+            let bits = self.tags_ptr().read();
+            PageTags::from_bits(bits).unwrap()
+        }
+    }
+
+    pub fn set_tags(&mut self, tags: PageTags) {
+        unsafe {
+            self.tags_ptr().write(tags.bits());
         }
     }
 
     // Returns the length of the delta chain.
-    pub fn len(&self) -> u8 {
-        unsafe { self.len_ptr().read() }
+    pub fn chain_len(&self) -> u8 {
+        unsafe { self.chain_len_ptr().read() }
     }
 
-    pub fn set_len(&mut self, len: u8) {
+    pub fn set_chain_len(&mut self, len: u8) {
         unsafe {
-            self.len_ptr().write(len);
+            self.chain_len_ptr().write(len);
         }
     }
 
     // Returns the address of the next page in the delta chain.
-    pub fn next(&self) -> u64 {
-        unsafe { self.next_ptr().read().to_le() }
+    pub fn chain_next(&self) -> u64 {
+        unsafe { self.chain_next_ptr().read().to_le() }
     }
 
-    pub fn set_next(&mut self, next: u64) {
+    pub fn set_chain_next(&mut self, next: u64) {
         unsafe {
-            self.next_ptr().write(next.to_le());
+            self.chain_next_ptr().write(next.to_le());
         }
     }
 
@@ -110,20 +115,20 @@ impl PageRef<'_> {
         }
     }
 
-    pub fn tags(&self) -> PageTags {
-        self.ptr.tags()
-    }
-
-    pub fn len(&self) -> u8 {
-        self.ptr.len()
-    }
-
     pub fn ver(&self) -> u64 {
         self.ptr.ver()
     }
 
-    pub fn next(&self) -> u64 {
-        self.ptr.next()
+    pub fn tags(&self) -> PageTags {
+        self.ptr.tags()
+    }
+
+    pub fn chain_len(&self) -> u8 {
+        self.ptr.chain_len()
+    }
+
+    pub fn chain_next(&self) -> u64 {
+        self.ptr.chain_next()
     }
 
     pub fn content(&self) -> *const u8 {
@@ -138,6 +143,7 @@ impl From<PagePtr> for PageRef<'_> {
 }
 
 bitflags! {
+    #[derive(Default)]
     pub struct PageTags: u8 {
         const LEAF  = 0b10000000;
         const DATA  = 0b00000000;
@@ -158,13 +164,17 @@ impl PageTags {
 pub struct PageAlloc<A: Allocator>(A);
 
 impl<A: Allocator> PageAlloc<A> {
-    unsafe fn alloc_page(&self, content_size: usize) -> PagePtr {
+    pub unsafe fn alloc_page(&self, content_size: usize) -> Option<PagePtr> {
         let size = PAGE_HEADER_SIZE + content_size;
         let ptr = self.0.alloc(alloc_layout(size));
-        PagePtr::from_raw(ptr)
+        if !ptr.is_null() {
+            Some(PagePtr::from_raw(ptr))
+        } else {
+            None
+        }
     }
 
-    unsafe fn dealloc_page(&self, page: PagePtr) {
+    pub unsafe fn dealloc_page(&self, page: PagePtr) {
         let ptr = page.into_raw();
         self.0.dealloc(ptr, PAGE_ALIGNMENT);
     }

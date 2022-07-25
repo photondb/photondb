@@ -3,29 +3,113 @@ use std::{
     mem::size_of,
 };
 
-use super::util::{BufReader, BufWriter};
+pub struct BufReader {
+    ptr: *const u8,
+    pos: usize,
+}
+
+macro_rules! impl_get {
+    ($name:ident, $t:ty) => {
+        pub unsafe fn $name(&mut self) -> $t {
+            let ptr = self.ptr.add(self.pos) as *const $t;
+            self.pos += size_of::<$t>();
+            ptr.read()
+        }
+    };
+}
+
+impl BufReader {
+    pub fn new(ptr: *const u8) -> Self {
+        Self { ptr, pos: 0 }
+    }
+
+    pub const fn pos(&self) -> usize {
+        self.pos
+    }
+
+    impl_get!(get_u8, u8);
+    impl_get!(get_u16, u16);
+    impl_get!(get_u32, u32);
+    impl_get!(get_u64, u64);
+
+    pub unsafe fn get_slice<'a>(&mut self, len: usize) -> &'a [u8] {
+        let ptr = self.ptr.add(self.pos);
+        self.pos += len;
+        std::slice::from_raw_parts(ptr, len)
+    }
+
+    pub unsafe fn get_length_prefixed_slice<'a>(&mut self) -> &'a [u8] {
+        let len = self.get_u32();
+        self.get_slice(len as usize)
+    }
+}
+
+pub struct BufWriter {
+    ptr: *mut u8,
+    pos: usize,
+}
+
+macro_rules! impl_put {
+    ($name:ident, $t:ty) => {
+        pub unsafe fn $name(&mut self, v: $t) {
+            let ptr = self.ptr.add(self.pos) as *mut $t;
+            ptr.write(v);
+            self.pos += size_of::<$t>();
+        }
+    };
+}
+
+impl BufWriter {
+    pub fn new(ptr: *mut u8) -> Self {
+        Self { ptr, pos: 0 }
+    }
+
+    pub const fn pos(&self) -> usize {
+        self.pos
+    }
+
+    impl_put!(put_u8, u8);
+    impl_put!(put_u16, u16);
+    impl_put!(put_u32, u32);
+    impl_put!(put_u64, u64);
+
+    pub unsafe fn put_slice(&mut self, slice: &[u8]) {
+        let ptr = self.ptr.add(self.pos) as *mut u8;
+        ptr.copy_from(slice.as_ptr(), slice.len());
+        self.pos += slice.len();
+    }
+
+    pub unsafe fn put_length_prefixed_slice(&mut self, slice: &[u8]) {
+        self.put_u32(slice.len() as u32);
+        self.put_slice(slice);
+    }
+
+    pub const fn length_prefixed_slice_size(slice: &[u8]) -> usize {
+        size_of::<u32>() + slice.len()
+    }
+}
 
 pub trait Encodable {
-    fn encode_to(&self, w: &mut BufWriter);
     fn encode_size(&self) -> usize;
+    unsafe fn encode_to(&self, w: &mut BufWriter);
 }
 
 pub trait Decodable {
-    fn decode_from(r: &mut BufReader) -> Self;
+    unsafe fn decode_from(r: &mut BufReader) -> Self;
 }
 
 impl Encodable for &[u8] {
-    fn encode_to(&self, w: &mut BufWriter) {
-        w.put_length_prefixed_slice(self);
-    }
-
     fn encode_size(&self) -> usize {
         BufWriter::length_prefixed_slice_size(self)
+    }
+
+    unsafe fn encode_to(&self, w: &mut BufWriter) {
+        w.put_length_prefixed_slice(self);
     }
 }
 
 impl Decodable for &[u8] {
-    fn decode_from(r: &mut BufReader) -> Self {
+    unsafe fn decode_from(r: &mut BufReader) -> Self {
         r.get_length_prefixed_slice()
     }
 }
@@ -66,18 +150,18 @@ impl PartialOrd for Key<'_> {
 }
 
 impl Encodable for Key<'_> {
-    fn encode_to(&self, w: &mut BufWriter) {
-        w.put_length_prefixed_slice(self.raw);
-        w.put_u64(self.lsn);
-    }
-
     fn encode_size(&self) -> usize {
         BufWriter::length_prefixed_slice_size(self.raw) + size_of::<u64>()
+    }
+
+    unsafe fn encode_to(&self, w: &mut BufWriter) {
+        w.put_length_prefixed_slice(self.raw);
+        w.put_u64(self.lsn);
     }
 }
 
 impl Decodable for Key<'_> {
-    fn decode_from(r: &mut BufReader) -> Self {
+    unsafe fn decode_from(r: &mut BufReader) -> Self {
         let raw = r.get_length_prefixed_slice();
         let lsn = r.get_u64();
         Self { raw, lsn }
@@ -91,7 +175,14 @@ pub enum Value<'a> {
 }
 
 impl Encodable for Value<'_> {
-    fn encode_to(&self, w: &mut BufWriter) {
+    fn encode_size(&self) -> usize {
+        1 + match self {
+            Value::Put(value) => BufWriter::length_prefixed_slice_size(value),
+            Value::Delete => 0,
+        }
+    }
+
+    unsafe fn encode_to(&self, w: &mut BufWriter) {
         match self {
             Value::Put(value) => {
                 w.put_u8(ValueKind::Put as u8);
@@ -100,17 +191,10 @@ impl Encodable for Value<'_> {
             Value::Delete => w.put_u8(ValueKind::Delete as u8),
         }
     }
-
-    fn encode_size(&self) -> usize {
-        1 + match self {
-            Value::Put(value) => BufWriter::length_prefixed_slice_size(value),
-            Value::Delete => 0,
-        }
-    }
 }
 
 impl Decodable for Value<'_> {
-    fn decode_from(r: &mut BufReader) -> Self {
+    unsafe fn decode_from(r: &mut BufReader) -> Self {
         let kind = ValueKind::from(r.get_u8());
         match kind {
             ValueKind::Put => {
@@ -152,18 +236,18 @@ impl Index {
 }
 
 impl Encodable for Index {
-    fn encode_to(&self, w: &mut BufWriter) {
-        w.put_u64(self.id);
-        w.put_u64(self.ver);
-    }
-
     fn encode_size(&self) -> usize {
         size_of::<u64>() * 2
+    }
+
+    unsafe fn encode_to(&self, w: &mut BufWriter) {
+        w.put_u64(self.id);
+        w.put_u64(self.ver);
     }
 }
 
 impl Decodable for Index {
-    fn decode_from(r: &mut BufReader) -> Self {
+    unsafe fn decode_from(r: &mut BufReader) -> Self {
         let id = r.get_u64();
         let ver = r.get_u64();
         Self { id, ver }

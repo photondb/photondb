@@ -1,16 +1,21 @@
 use std::{
     cmp::{Ord, Ordering},
     collections::BinaryHeap,
-    marker::PhantomData,
     ops::{Deref, DerefMut},
 };
 
-pub trait SequentialIterator: Iterator {
+pub trait ForwardIterator {
+    type Item;
+
+    fn next(&mut self) -> Option<&Self::Item>;
+}
+
+pub trait SequentialIterator: ForwardIterator {
     // Positions the next entry at the beginning.
     fn rewind(&mut self);
 
     // Returns the current entry.
-    fn current(&self) -> Option<Self::Item>;
+    fn current(&self) -> Option<&Self::Item>;
 }
 
 pub trait RandomAccessIterator: SequentialIterator {
@@ -40,10 +45,10 @@ impl<'a, I> From<Option<&'a I>> for OptionIter<'a, I> {
     }
 }
 
-impl<'a, I> Iterator for OptionIter<'a, I> {
-    type Item = &'a I;
+impl<'a, I> ForwardIterator for OptionIter<'a, I> {
+    type Item = I;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<&Self::Item> {
         if let Some(next) = self.next.take() {
             self.current = Some(next);
             self.current
@@ -60,7 +65,7 @@ impl<'a, I: 'a> SequentialIterator for OptionIter<'a, I> {
         }
     }
 
-    fn current(&self) -> Option<Self::Item> {
+    fn current(&self) -> Option<&Self::Item> {
         self.current
     }
 }
@@ -158,14 +163,14 @@ where
     }
 }
 
-impl<I> Iterator for MergingIter<I>
+impl<I> ForwardIterator for MergingIter<I>
 where
     I: SequentialIterator,
     I::Item: Ord,
 {
     type Item = I::Item;
 
-    fn next(&mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<&Self::Item> {
         if let Some(mut iter) = self.heap.pop() {
             iter.next();
             self.heap.push(iter);
@@ -189,7 +194,7 @@ where
         std::mem::swap(&mut self.children, &mut children);
     }
 
-    fn current(&self) -> Option<Self::Item> {
+    fn current(&self) -> Option<&Self::Item> {
         self.heap.peek().and_then(|iter| iter.current())
     }
 }
