@@ -5,10 +5,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use super::{
-    Allocator, BufReader, BufWriter, Decodable, Encodable, ForwardIterator, PageAlloc, PagePtr,
-    PageRef, PageTags, RandomAccessIterator, SequentialIterator,
-};
+use super::*;
 
 // TODO: Optimizes the page layout with
 // https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
@@ -57,7 +54,7 @@ impl SortedPageBuilder {
 
     pub unsafe fn build<A>(self, alloc: &PageAlloc<A>) -> Option<SortedPage>
     where
-        A: Allocator,
+        A: UnsafeAlloc,
     {
         if let Some(ptr) = alloc.alloc_page(self.size()) {
             Some(SortedPage::new(ptr, self))
@@ -72,8 +69,8 @@ impl SortedPageBuilder {
         into_iter: impl Into<I>,
     ) -> Option<SortedPage>
     where
-        A: Allocator,
-        I: SequentialIterator<Item = &'a (K, V)>,
+        A: UnsafeAlloc,
+        I: SequentialIter<Item = &'a (K, V)>,
         K: Encodable + 'a,
         V: Encodable + 'a,
     {
@@ -135,12 +132,6 @@ impl Deref for SortedPage {
 
     fn deref(&self) -> &Self::Target {
         &self.base
-    }
-}
-
-impl DerefMut for SortedPage {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.base
     }
 }
 
@@ -265,7 +256,7 @@ where
     }
 }
 
-impl<'a, K, V> ForwardIterator for SortedPageIter<'a, K, V>
+impl<'a, K, V> ForwardIter for SortedPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
@@ -281,7 +272,7 @@ where
     }
 }
 
-impl<'a, K, V> SequentialIterator for SortedPageIter<'a, K, V>
+impl<'a, K, V> SequentialIter for SortedPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
@@ -296,7 +287,7 @@ where
     }
 }
 
-impl<'a, K, V> RandomAccessIterator for SortedPageIter<'a, K, V>
+impl<'a, K, V> RandomAccessIter for SortedPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,

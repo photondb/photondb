@@ -12,7 +12,7 @@
 
 // mod node;
 mod page;
-// mod pagecache;
+mod pagecache;
 // mod pagestore;
 // mod pagetable;
 

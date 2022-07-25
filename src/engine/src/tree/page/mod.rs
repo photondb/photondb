@@ -1,10 +1,9 @@
 mod base;
-pub use base::{Allocator, PageAlloc, PagePtr, PageRef, PageTags};
+pub use base::{PageAlloc, PagePtr, PageRef, PageTags, UnsafeAlloc};
 
 mod iter;
 pub use iter::{
-    ForwardIterator, MergingIter, MergingIterBuilder, OptionIter, RandomAccessIterator,
-    SequentialIterator,
+    ForwardIter, MergingIter, MergingIterBuilder, OptionIter, RandomAccessIter, SequentialIter,
 };
 
 mod codec;

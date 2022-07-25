@@ -4,13 +4,13 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-pub trait ForwardIterator {
+pub trait ForwardIter {
     type Item;
 
     fn next(&mut self) -> Option<&Self::Item>;
 }
 
-pub trait SequentialIterator: ForwardIterator {
+pub trait SequentialIter: ForwardIter {
     // Positions the next entry at the beginning.
     fn rewind(&mut self);
 
@@ -18,7 +18,7 @@ pub trait SequentialIterator: ForwardIterator {
     fn current(&self) -> Option<&Self::Item>;
 }
 
-pub trait RandomAccessIterator: SequentialIterator {
+pub trait RandomAccessIter: SequentialIter {
     type Target;
 
     // Positions the next entry at or past the target.
@@ -45,7 +45,7 @@ impl<'a, I> From<Option<&'a I>> for OptionIter<'a, I> {
     }
 }
 
-impl<'a, I> ForwardIterator for OptionIter<'a, I> {
+impl<'a, I> ForwardIter for OptionIter<'a, I> {
     type Item = I;
 
     fn next(&mut self) -> Option<&Self::Item> {
@@ -58,7 +58,7 @@ impl<'a, I> ForwardIterator for OptionIter<'a, I> {
     }
 }
 
-impl<'a, I: 'a> SequentialIterator for OptionIter<'a, I> {
+impl<'a, I: 'a> SequentialIter for OptionIter<'a, I> {
     fn rewind(&mut self) {
         if let Some(current) = self.current.take() {
             self.next = Some(current);
@@ -70,67 +70,35 @@ impl<'a, I: 'a> SequentialIterator for OptionIter<'a, I> {
     }
 }
 
-struct ReverseIter<I>(I);
-
-impl<I> Deref for ReverseIter<I> {
-    type Target = I;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+pub struct MergingIterBuilder<I> {
+    children: Vec<ReverseIter<I>>,
 }
 
-impl<I> DerefMut for ReverseIter<I> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<I> Eq for ReverseIter<I>
-where
-    I: SequentialIterator,
-    I::Item: Ord,
-{
-}
-
-impl<I> PartialEq for ReverseIter<I>
-where
-    I: SequentialIterator,
-    I::Item: Ord,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl<I> Ord for ReverseIter<I>
-where
-    I: SequentialIterator,
-    I::Item: Ord,
-{
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self.current(), other.current()) {
-            (Some(a), Some(b)) => b.cmp(&a),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => Ordering::Equal,
+impl<I> Default for MergingIterBuilder<I> {
+    fn default() -> Self {
+        Self {
+            children: Vec::new(),
         }
     }
 }
 
-impl<I> PartialOrd for ReverseIter<I>
+impl<I> MergingIterBuilder<I>
 where
-    I: SequentialIterator,
+    I: SequentialIter,
     I::Item: Ord,
 {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+    pub fn add(&mut self, child: I) {
+        self.children.push(ReverseIter(child));
+    }
+
+    pub fn build(self) -> MergingIter<I> {
+        MergingIter::new(self.children)
     }
 }
 
 pub struct MergingIter<I>
 where
-    I: SequentialIterator,
+    I: SequentialIter,
     I::Item: Ord,
 {
     heap: BinaryHeap<ReverseIter<I>>,
@@ -139,7 +107,7 @@ where
 
 impl<I> MergingIter<I>
 where
-    I: SequentialIterator,
+    I: SequentialIter,
     I::Item: Ord,
 {
     fn new(children: Vec<ReverseIter<I>>) -> Self {
@@ -163,9 +131,9 @@ where
     }
 }
 
-impl<I> ForwardIterator for MergingIter<I>
+impl<I> ForwardIter for MergingIter<I>
 where
-    I: SequentialIterator,
+    I: SequentialIter,
     I::Item: Ord,
 {
     type Item = I::Item;
@@ -181,9 +149,9 @@ where
     }
 }
 
-impl<I> SequentialIterator for MergingIter<I>
+impl<I> SequentialIter for MergingIter<I>
 where
-    I: SequentialIterator,
+    I: SequentialIter,
     I::Item: Ord,
 {
     fn rewind(&mut self) {
@@ -199,9 +167,9 @@ where
     }
 }
 
-impl<I> RandomAccessIterator for MergingIter<I>
+impl<I> RandomAccessIter for MergingIter<I>
 where
-    I: RandomAccessIterator,
+    I: RandomAccessIter,
     I::Item: Ord,
 {
     type Target = I::Target;
@@ -215,28 +183,60 @@ where
     }
 }
 
-pub struct MergingIterBuilder<I> {
-    children: Vec<ReverseIter<I>>,
+struct ReverseIter<I>(I);
+
+impl<I> Deref for ReverseIter<I> {
+    type Target = I;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
-impl<I> Default for MergingIterBuilder<I> {
-    fn default() -> Self {
-        Self {
-            children: Vec::new(),
+impl<I> DerefMut for ReverseIter<I> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<I> Eq for ReverseIter<I>
+where
+    I: SequentialIter,
+    I::Item: Ord,
+{
+}
+
+impl<I> PartialEq for ReverseIter<I>
+where
+    I: SequentialIter,
+    I::Item: Ord,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl<I> Ord for ReverseIter<I>
+where
+    I: SequentialIter,
+    I::Item: Ord,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.current(), other.current()) {
+            (Some(a), Some(b)) => b.cmp(&a),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
         }
     }
 }
 
-impl<I> MergingIterBuilder<I>
+impl<I> PartialOrd for ReverseIter<I>
 where
-    I: SequentialIterator,
+    I: SequentialIter,
     I::Item: Ord,
 {
-    pub fn add(&mut self, child: I) {
-        self.children.push(ReverseIter(child));
-    }
-
-    pub fn build(self) -> MergingIter<I> {
-        MergingIter::new(self.children)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
