@@ -2,10 +2,9 @@ use std::{alloc::Layout, marker::PhantomData};
 
 use bitflags::bitflags;
 
-// Page layout: | ver (6B) | tag (1B) | len (1B) | next (8B) | content |
+// Page layout: | tags (1B) | ver (6B) | len (1B) | next (8B) | content |
 const PAGE_ALIGNMENT: usize = 8;
 const PAGE_HEADER_SIZE: usize = 16;
-const PAGE_VERSION_SIZE: usize = 6;
 
 #[derive(Copy, Clone, Debug)]
 pub struct PagePtr(*mut u8);
@@ -20,15 +19,11 @@ impl PagePtr {
     }
 
     unsafe fn ver_ptr(&self) -> *mut u8 {
-        self.0
-    }
-
-    unsafe fn tag_ptr(&self) -> *mut u8 {
-        self.0.add(PAGE_VERSION_SIZE)
+        self.0.add(1)
     }
 
     unsafe fn len_ptr(&self) -> *mut u8 {
-        self.0.add(PAGE_VERSION_SIZE + 1)
+        self.0.add(2)
     }
 
     unsafe fn next_ptr(&self) -> *mut u64 {
@@ -39,11 +34,25 @@ impl PagePtr {
         self.0.add(PAGE_HEADER_SIZE)
     }
 
+    pub fn tags(&self) -> PageTags {
+        unsafe {
+            let bits = self.0.read();
+            PageTags::from_bits_truncate(bits)
+        }
+    }
+
+    pub fn set_tags(&mut self, tags: PageTags) {
+        unsafe {
+            self.0.write(tags.bits());
+        }
+    }
+
+    // Returns the version number.
     pub fn ver(&self) -> u64 {
         unsafe {
             let mut ver = 0u64;
             let ver_ptr = &mut ver as *mut u64 as *mut u8;
-            ver_ptr.copy_from_nonoverlapping(self.ver_ptr(), PAGE_VERSION_SIZE);
+            ver_ptr.copy_from_nonoverlapping(self.ver_ptr(), 6);
             u64::from_le(ver)
         }
     }
@@ -52,23 +61,11 @@ impl PagePtr {
         unsafe {
             let ver = ver.to_le();
             let ver_ptr = &ver as *const u64 as *const u8;
-            ver_ptr.copy_to_nonoverlapping(self.ver_ptr(), PAGE_VERSION_SIZE);
+            ver_ptr.copy_to_nonoverlapping(self.ver_ptr(), 6);
         }
     }
 
-    pub fn tag(&self) -> PageTag {
-        unsafe {
-            let bits = self.tag_ptr().read();
-            PageTag::from_bits_truncate(bits)
-        }
-    }
-
-    pub fn set_tag(&mut self, tag: PageTag) {
-        unsafe {
-            self.tag_ptr().write(tag.bits());
-        }
-    }
-
+    // Returns the length of the delta chain.
     pub fn len(&self) -> u8 {
         unsafe { self.len_ptr().read() }
     }
@@ -79,6 +76,7 @@ impl PagePtr {
         }
     }
 
+    // Returns the address of the next page in the delta chain.
     pub fn next(&self) -> u64 {
         unsafe { self.next_ptr().read().to_le() }
     }
@@ -112,16 +110,16 @@ impl PageRef<'_> {
         }
     }
 
-    pub fn ver(&self) -> u64 {
-        self.ptr.ver()
-    }
-
-    pub fn tag(&self) -> PageTag {
-        self.ptr.tag()
+    pub fn tags(&self) -> PageTags {
+        self.ptr.tags()
     }
 
     pub fn len(&self) -> u8 {
         self.ptr.len()
+    }
+
+    pub fn ver(&self) -> u64 {
+        self.ptr.ver()
     }
 
     pub fn next(&self) -> u64 {
@@ -140,14 +138,14 @@ impl From<PagePtr> for PageRef<'_> {
 }
 
 bitflags! {
-    pub struct PageTag: u8 {
+    pub struct PageTags: u8 {
         const LEAF  = 0b10000000;
         const DATA  = 0b00000000;
         const SPLIT = 0b00000001;
     }
 }
 
-impl PageTag {
+impl PageTags {
     pub const fn is_leaf(self) -> bool {
         self.contains(Self::LEAF)
     }
@@ -157,19 +155,9 @@ impl PageTag {
     }
 }
 
-pub unsafe trait Alloc {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8;
+pub struct PageAlloc<A: Allocator>(A);
 
-    unsafe fn dealloc(&self, ptr: *mut u8, align: usize);
-}
-
-unsafe fn alloc_layout(size: usize) -> Layout {
-    Layout::from_size_align_unchecked(size, PAGE_ALIGNMENT)
-}
-
-pub struct PageAlloc<A: Alloc>(A);
-
-impl<A: Alloc> PageAlloc<A> {
+impl<A: Allocator> PageAlloc<A> {
     unsafe fn alloc_page(&self, content_size: usize) -> PagePtr {
         let size = PAGE_HEADER_SIZE + content_size;
         let ptr = self.0.alloc(alloc_layout(size));
@@ -180,4 +168,14 @@ impl<A: Alloc> PageAlloc<A> {
         let ptr = page.into_raw();
         self.0.dealloc(ptr, PAGE_ALIGNMENT);
     }
+}
+
+pub unsafe trait Allocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8;
+
+    unsafe fn dealloc(&self, ptr: *mut u8, align: usize);
+}
+
+unsafe fn alloc_layout(size: usize) -> Layout {
+    Layout::from_size_align_unchecked(size, PAGE_ALIGNMENT)
 }

@@ -32,13 +32,10 @@ impl SortedPageBuilder {
     }
 
     fn size(&self) -> usize {
-        PAGE_HEADER_SIZE + (self.len + 1) * size_of::<u64>() + self.size
+        size_of::<u64>() * self.len + self.size
     }
 
-    pub fn build<A>(mut self, alloc: &A) -> Option<SortedPageBuf>
-    where
-        A: PageAlloc,
-    {
+    pub fn build(mut self, alloc: &PageAlloc) -> Option<SortedPageBuf> {
         if let Some(buf) = unsafe { alloc.alloc_page(self.size()) } {
             Some(unsafe { SortedPageBuf::new(buf, self) })
         } else {
@@ -46,12 +43,11 @@ impl SortedPageBuilder {
         }
     }
 
-    pub fn build_from_iter<I, A>(mut self, iter: &mut I, alloc: &A) -> Option<SortedPageBuf>
+    pub fn build_from_iter<I, A>(mut self, iter: &mut I, alloc: &PageAlloc) -> Option<SortedPageBuf>
     where
         I: PageIter,
         I::Key: Encodable,
         I::Value: Encodable,
-        A: PageAlloc,
     {
         iter.rewind();
         while let Some((key, value)) = iter.next() {
@@ -70,20 +66,17 @@ impl SortedPageBuilder {
     }
 }
 
-pub struct SortedPageBuf {
-    base: PageBuf,
+pub struct SortedPagePtr {
+    base: PagePtr,
     offsets: *mut u32,
     payload: BufWriter,
     current: usize,
 }
 
-// TODO: handle endianness
-impl SortedPageBuf {
-    unsafe fn new(mut base: PageBuf, builder: SortedPageBuilder) -> Self {
-        let ptr = base.content_mut() as *mut u32;
-        ptr.write(builder.len() as u32);
-        let offsets = ptr.add(1);
-        let payload = ptr.add(builder.len() + 1) as *mut u8;
+impl SortedPagePtr {
+    unsafe fn new(mut base: PagePtr, builder: SortedPageBuilder) -> Self {
+        let offsets = base.content_mut() as *mut u32;
+        let payload = offsets.add(builder.len()) as *mut u8;
         Self {
             base,
             offsets,
@@ -92,39 +85,30 @@ impl SortedPageBuf {
         }
     }
 
-    fn add<K, V>(&mut self, key: &K, value: &V)
+    unsafe fn add<K, V>(&mut self, key: &K, value: &V)
     where
         K: Encodable,
         V: Encodable,
     {
-        unsafe {
-            self.offsets
-                .add(self.current)
-                .write(self.payload.pos() as u32);
-            self.current += 1;
-        }
+        let offset = self.payload.pos() as u32;
+        self.offsets.add(self.current).write(offset.to_le());
+        self.current += 1;
         key.encode_to(&mut self.payload);
         value.encode_to(&mut self.payload);
     }
 }
 
-impl Deref for SortedPageBuf {
-    type Target = PageBuf;
+impl Deref for SortedPagePtr {
+    type Target = PagePtr;
 
     fn deref(&self) -> &Self::Target {
         &self.base
     }
 }
 
-impl DerefMut for SortedPageBuf {
+impl DerefMut for SortedPagePtr {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.base
-    }
-}
-
-impl From<SortedPageBuf> for PageBuf {
-    fn from(page: SortedPageBuf) -> Self {
-        page.base
     }
 }
 
@@ -142,10 +126,9 @@ where
 {
     unsafe fn new(base: PageRef<'a>) -> Self {
         let offsets_ptr = base.content() as *const u32;
-        let offsets_size = offsets_ptr.read() as usize;
-        let len = payload_offset / size_of::<u32>();
-        let offsets = std::slice::from_raw_parts(ptr, len);
-        let payload = base.content().add(offsets_len);
+        let offsets_len = (offsets_ptr.read() as usize) / size_of::<u32>();
+        let offsets = std::slice::from_raw_parts(offsets_ptr, offsets_len);
+        let payload = offsets_ptr.add(offsets_len) as *const u8;
         Self {
             base,
             offsets,
