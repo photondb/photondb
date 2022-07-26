@@ -25,19 +25,19 @@ pub trait RandomAccessIter: SequentialIter {
     fn seek(&mut self, target: &Self::Target);
 }
 
-pub struct OptionIter<'a, I> {
-    next: Option<&'a I>,
-    current: Option<&'a I>,
+pub struct OptionIter<'a, T> {
+    next: Option<&'a T>,
+    current: Option<&'a T>,
 }
 
-impl<'a, I> From<&'a I> for OptionIter<'a, I> {
-    fn from(item: &'a I) -> Self {
+impl<'a, T> From<&'a T> for OptionIter<'a, T> {
+    fn from(item: &'a T) -> Self {
         Some(item).into()
     }
 }
 
-impl<'a, I> From<Option<&'a I>> for OptionIter<'a, I> {
-    fn from(next: Option<&'a I>) -> Self {
+impl<'a, T> From<Option<&'a T>> for OptionIter<'a, T> {
+    fn from(next: Option<&'a T>) -> Self {
         Self {
             next,
             current: None,
@@ -45,8 +45,8 @@ impl<'a, I> From<Option<&'a I>> for OptionIter<'a, I> {
     }
 }
 
-impl<'a, I> ForwardIter for OptionIter<'a, I> {
-    type Item = I;
+impl<'a, T> ForwardIter for OptionIter<'a, T> {
+    type Item = T;
 
     fn next(&mut self) -> Option<&Self::Item> {
         if let Some(next) = self.next.take() {
@@ -58,7 +58,7 @@ impl<'a, I> ForwardIter for OptionIter<'a, I> {
     }
 }
 
-impl<'a, I: 'a> SequentialIter for OptionIter<'a, I> {
+impl<'a, T> SequentialIter for OptionIter<'a, T> {
     fn rewind(&mut self) {
         if let Some(current) = self.current.take() {
             self.next = Some(current);

@@ -119,16 +119,16 @@ impl PageRef<'_> {
         self.ptr.as_ptr()
     }
 
-    pub fn tags(&self) -> PageTags {
-        self.ptr.tags()
-    }
-
     pub fn ver(&self) -> u64 {
         self.ptr.ver()
     }
 
     pub fn len(&self) -> u8 {
         self.ptr.len()
+    }
+
+    pub fn tags(&self) -> PageTags {
+        self.ptr.tags()
     }
 
     pub fn next(&self) -> u64 {
