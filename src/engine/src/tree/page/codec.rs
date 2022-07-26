@@ -35,7 +35,7 @@ pub struct Key<'a> {
 }
 
 impl<'a> Key<'a> {
-    pub fn new(raw: &'a [u8], lsn: u64) -> Self {
+    pub const fn new(raw: &'a [u8], lsn: u64) -> Self {
         Self { raw, lsn }
     }
 }
@@ -144,7 +144,7 @@ pub struct Index {
 }
 
 impl Index {
-    pub fn new(id: u64, ver: u64) -> Self {
+    pub const fn new(id: u64, ver: u64) -> Self {
         Self { id, ver }
     }
 }

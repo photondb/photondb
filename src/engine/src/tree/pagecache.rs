@@ -7,9 +7,7 @@ use jemallocator::{usable_size, Jemalloc};
 
 use super::{
     page::{PageAlloc, PagePtr, PageRef, PageTags},
-    pagestore::{PageInfo, PageStore},
-    pagetable::PageTable,
-    Ghost, Options, Result,
+    pagestore::PageInfo,
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -65,78 +63,27 @@ impl<'a> PageView<'a> {
             Self::Disk(info, _) => info.chain_len,
         }
     }
+
+    pub fn as_addr(&self) -> PageAddr {
+        match *self {
+            Self::Mem(page) => PageAddr::Mem(page.into_raw() as u64),
+            Self::Disk(_, addr) => PageAddr::Disk(addr),
+        }
+    }
 }
 
 pub struct PageCache {
-    alloc: LimitedAlloc,
-    table: PageTable,
-    store: PageStore,
-}
-
-impl PageCache {
-    pub async fn open(opts: Options) -> Result<Self> {
-        let alloc = LimitedAlloc::with_limit(opts.cache_size);
-        let table = PageTable::default();
-        let store = PageStore::open(opts).await?;
-        Ok(Self {
-            alloc,
-            table,
-            store,
-        })
-    }
-
-    pub fn page_view(&self, addr: PageAddr) -> Option<PageView> {
-        match addr {
-            PageAddr::Mem(addr) => unsafe {
-                PageRef::from_raw(addr as *const u8).map(PageView::Mem)
-            },
-            PageAddr::Disk(addr) => self
-                .store
-                .page_info(addr)
-                .map(|info| PageView::Disk(info, addr)),
-        }
-    }
-
-    pub async fn swapin_page<'a>(&self, addr: u64, ghost: &'a Ghost) -> Result<PageRef<'a>> {
-        let page = self.store.load_page(addr).await?;
-        Ok(page.into())
-    }
-
-    pub async fn load_page_with_addr<'a>(
-        &self,
-        addr: PageAddr,
-        ghost: &'a Ghost,
-    ) -> Result<Option<PageRef<'a>>> {
-        match addr {
-            PageAddr::Mem(addr) => unsafe { Ok(PageRef::from_raw(addr as *const u8)) },
-            PageAddr::Disk(addr) => self.swapin_page(addr, ghost).await.map(Some),
-        }
-    }
-
-    pub async fn load_page_with_view<'a>(
-        &self,
-        view: PageView<'a>,
-        ghost: &'a Ghost,
-    ) -> Result<PageRef<'a>> {
-        match view {
-            PageView::Mem(page) => Ok(page),
-            PageView::Disk(_, addr) => self.swapin_page(addr, ghost).await,
-        }
-    }
-}
-
-struct LimitedAlloc {
     size: AtomicUsize,
     limit: usize,
 }
 
-impl Default for LimitedAlloc {
+impl Default for PageCache {
     fn default() -> Self {
         Self::with_limit(usize::MAX)
     }
 }
 
-impl LimitedAlloc {
+impl PageCache {
     pub fn with_limit(limit: usize) -> Self {
         Self {
             size: AtomicUsize::new(0),
@@ -145,7 +92,7 @@ impl LimitedAlloc {
     }
 }
 
-unsafe impl PageAlloc for LimitedAlloc {
+unsafe impl PageAlloc for PageCache {
     unsafe fn alloc(&self, size: usize) -> Option<PagePtr> {
         if self.size.load(Ordering::Relaxed) + size > self.limit {
             None
