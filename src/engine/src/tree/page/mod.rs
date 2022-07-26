@@ -1,5 +1,6 @@
 mod base;
-pub use base::{PageAlloc, PagePtr, PageRef, PageTags, UnsafeAlloc};
+use base::PAGE_HEADER_SIZE;
+pub use base::{PageAlloc, PagePtr, PageRef, PageTags};
 
 mod iter;
 pub use iter::{
@@ -11,4 +12,4 @@ use codec::{BufReader, BufWriter};
 pub use codec::{Decodable, Encodable, Index, Key, Value};
 
 mod layout;
-pub use layout::{SortedPage, SortedPageBuilder, SortedPageIter, SortedPageRef};
+pub use layout::{SortedPageBuf, SortedPageBuilder, SortedPageIter, SortedPageRef};

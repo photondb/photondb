@@ -1,68 +1,36 @@
 use crate::tree::{
-    page::{PageBuf, PageTag},
-    Result,
+    page::{PagePtr, PageTags},
+    Options, Result,
 };
 
 pub struct PageInfo {
     pub ver: u64,
-    pub len: u8,
-    pub tag: PageTag,
-    pub handle: PageHandle,
+    pub tags: PageTags,
+    pub chain_len: u8,
 }
 
-pub struct PageDesc {
-    pub buf: PageBuf,
+pub struct PageStore {
+    opts: Options,
 }
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct PageAddr(u64);
-
-impl From<u64> for PageAddr {
-    fn from(addr: u64) -> Self {
-        Self(addr)
-    }
-}
-
-impl From<PageAddr> for u64 {
-    fn from(addr: PageAddr) -> u64 {
-        addr.0
-    }
-}
-
-pub struct PageHandle {
-    fileno: u64,
-    offset: u64,
-    size: u64,
-}
-
-pub struct PageStore {}
 
 impl PageStore {
-    pub async fn open() -> Result<Self> {
-        Ok(Self {})
+    pub async fn open(opts: Options) -> Result<Self> {
+        Ok(Self { opts })
     }
 
-    pub fn page_info(&self, addr: PageAddr) -> Option<PageInfo> {
+    pub fn page_info(&self, offset: u64) -> Option<PageInfo> {
         todo!()
     }
 
-    pub fn acquire_page(&self) -> PageAddr {
+    pub fn acquire_page(&self) -> u64 {
         todo!()
     }
 
-    pub fn release_page(&self, addr: PageAddr, desc: PageDesc) {
+    pub fn release_page(&self, offset: u64) {
         todo!()
     }
 
-    pub fn highest_stable_addr(&self) -> PageAddr {
-        todo!()
-    }
-
-    pub async fn load_page_with_addr(&self, addr: PageAddr) -> Result<PageBuf> {
-        todo!()
-    }
-
-    pub async fn load_page_with_handle(&self, handle: &PageHandle) -> Result<PageBuf> {
+    pub async fn load_page(&self, offset: u64) -> Result<PagePtr> {
         todo!()
     }
 }

@@ -1,9 +1,4 @@
-use std::{
-    cmp::Ordering,
-    marker::PhantomData,
-    mem::size_of,
-    ops::{Deref, DerefMut},
-};
+use std::{cmp::Ordering, marker::PhantomData, mem::size_of, ops::Deref};
 
 use super::*;
 
@@ -49,27 +44,29 @@ impl SortedPageBuilder {
     }
 
     fn size(&self) -> usize {
+        PAGE_HEADER_SIZE + self.content_size()
+    }
+
+    fn content_size(&self) -> usize {
         self.offsets_len * size_of::<u32>() + self.payload_size
     }
 
-    pub unsafe fn build<A>(self, alloc: &PageAlloc<A>) -> Option<SortedPage>
+    pub unsafe fn build<A>(self, alloc: &A) -> Option<SortedPageBuf>
     where
-        A: UnsafeAlloc,
+        A: PageAlloc,
     {
-        if let Some(ptr) = alloc.alloc_page(self.size()) {
-            Some(SortedPage::new(ptr, self))
-        } else {
-            None
-        }
+        alloc
+            .alloc(self.size())
+            .map(|ptr| SortedPageBuf::new(ptr, self))
     }
 
     pub unsafe fn build_from_iter<'a, A, I, K, V>(
         mut self,
-        alloc: &PageAlloc<A>,
+        alloc: &A,
         into_iter: impl Into<I>,
-    ) -> Option<SortedPage>
+    ) -> Option<SortedPageBuf>
     where
-        A: UnsafeAlloc,
+        A: PageAlloc,
         I: SequentialIter<Item = &'a (K, V)>,
         K: Encodable + 'a,
         V: Encodable + 'a,
@@ -78,8 +75,8 @@ impl SortedPageBuilder {
         while let Some((key, value)) = iter.next() {
             self.add(key, value);
         }
-        if let Some(ptr) = alloc.alloc_page(self.size()) {
-            let mut buf = SortedPage::new(ptr, self);
+        if let Some(ptr) = alloc.alloc(self.size()) {
+            let mut buf = SortedPageBuf::new(ptr, self);
             iter.rewind();
             while let Some((key, value)) = iter.next() {
                 buf.add(key, value);
@@ -91,14 +88,14 @@ impl SortedPageBuilder {
     }
 }
 
-pub struct SortedPage {
+pub struct SortedPageBuf {
     base: PagePtr,
     offsets: *mut u32,
     payload: BufWriter,
     current: usize,
 }
 
-impl SortedPage {
+impl SortedPageBuf {
     unsafe fn new(mut base: PagePtr, builder: SortedPageBuilder) -> Self {
         base.set_ver(builder.ver);
         base.set_tags(builder.tags);
@@ -127,7 +124,7 @@ impl SortedPage {
     }
 }
 
-impl Deref for SortedPage {
+impl Deref for SortedPageBuf {
     type Target = PagePtr;
 
     fn deref(&self) -> &Self::Target {
@@ -183,7 +180,8 @@ where
         while left < right {
             let mid = (left + right) / 2;
             let key = unsafe {
-                let ptr = self.payload.add(self.offsets[mid] as usize);
+                let offset = self.offsets[mid].to_le() as usize;
+                let ptr = self.payload.add(offset);
                 let mut buf = BufReader::new(ptr);
                 K::decode_from(&mut buf)
             };
@@ -199,7 +197,8 @@ where
     fn index(&self, index: usize) -> Option<(K, V)> {
         if let Some(&offset) = self.offsets.get(index) {
             unsafe {
-                let ptr = self.payload.add(offset as usize);
+                let offset = offset.to_le() as usize;
+                let ptr = self.payload.add(offset);
                 let mut buf = BufReader::new(ptr);
                 let key = K::decode_from(&mut buf);
                 let value = V::decode_from(&mut buf);

@@ -146,17 +146,6 @@ impl BTree {
         self.table.get(id).into()
     }
 
-    fn page_view<'g>(&self, ptr: PagePtr, _: &'g Ghost) -> PageView<'g> {
-        match ptr {
-            PagePtr::Mem(addr) => PageView::Mem(addr.into()),
-            PagePtr::Disk(addr) => {
-                let addr = addr.into();
-                let info = self.store.page_info(addr).unwrap();
-                PageView::Disk(addr, info)
-            }
-        }
-    }
-
     fn node_pair<'g>(&self, id: NodeId, ghost: &'g Ghost) -> NodePair<'g> {
         let ptr = self.page_ptr(id);
         let view = self.page_view(ptr, ghost);

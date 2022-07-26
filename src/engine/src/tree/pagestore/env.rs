@@ -4,15 +4,6 @@ use std::{
     task::{Context, Poll},
 };
 
-pub trait RandomRead {
-    fn poll_read_at(
-        self: Pin<&mut Self>,
-        ctx: &mut Context,
-        buf: &mut [u8],
-        pos: u64,
-    ) -> Poll<io::Result<usize>>;
-}
-
 pub trait SequentialRead {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -33,4 +24,13 @@ pub trait SequentialWrite {
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>>;
+}
+
+pub trait RandomAcessRead {
+    fn poll_read_at(
+        self: Pin<&mut Self>,
+        ctx: &mut Context,
+        buf: &mut [u8],
+        pos: u64,
+    ) -> Poll<io::Result<usize>>;
 }

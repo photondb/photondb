@@ -1,50 +1,53 @@
-use std::{alloc::Layout, marker::PhantomData};
+use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
 
 use bitflags::bitflags;
 
-// Page layout:
-// | ver (6B) | tags (1B) | chain_len (1B) | chain_next (8B) | access_freq (4B) | content |
+// Page header: | ver (6B) | tags (1B) | chain_len (1B) | chain_next (8B) | access_freq (4B) |
 const PAGE_ALIGNMENT: usize = 8;
-const PAGE_HEADER_SIZE: usize = 20;
 const PAGE_VERSION_SIZE: usize = 6;
+pub const PAGE_HEADER_SIZE: usize = 20;
 
 #[derive(Copy, Clone, Debug)]
-pub struct PagePtr(*mut u8);
+pub struct PagePtr(NonNull<u8>);
 
 impl PagePtr {
-    unsafe fn from_raw(ptr: *mut u8) -> Self {
-        Self(ptr)
+    pub unsafe fn from_raw(ptr: *mut u8) -> Option<Self> {
+        NonNull::new(ptr).map(PagePtr)
     }
 
-    unsafe fn into_raw(self) -> *mut u8 {
-        self.0
+    pub fn into_raw(self) -> *mut u8 {
+        self.0.as_ptr()
+    }
+
+    unsafe fn ptr(self) -> *mut u8 {
+        self.0.as_ptr()
     }
 
     unsafe fn tags_ptr(self) -> *mut u8 {
-        self.0.add(PAGE_VERSION_SIZE)
+        self.ptr().add(PAGE_VERSION_SIZE)
     }
 
     unsafe fn chain_len_ptr(self) -> *mut u8 {
-        self.0.add(PAGE_VERSION_SIZE + 1)
+        self.ptr().add(PAGE_VERSION_SIZE + 1)
     }
 
     unsafe fn chain_next_ptr(self) -> *mut u64 {
-        (self.0 as *mut u64).add(1)
+        (self.ptr() as *mut u64).add(1)
     }
 
     unsafe fn access_freq_ptr(self) -> *mut u32 {
-        (self.0 as *mut u32).add(4)
+        (self.ptr() as *mut u32).add(4)
     }
 
     unsafe fn content_ptr(self) -> *mut u8 {
-        self.0.add(PAGE_HEADER_SIZE)
+        self.ptr().add(PAGE_HEADER_SIZE)
     }
 
     pub fn ver(&self) -> u64 {
         unsafe {
             let mut ver = 0u64;
             let ver_ptr = &mut ver as *mut u64 as *mut u8;
-            ver_ptr.copy_from_nonoverlapping(self.0, PAGE_VERSION_SIZE);
+            ver_ptr.copy_from_nonoverlapping(self.ptr(), PAGE_VERSION_SIZE);
             u64::from_le(ver)
         }
     }
@@ -53,7 +56,7 @@ impl PagePtr {
         unsafe {
             let ver = ver.to_le();
             let ver_ptr = &ver as *const u64 as *const u8;
-            ver_ptr.copy_to_nonoverlapping(self.0, PAGE_VERSION_SIZE);
+            ver_ptr.copy_to_nonoverlapping(self.ptr(), PAGE_VERSION_SIZE);
         }
     }
 
@@ -104,7 +107,7 @@ impl PagePtr {
 #[derive(Copy, Clone, Debug)]
 pub struct PageRef<'a> {
     ptr: PagePtr,
-    _mark: PhantomData<&'a ()>,
+    _mark: PhantomData<&'a [u8]>,
 }
 
 impl PageRef<'_> {
@@ -113,6 +116,14 @@ impl PageRef<'_> {
             ptr,
             _mark: PhantomData,
         }
+    }
+
+    pub unsafe fn from_raw(ptr: *const u8) -> Option<Self> {
+        PagePtr::from_raw(ptr as *mut u8).map(PageRef::new)
+    }
+
+    pub fn into_raw(self) -> *const u8 {
+        self.ptr.into_raw()
     }
 
     pub fn ver(&self) -> u64 {
@@ -161,27 +172,10 @@ impl PageTags {
     }
 }
 
-pub struct PageAlloc<A: UnsafeAlloc>(A);
+pub unsafe trait PageAlloc {
+    unsafe fn alloc(&self, size: usize) -> Option<PagePtr>;
 
-impl<A: UnsafeAlloc> PageAlloc<A> {
-    pub unsafe fn alloc_page(&self, content_size: usize) -> Option<PagePtr> {
-        let ptr = self.0.alloc(PAGE_HEADER_SIZE + content_size);
-        if !ptr.is_null() {
-            Some(PagePtr::from_raw(ptr))
-        } else {
-            None
-        }
-    }
-
-    pub unsafe fn dealloc_page(&self, page: PagePtr) {
-        self.0.dealloc(page.into_raw());
-    }
-}
-
-pub unsafe trait UnsafeAlloc {
-    unsafe fn alloc(&self, size: usize) -> *mut u8;
-
-    unsafe fn dealloc(&self, ptr: *mut u8);
+    unsafe fn dealloc(&self, page: PagePtr);
 
     unsafe fn alloc_layout(size: usize) -> Layout {
         Layout::from_size_align_unchecked(size, PAGE_ALIGNMENT)

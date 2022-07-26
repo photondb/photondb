@@ -223,7 +223,7 @@ where
 {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self.current(), other.current()) {
-            (Some(a), Some(b)) => b.cmp(&a),
+            (Some(a), Some(b)) => b.cmp(a),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
             (None, None) => Ordering::Equal,

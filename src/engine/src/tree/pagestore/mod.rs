@@ -1,5 +1,2 @@
-mod env;
-mod file;
-
 mod store;
-pub use store::{PageAddr, PageDesc, PageHandle, PageInfo, PageStore};
+pub use store::{PageInfo, PageStore};
