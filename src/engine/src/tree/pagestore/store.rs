@@ -5,8 +5,8 @@ use crate::tree::{
 
 pub struct PageInfo {
     pub ver: u64,
+    pub len: u8,
     pub tags: PageTags,
-    pub chain_len: u8,
 }
 
 pub struct PageStore {

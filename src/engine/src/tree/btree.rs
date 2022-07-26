@@ -100,21 +100,21 @@ impl BTree {
         loop {
             let old_addr = view.as_addr();
             delta.set_ver(view.ver());
-            delta.set_chain_len(view.chain_len() + 1);
-            delta.set_chain_next(old_addr);
+            delta.set_len(view.len() + 1);
+            delta.set_next(old_addr);
             match self.update_node(id, old_addr, delta.as_addr()) {
                 None => {
-                    if delta.len() >= self.opts.data_chain_length {
+                    if delta.len() >= self.opts.data_delta_length {
                         let _ = self.try_consolidate_node(&node, ghost).await;
                     }
                     return Ok(());
                 }
-                Some(ptr) => {
-                    let view = self.page_view(ptr, ghost);
-                    if view.ver() != node.view.ver() {
+                Some(addr) => {
+                    let new_view = self.page_view(addr, ghost);
+                    if new_view.ver() != view.ver() {
                         return Err(Error::Conflict);
                     }
-                    node.view = view;
+                    view = new_view;
                 }
             }
         }

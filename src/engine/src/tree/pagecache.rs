@@ -50,6 +50,13 @@ impl<'a> PageView<'a> {
         }
     }
 
+    pub fn len(&self) -> u8 {
+        match self {
+            Self::Mem(page) => page.len(),
+            Self::Disk(info, _) => info.len,
+        }
+    }
+
     pub fn tags(&self) -> PageTags {
         match self {
             Self::Mem(page) => page.tags(),
@@ -57,16 +64,9 @@ impl<'a> PageView<'a> {
         }
     }
 
-    pub fn chain_len(&self) -> u8 {
-        match self {
-            Self::Mem(page) => page.chain_len(),
-            Self::Disk(info, _) => info.chain_len,
-        }
-    }
-
     pub fn as_addr(&self) -> PageAddr {
         match *self {
-            Self::Mem(page) => PageAddr::Mem(page.into_raw() as u64),
+            Self::Mem(page) => PageAddr::Mem(page.as_ptr() as u64),
             Self::Disk(_, addr) => PageAddr::Disk(addr),
         }
     }
@@ -99,12 +99,12 @@ unsafe impl PageAlloc for PageCache {
         } else {
             let ptr = Jemalloc.alloc(Self::alloc_layout(size));
             self.size.fetch_add(usable_size(ptr), Ordering::Relaxed);
-            PagePtr::from_raw(ptr)
+            PagePtr::new(ptr)
         }
     }
 
     unsafe fn dealloc(&self, page: PagePtr) {
-        let ptr = page.into_raw();
+        let ptr = page.as_ptr();
         let size = usable_size(ptr);
         self.size.fetch_sub(size, Ordering::Relaxed);
         Jemalloc.dealloc(ptr, Self::alloc_layout(size));
