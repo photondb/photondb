@@ -12,4 +12,4 @@ use codec::{BufReader, BufWriter};
 pub use codec::{Decodable, Encodable, Index, Key, Value};
 
 mod layout;
-pub use layout::{SortedPageBuf, SortedPageBuilder, SortedPageIter, SortedPageRef};
+pub use layout::{SortedPageBuilder, SortedPageIter, SortedPagePtr, SortedPageRef};

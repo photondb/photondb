@@ -97,17 +97,19 @@ impl PageCache {
         }
     }
 
+    pub async fn swapin_page<'a>(&self, addr: u64, ghost: &'a Ghost) -> Result<PageRef<'a>> {
+        let page = self.store.load_page(addr).await?;
+        Ok(page.into())
+    }
+
     pub async fn load_page_with_addr<'a>(
         &self,
         addr: PageAddr,
         ghost: &'a Ghost,
     ) -> Result<Option<PageRef<'a>>> {
         match addr {
-            PageAddr::Mem(addr) => unsafe {
-                let page = PageRef::from_raw(addr as *const u8);
-                Ok(page)
-            },
-            PageAddr::Disk(addr) => todo!(),
+            PageAddr::Mem(addr) => unsafe { Ok(PageRef::from_raw(addr as *const u8)) },
+            PageAddr::Disk(addr) => self.swapin_page(addr, ghost).await.map(Some),
         }
     }
 
@@ -118,7 +120,7 @@ impl PageCache {
     ) -> Result<PageRef<'a>> {
         match view {
             PageView::Mem(page) => Ok(page),
-            PageView::Disk(_, addr) => todo!(),
+            PageView::Disk(_, addr) => self.swapin_page(addr, ghost).await,
         }
     }
 }

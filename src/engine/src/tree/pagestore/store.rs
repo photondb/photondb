@@ -18,7 +18,11 @@ impl PageStore {
         Ok(Self { opts })
     }
 
-    pub fn page_info(&self, offset: u64) -> Option<PageInfo> {
+    pub fn page_info(&self, addr: u64) -> Option<PageInfo> {
+        todo!()
+    }
+
+    pub async fn load_page(&self, addr: u64) -> Result<PagePtr> {
         todo!()
     }
 
@@ -26,11 +30,7 @@ impl PageStore {
         todo!()
     }
 
-    pub fn release_page(&self, offset: u64) {
-        todo!()
-    }
-
-    pub async fn load_page(&self, offset: u64) -> Result<PagePtr> {
+    pub fn release_page(&self, addr: u64) {
         todo!()
     }
 }

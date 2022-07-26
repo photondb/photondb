@@ -158,50 +158,6 @@ impl BTree {
             .map(|now| now.into())
     }
 
-    fn swapin_page<'g>(
-        &self,
-        id: NodeId,
-        ptr: PagePtr,
-        buf: PageBuf,
-        ghost: &'g Ghost,
-    ) -> Result<PageRef<'g>> {
-        todo!()
-    }
-
-    async fn load_page_with_ptr<'g>(
-        &self,
-        id: NodeId,
-        ptr: PagePtr,
-        ghost: &'g Ghost,
-    ) -> Result<PageRef<'g>> {
-        match ptr {
-            PagePtr::Mem(addr) => Ok(addr.into()),
-            PagePtr::Disk(addr) => {
-                let buf = self.store.load_page_with_addr(addr.into()).await?;
-                self.swapin_page(id, ptr, buf, ghost)
-            }
-        }
-    }
-
-    async fn load_page_with_view<'g>(
-        &self,
-        id: NodeId,
-        view: &PageView<'g>,
-        ghost: &'g Ghost,
-    ) -> Result<PageRef<'g>> {
-        match *view {
-            PageView::Mem(page) => Ok(page),
-            PageView::Disk(addr, ref info) => {
-                let ptr = PagePtr::Disk(addr.into());
-                let buf = self.store.load_page_with_handle(&info.handle).await?;
-                if buf.ver() != view.ver() {
-                    return Err(Error::Conflict);
-                }
-                self.swapin_page(id, ptr, buf, ghost)
-            }
-        }
-    }
-
     async fn try_find_data_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<NodePair<'g>> {
         let mut cursor = ROOT_INDEX;
         let mut parent = None;
