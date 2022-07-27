@@ -17,3 +17,6 @@ pub use pages::TypedPageRef;
 
 mod sorted_page;
 pub use sorted_page::{SortedPageBuilder, SortedPageIter, SortedPageRef};
+
+mod split_page;
+pub use split_page::{SplitPageBuilder, SplitPageRef};

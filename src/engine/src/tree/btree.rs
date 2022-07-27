@@ -165,9 +165,11 @@ impl BTree {
         }
     }
 
-    async fn swapin_page<'a>(&self, _id: u64, _addr: u64, _: &'a Ghost) -> Result<PageRef<'a>> {
+    async fn swapin_page<'a>(&self, _id: u64, addr: u64, _: &'a Ghost) -> Result<PageRef<'a>> {
         // TODO: adds the page to the chain.
-        todo!()
+        let page = self.store.load_page(addr).await?;
+        let page: PageRef<'a> = page.into();
+        Ok(page)
     }
 
     async fn load_page_with_view<'a>(
