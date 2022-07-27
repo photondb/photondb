@@ -6,20 +6,19 @@ pub struct PageInfo {
     pub is_leaf: bool,
 }
 
-pub struct PageStore {
-    opts: Options,
-}
+pub struct PageStore {}
 
+#[allow(dead_code)]
 impl PageStore {
-    pub async fn open(opts: Options) -> Result<Self> {
-        Ok(Self { opts })
+    pub async fn open(_opts: Options) -> Result<Self> {
+        Ok(Self {})
     }
 
-    pub fn page_info(&self, addr: u64) -> Option<PageInfo> {
+    pub fn page_info(&self, _addr: u64) -> Option<PageInfo> {
         todo!()
     }
 
-    pub async fn load_page(&self, addr: u64) -> Result<PagePtr> {
+    pub async fn load_page(&self, _addr: u64) -> Result<PagePtr> {
         todo!()
     }
 
@@ -27,7 +26,7 @@ impl PageStore {
         todo!()
     }
 
-    pub fn release_page(&self, addr: u64) {
+    pub fn release_page(&self, _addr: u64) {
         todo!()
     }
 }

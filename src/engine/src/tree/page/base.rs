@@ -1,8 +1,8 @@
 use std::{marker::PhantomData, ops::Deref, ptr::NonNull};
 
-// Page header: tag (1B) | ver (6B) | len (1B) | next (8B) | freq (4B) |
+// Page header: tag (1B) | ver (6B) | len (1B) | next (8B) |
 pub const PAGE_ALIGNMENT: usize = 8;
-pub const PAGE_HEADER_SIZE: usize = 20;
+pub const PAGE_HEADER_SIZE: usize = 16;
 pub const PAGE_VERSION_SIZE: usize = 6;
 
 #[derive(Copy, Clone, Debug)]
@@ -31,10 +31,6 @@ impl PagePtr {
 
     unsafe fn next_ptr(self) -> *mut u64 {
         (self.as_ptr() as *mut u64).add(1)
-    }
-
-    unsafe fn freq_ptr(self) -> *mut u32 {
-        (self.as_ptr() as *mut u32).add(4)
     }
 
     unsafe fn content_ptr(self) -> *mut u8 {
@@ -179,7 +175,7 @@ impl PageTag {
     }
 
     fn is_leaf(self) -> bool {
-        self.0 & PAGE_LEAF_MASK == 1
+        self.0 & PAGE_LEAF_MASK != 0
     }
 
     fn set_leaf(self, is_leaf: bool) -> Self {

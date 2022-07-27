@@ -55,7 +55,7 @@ impl BTree {
 
     async fn try_get<'g>(&self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_node(key.raw, ghost).await?;
-        self.lookup_data(&node, &key, ghost).await
+        self.lookup_data(&key, &node, ghost).await
     }
 
     pub async fn put<'g>(
@@ -165,7 +165,7 @@ impl BTree {
         }
     }
 
-    async fn swapin_page<'a>(&self, id: u64, addr: u64, _: &'a Ghost) -> Result<PageRef<'a>> {
+    async fn swapin_page<'a>(&self, _id: u64, addr: u64, _: &'a Ghost) -> Result<PageRef<'a>> {
         let page = self.store.load_page(addr).await?;
         Ok(page.into())
     }
@@ -227,8 +227,8 @@ impl BTree {
 
     async fn lookup_data<'g>(
         &self,
+        key: &Key<'_>,
         node: &Node<'g>,
-        target: &Key<'_>,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
@@ -244,8 +244,8 @@ impl BTree {
 
     async fn lookup_index<'g>(
         &self,
+        key: &[u8],
         node: &Node<'g>,
-        target: &[u8],
         ghost: &'g Ghost,
     ) -> Result<Index> {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
@@ -259,7 +259,7 @@ impl BTree {
         todo!()
     }
 
-    async fn try_find_node<'g>(&self, target: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
+    async fn try_find_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
         let mut cursor = ROOT_INDEX;
         let mut parent = None;
         loop {
@@ -271,7 +271,7 @@ impl BTree {
             if node.view.is_leaf() {
                 return Ok(node);
             }
-            cursor = self.lookup_index(&node, target, ghost).await?;
+            cursor = self.lookup_index(key, &node, ghost).await?;
             parent = Some(node);
         }
     }

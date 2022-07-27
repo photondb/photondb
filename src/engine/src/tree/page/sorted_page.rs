@@ -1,9 +1,4 @@
-use std::{
-    cmp::Ordering,
-    marker::PhantomData,
-    mem::size_of,
-    ops::{Deref, DerefMut},
-};
+use std::{cmp::Ordering, marker::PhantomData, mem::size_of, ops::Deref};
 
 use super::*;
 
@@ -73,7 +68,6 @@ impl SortedPageBuilder {
 }
 
 struct SortedPageBuf {
-    ptr: PagePtr,
     offsets: *mut u32,
     payload: BufWriter,
     current: usize,
@@ -84,9 +78,8 @@ impl SortedPageBuf {
         ptr.set_default();
         ptr.set_leaf(builder.is_leaf);
         let offsets = ptr.content_mut() as *mut u32;
-        let payload = unsafe { offsets.add(builder.offsets_len) as *mut u8 };
+        let payload = offsets.add(builder.offsets_len) as *mut u8;
         Self {
-            ptr,
             offsets,
             payload: BufWriter::new(payload),
             current: 0,
