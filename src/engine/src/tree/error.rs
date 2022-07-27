@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
+    #[error("Out of memory")]
+    NoMem,
     #[error("Conflict")]
     Conflict,
     #[error("Corrupted: {0}")]

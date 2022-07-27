@@ -11,8 +11,8 @@ use super::*;
 // https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
 #[derive(Default)]
 pub struct SortedPageBuilder {
-    offsets_len: usize,
-    payload_size: usize,
+    len: usize,
+    size: usize,
 }
 
 impl SortedPageBuilder {
@@ -21,16 +21,16 @@ impl SortedPageBuilder {
         K: Encodable,
         V: Encodable,
     {
-        self.offsets_len += 1;
-        self.payload_size += key.encode_size() + value.encode_size();
+        self.len += 1;
+        self.size += key.encode_size() + value.encode_size();
     }
 
-    fn size(&self) -> usize {
+    fn page_size(&self) -> usize {
         PAGE_HEADER_SIZE + self.content_size()
     }
 
     fn content_size(&self) -> usize {
-        self.offsets_len * size_of::<u32>() + self.payload_size
+        self.len * size_of::<u32>() + self.size
     }
 
     pub unsafe fn build<A>(self, alloc: &A) -> Option<SortedPagePtr>
@@ -38,7 +38,7 @@ impl SortedPageBuilder {
         A: PageAlloc,
     {
         alloc
-            .alloc(self.size())
+            .alloc(self.page_size())
             .map(|ptr| SortedPagePtr::new(ptr, self))
     }
 
@@ -57,7 +57,7 @@ impl SortedPageBuilder {
         while let Some((key, value)) = iter.next() {
             self.add(key, value);
         }
-        if let Some(ptr) = alloc.alloc(self.size()) {
+        if let Some(ptr) = alloc.alloc(self.page_size()) {
             let mut buf = SortedPagePtr::new(ptr, self);
             iter.rewind();
             while let Some((key, value)) = iter.next() {
@@ -79,8 +79,9 @@ pub struct SortedPagePtr {
 
 impl SortedPagePtr {
     unsafe fn new(mut ptr: PagePtr, builder: SortedPageBuilder) -> Self {
+        ptr.set_default();
         let offsets = ptr.content_mut() as *mut u32;
-        let payload = offsets.add(builder.offsets_len) as *mut u8;
+        let payload = offsets.add(builder.len) as *mut u8;
         Self {
             ptr,
             offsets,
@@ -100,19 +101,9 @@ impl SortedPagePtr {
         key.encode_to(&mut self.payload);
         value.encode_to(&mut self.payload);
     }
-}
 
-impl Deref for SortedPagePtr {
-    type Target = PagePtr;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ptr
-    }
-}
-
-impl DerefMut for SortedPagePtr {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.ptr
+    pub fn as_ptr(&self) -> PagePtr {
+        self.ptr
     }
 }
 

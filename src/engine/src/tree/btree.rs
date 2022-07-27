@@ -1,15 +1,80 @@
 use super::{
     page::*,
-    pagecache::{PageAddr, PageCache, PageView},
-    pagestore::PageStore,
+    pagecache::PageCache,
+    pagestore::{PageInfo, PageStore},
     pagetable::PageTable,
     Error, Ghost, Options, Result,
 };
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum PageAddr {
+    Mem(u64),
+    Disk(u64),
+}
+
+const MEM_DISK_MASK: u64 = 1 << 63;
+
+impl From<u64> for PageAddr {
+    fn from(addr: u64) -> Self {
+        if addr & MEM_DISK_MASK == 0 {
+            Self::Mem(addr)
+        } else {
+            Self::Disk(addr & !MEM_DISK_MASK)
+        }
+    }
+}
+
+impl From<PageAddr> for u64 {
+    fn from(addr: PageAddr) -> u64 {
+        match addr {
+            PageAddr::Mem(addr) => addr,
+            PageAddr::Disk(addr) => addr | MEM_DISK_MASK,
+        }
+    }
+}
+
+enum PageView<'a> {
+    Mem(PageRef<'a>),
+    Disk(PageInfo, u64),
+}
+
+impl<'a> PageView<'a> {
+    fn ver(&self) -> u64 {
+        match self {
+            Self::Mem(page) => page.ver(),
+            Self::Disk(info, _) => info.ver,
+        }
+    }
+
+    fn len(&self) -> u8 {
+        match self {
+            Self::Mem(page) => page.len(),
+            Self::Disk(info, _) => info.len,
+        }
+    }
+
+    fn is_data(&self) -> bool {
+        match self {
+            Self::Mem(page) => page.is_data(),
+            Self::Disk(info, _) => info.is_data,
+        }
+    }
+
+    fn as_addr(&self) -> PageAddr {
+        match self {
+            Self::Mem(page) => PageAddr::Mem(page.as_ptr() as u64),
+            Self::Disk(_, addr) => PageAddr::Disk(*addr),
+        }
+    }
+}
+
 const ROOT_ID: u64 = 0;
 const ROOT_INDEX: Index = Index::new(ROOT_ID, 0);
 
-struct Node<'a>(u64, PageView<'a>);
+struct Node<'a> {
+    id: u64,
+    view: PageView<'a>,
+}
 
 pub struct BTree {
     opts: Options,
@@ -49,8 +114,8 @@ impl BTree {
     }
 
     async fn try_get<'g>(&self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
-        let node = self.try_find_data_node(key.raw, ghost).await?;
-        self.search_node(node.id, &node.view, key, ghost).await
+        let node = self.try_find_leaf_node(key.raw, ghost).await?;
+        self.lookup_data(&node, key, ghost).await
     }
 
     pub async fn put<'g>(
@@ -72,10 +137,11 @@ impl BTree {
     }
 
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
-        let mut iter = SingleIter::from((key, value));
-        let mut page = DataPageBuilder::default()
-            .build_from_iter(&mut iter, &self.cache)
-            .unwrap();
+        let mut page = unsafe {
+            SortedPageBuilder::default()
+                .build_from_iter(&self.cache, &(key, value))
+                .unwrap()
+        };
         loop {
             match self.try_update(key.raw, &mut page, ghost).await {
                 Ok(_) => return Ok(()),
@@ -93,7 +159,7 @@ impl BTree {
     async fn try_update<'g>(
         &self,
         key: &[u8],
-        delta: &mut PageBuf,
+        delta: mut PagePtr,
         ghost: &'g Ghost,
     ) -> Result<()> {
         let Node(id, mut view) = self.try_find_data_node(key, ghost).await?;
@@ -127,27 +193,34 @@ impl BTree {
         let root_id = self.table.alloc(ghost.guard()).unwrap();
         assert_eq!(root_id, ROOT_ID);
         let data_id = self.table.alloc(ghost.guard()).unwrap();
-        let data_page = DataPageBuilder::default().build(&self.cache).unwrap();
-        self.update_node(data_id, PagePtr::null(), data_page.as_ptr())
-            .unwrap();
+        let data_page = unsafe { SortedPageBuilder::default().build(&self.cache).unwrap() };
+        self.table.set(data_id, new.into());
         let data_index = Index::new(data_id, 0);
-        let mut iter = SingleIter::from(([].as_slice(), data_index));
-        let root_page = IndexPageBuilder::default()
-            .build_from_iter(&mut iter, &self.cache)
-            .unwrap();
-        self.update_node(root_id, PagePtr::null(), root_page.as_ptr())
-            .unwrap();
+        let root_page = unsafe {
+            SortedPageBuilder::default()
+                .build_from_iter(&self.cache, &(&[], data_index))
+                .unwrap()
+        };
+        self.table.set(root_id, new.into());
     }
 
-    pub fn page_addr(&self, id: u64) -> PageAddr {
+    fn node<'g>(&self, id: u64, ghost: &'g Ghost) -> Node<'g> {
+        let addr = self.page_addr(id);
+        // Our use cases ensure that we will not access invalid nodes, so it is safe to unwrap here.
+        let view = self.page_view(addr, ghost).unwrap();
+        Node { id, view }
+    }
+
+    fn page_addr(&self, id: u64) -> PageAddr {
         self.table.get(id).into()
     }
 
-    pub fn page_view(&self, addr: PageAddr) -> Option<PageView> {
+    fn page_view<'g>(&self, addr: PageAddr, _: &'g Ghost) -> Option<PageView<'g>> {
         match addr {
-            PageAddr::Mem(addr) => unsafe {
-                PageRef::from_raw(addr as *const u8).map(PageView::Mem)
-            },
+            PageAddr::Mem(addr) => {
+                let page = unsafe { PageRef::new(addr as *const u8) };
+                page.map(PageView::Mem)
+            }
             PageAddr::Disk(addr) => self
                 .store
                 .page_info(addr)
@@ -155,67 +228,37 @@ impl BTree {
         }
     }
 
-    pub async fn swapin_page<'a>(
-        &self,
-        id: u64,
-        addr: u64,
-        ghost: &'a Ghost,
-    ) -> Result<PageRef<'a>> {
+    async fn swapin_page<'a>(&self, id: u64, addr: u64, _: &'a Ghost) -> Result<PageRef<'a>> {
         let page = self.store.load_page(addr).await?;
         Ok(page.into())
     }
 
-    pub async fn load_page_with_view<'a>(
+    async fn load_page_with_view<'a>(
         &self,
         id: u64,
-        view: PageView<'a>,
+        view: &PageView<'a>,
         ghost: &'a Ghost,
     ) -> Result<PageRef<'a>> {
-        match view {
+        match *view {
             PageView::Mem(page) => Ok(page),
             PageView::Disk(_, addr) => self.swapin_page(id, addr, ghost).await,
         }
     }
 
-    pub async fn load_page_with_addr<'a>(
+    async fn load_page_with_addr<'a>(
         &self,
         id: u64,
         addr: PageAddr,
         ghost: &'a Ghost,
     ) -> Result<Option<PageRef<'a>>> {
         match addr {
-            PageAddr::Mem(addr) => unsafe { Ok(PageRef::from_raw(addr as *const u8)) },
-            PageAddr::Disk(addr) => self.swapin_page(id, addr, ghost).await.map(Some),
-        }
-    }
-
-    fn node<'g>(&self, id: u64, ghost: &'g Ghost) -> Node<'g> {
-        let addr = self.page_addr(id);
-        let view = self.page_view(addr, ghost);
-        Node { id, view }
-    }
-
-    fn update_node(&self, id: NodeId, old: PagePtr, new: PagePtr) -> Option<PagePtr> {
-        self.table
-            .cas(id, old.into(), new.into())
-            .map(|now| now.into())
-    }
-
-    async fn try_find_data_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
-        let mut cursor = ROOT_INDEX;
-        let mut parent = None;
-        loop {
-            let node = self.node(cursor.id, ghost);
-            if node.view.ver() != cursor.ver {
-                self.try_reconcile_node(&node, parent.as_ref(), ghost)?;
-                return Err(Error::Conflict);
+            PageAddr::Mem(addr) => {
+                let page = unsafe { PageRef::new(addr as *const u8) };
+                Ok(page)
             }
-            match node.view.tag() {
-                PageTag::Leaf(_) => return Ok(node),
-                PageTag::Internal(_) => {
-                    cursor = self.search_index_node(&node, key, ghost).await?;
-                    parent = Some(node);
-                }
+            PageAddr::Disk(addr) => {
+                let page = self.swapin_page(id, addr, ghost).await?;
+                Ok(Some(page))
             }
         }
     }
@@ -224,7 +267,7 @@ impl BTree {
         let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
         let mut merger = MergingIterBuilder::default();
         loop {
-            let addr = page.chain_next().into();
+            let addr = page.next().into();
             match self.load_page_with_addr(node.id, addr, ghost).await? {
                 Some(next) => page = next,
                 None => break,
@@ -233,25 +276,24 @@ impl BTree {
         Ok(merger.build())
     }
 
-    async fn search_node<'g, T>(
+    async fn lookup_data<'g, T>(
         &self,
-        id: u64,
-        view: &PageView<'g>,
+        node: &Node<'g>,
         target: T,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
-        let mut page = self.load_page_with_view(id, view, ghost).await?;
+        let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
         loop {
-            let next = page.next();
-            if let Some(page) = self.load_page_with_addr(id, next, ghost).await? {
-                page.search(key.raw, ghost).await
-            } else {
-                return Ok(None);
+            let addr = page.next().into();
+            match self.load_page_with_addr(node.id, addr, ghost).await? {
+                Some(next) => page = next,
+                None => break,
             }
         }
+        Ok(None)
     }
 
-    async fn try_reconcile_node<'g>(
+    fn try_reconcile_node<'g>(
         &self,
         node: &Node<'g>,
         parent: Option<&Node<'g>>,
@@ -260,17 +302,40 @@ impl BTree {
         todo!()
     }
 
-    async fn try_consolidate_node<'g>(&self, node: &Node<'g>, ghost: &'g Ghost) -> Result<()> {
-        let mut iter = self.iter_node(node, ghost).await?;
-        let page = SortedPageBuilder::default()
-            .build_from_iter(&mut iter, &self.cache)
-            .unwrap();
+    async fn try_consolidate_node<'g, K, V>(
+        &self,
+        node: &Node<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<()> {
+        let iter = self.iter_node(node, ghost).await?;
+        let page = unsafe {
+            SortedPageBuilder::default()
+                .build_from_iter(&self.cache, iter)
+                .unwrap()
+        };
         if self
-            .update_node(node.id, node.view.as_ptr(), page.as_ptr())
+            .update_node(node.id, node.view.as_addr(), page.as_ptr())
             .is_some()
         {
             return Err(Error::Conflict);
         }
         Ok(())
+    }
+
+    async fn try_find_data_node<'g>(&self, target: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
+        let mut cursor = ROOT_INDEX;
+        let mut parent = None;
+        loop {
+            let node = self.node(cursor.id, ghost);
+            if node.view.ver() != cursor.ver {
+                self.try_reconcile_node(&node, parent.as_ref(), ghost)?;
+                return Err(Error::Conflict);
+            }
+            if node.view.is_data() {
+                return Ok(node);
+            }
+            cursor = self.lookup_index(&node, target, ghost).await?;
+            parent = Some(node);
+        }
     }
 }

@@ -1,15 +1,16 @@
 mod base;
-use base::PAGE_HEADER_SIZE;
-pub use base::{PageAlloc, PagePtr, PageRef, PageTags};
+pub use base::{PageAlloc, PageKind, PagePtr, PageRef, PAGE_ALIGNMENT, PAGE_HEADER_SIZE};
 
 mod iter;
 pub use iter::{
     ForwardIter, MergingIter, MergingIterBuilder, OptionIter, RandomAccessIter, SequentialIter,
 };
 
-mod codec;
-use codec::{BufReader, BufWriter};
-pub use codec::{Decodable, Encodable, Index, Key, Value};
+mod util;
+use util::{BufReader, BufWriter};
 
-mod layout;
-pub use layout::{SortedPageBuilder, SortedPageIter, SortedPagePtr, SortedPageRef};
+mod data;
+pub use data::{Decodable, Encodable, Index, Key, Value};
+
+mod sorted_page;
+pub use sorted_page::{SortedPageBuilder, SortedPageIter, SortedPagePtr, SortedPageRef};

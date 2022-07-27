@@ -70,29 +70,61 @@ impl<'a, T> SequentialIter for OptionIter<'a, T> {
     }
 }
 
-pub struct MergingIterBuilder<I> {
-    children: Vec<ReverseIter<I>>,
-}
+struct ReverseIter<I>(I);
 
-impl<I> Default for MergingIterBuilder<I> {
-    fn default() -> Self {
-        Self {
-            children: Vec::new(),
-        }
+impl<I> Deref for ReverseIter<I> {
+    type Target = I;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-impl<I> MergingIterBuilder<I>
+impl<I> DerefMut for ReverseIter<I> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<I> Eq for ReverseIter<I>
 where
     I: SequentialIter,
     I::Item: Ord,
 {
-    pub fn add(&mut self, child: I) {
-        self.children.push(ReverseIter(child));
-    }
+}
 
-    pub fn build(self) -> MergingIter<I> {
-        MergingIter::new(self.children)
+impl<I> PartialEq for ReverseIter<I>
+where
+    I: SequentialIter,
+    I::Item: Ord,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl<I> Ord for ReverseIter<I>
+where
+    I: SequentialIter,
+    I::Item: Ord,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.current(), other.current()) {
+            (Some(a), Some(b)) => b.cmp(a),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        }
+    }
+}
+
+impl<I> PartialOrd for ReverseIter<I>
+where
+    I: SequentialIter,
+    I::Item: Ord,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -183,60 +215,28 @@ where
     }
 }
 
-struct ReverseIter<I>(I);
-
-impl<I> Deref for ReverseIter<I> {
-    type Target = I;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+pub struct MergingIterBuilder<I> {
+    children: Vec<ReverseIter<I>>,
 }
 
-impl<I> DerefMut for ReverseIter<I> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<I> Eq for ReverseIter<I>
-where
-    I: SequentialIter,
-    I::Item: Ord,
-{
-}
-
-impl<I> PartialEq for ReverseIter<I>
-where
-    I: SequentialIter,
-    I::Item: Ord,
-{
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl<I> Ord for ReverseIter<I>
-where
-    I: SequentialIter,
-    I::Item: Ord,
-{
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self.current(), other.current()) {
-            (Some(a), Some(b)) => b.cmp(a),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
-            (None, None) => Ordering::Equal,
+impl<I> Default for MergingIterBuilder<I> {
+    fn default() -> Self {
+        Self {
+            children: Vec::new(),
         }
     }
 }
 
-impl<I> PartialOrd for ReverseIter<I>
+impl<I> MergingIterBuilder<I>
 where
     I: SequentialIter,
     I::Item: Ord,
 {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+    pub fn add(&mut self, child: I) {
+        self.children.push(ReverseIter(child));
+    }
+
+    pub fn build(self) -> MergingIter<I> {
+        MergingIter::new(self.children)
     }
 }

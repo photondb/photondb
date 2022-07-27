@@ -1,18 +1,16 @@
-use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
+use std::{marker::PhantomData, ptr::NonNull};
 
-use bitflags::bitflags;
-
-// Page header: ver (6B) | len (1B) | tags (1B) | next (8B) | freq (4B) |
-const PAGE_ALIGNMENT: usize = 8;
-const PAGE_VERSION_SIZE: usize = 6;
+// Page header: ver (6B) | tag (1B) | len (1B) | next (8B) | freq (4B) |
+pub const PAGE_ALIGNMENT: usize = 8;
 pub const PAGE_HEADER_SIZE: usize = 20;
+pub const PAGE_VERSION_SIZE: usize = 6;
 
 #[derive(Copy, Clone, Debug)]
 pub struct PagePtr(NonNull<u8>);
 
 impl PagePtr {
     pub unsafe fn new(ptr: *mut u8) -> Option<Self> {
-        NonNull::new(ptr).map(PagePtr)
+        NonNull::new(ptr).map(Self)
     }
 
     pub const fn as_ptr(self) -> *mut u8 {
@@ -23,11 +21,11 @@ impl PagePtr {
         self.as_ptr()
     }
 
-    unsafe fn len_ptr(self) -> *mut u8 {
-        self.as_ptr().add(1)
+    unsafe fn tag_ptr(self) -> *mut u8 {
+        self.as_ptr().add(PAGE_VERSION_SIZE)
     }
 
-    unsafe fn tags_ptr(self) -> *mut u8 {
+    unsafe fn len_ptr(self) -> *mut u8 {
         self.as_ptr().add(PAGE_VERSION_SIZE + 1)
     }
 
@@ -60,6 +58,16 @@ impl PagePtr {
         }
     }
 
+    fn tag(&self) -> PageTag {
+        unsafe { self.tag_ptr().read().into() }
+    }
+
+    fn set_tag(&mut self, tag: PageTag) {
+        unsafe {
+            self.tag_ptr().write(tag.into());
+        }
+    }
+
     // Returns the length of the chain.
     pub fn len(&self) -> u8 {
         unsafe { self.len_ptr().read() }
@@ -71,20 +79,7 @@ impl PagePtr {
         }
     }
 
-    pub fn tags(&self) -> PageTags {
-        unsafe {
-            let bits = self.tags_ptr().read();
-            PageTags::from_bits(bits).unwrap()
-        }
-    }
-
-    pub fn set_tags(&mut self, tags: PageTags) {
-        unsafe {
-            self.tags_ptr().write(tags.bits());
-        }
-    }
-
-    // Returns the address of the next page.
+    // Returns the address of the next page in the chain.
     pub fn next(&self) -> u64 {
         unsafe { self.next_ptr().read().to_le() }
     }
@@ -93,6 +88,26 @@ impl PagePtr {
         unsafe {
             self.next_ptr().write(next.to_le());
         }
+    }
+
+    pub fn kind(&self) -> PageKind {
+        self.tag().kind()
+    }
+
+    pub fn set_kind(&mut self, kind: PageKind) {
+        self.set_tag(self.tag().set_kind(kind));
+    }
+
+    pub fn is_data(&self) -> bool {
+        self.tag().is_data()
+    }
+
+    pub fn set_data(&mut self, data: bool) {
+        self.set_tag(self.tag().set_data(data));
+    }
+
+    pub fn set_default(&mut self) {
+        unsafe { self.as_ptr().write_bytes(0, PAGE_HEADER_SIZE) };
     }
 
     pub fn content(&self) -> *const u8 {
@@ -119,23 +134,27 @@ impl PageRef<'_> {
         self.ptr.as_ptr()
     }
 
-    pub fn ver(&self) -> u64 {
+    pub fn ver(self) -> u64 {
         self.ptr.ver()
     }
 
-    pub fn len(&self) -> u8 {
+    pub fn len(self) -> u8 {
         self.ptr.len()
     }
 
-    pub fn tags(&self) -> PageTags {
-        self.ptr.tags()
-    }
-
-    pub fn next(&self) -> u64 {
+    pub fn next(self) -> u64 {
         self.ptr.next()
     }
 
-    pub fn content(&self) -> *const u8 {
+    pub fn kind(self) -> PageKind {
+        self.ptr.kind()
+    }
+
+    pub fn is_data(self) -> bool {
+        self.ptr.is_data()
+    }
+
+    pub fn content(self) -> *const u8 {
         self.ptr.content()
     }
 }
@@ -149,22 +168,64 @@ impl From<PagePtr> for PageRef<'_> {
     }
 }
 
-bitflags! {
-    #[derive(Default)]
-    pub struct PageTags: u8 {
-        const LEAF  = 0b10000000;
-        const DATA  = 0b00000000;
-        const SPLIT = 0b00000001;
+#[derive(Copy, Clone, Default)]
+struct PageTag(u8);
+
+const DATA_INDEX_MASK: u8 = 1 << 7;
+
+impl PageTag {
+    fn kind(self) -> PageKind {
+        (self.0 & !DATA_INDEX_MASK).into()
+    }
+
+    fn set_kind(self, kind: PageKind) -> Self {
+        Self(self.0 | kind as u8)
+    }
+
+    fn is_data(self) -> bool {
+        self.0 & DATA_INDEX_MASK == 0
+    }
+
+    fn set_data(self, data: bool) -> Self {
+        if data {
+            Self(self.0 & !DATA_INDEX_MASK)
+        } else {
+            Self(self.0 | DATA_INDEX_MASK)
+        }
     }
 }
 
-impl PageTags {
-    pub fn as_kind(self) -> Self {
-        self & !Self::LEAF
+impl From<u8> for PageTag {
+    fn from(tag: u8) -> Self {
+        Self(tag)
     }
+}
 
-    pub const fn is_leaf(self) -> bool {
-        self.contains(Self::LEAF)
+impl From<PageTag> for u8 {
+    fn from(tag: PageTag) -> Self {
+        tag.0
+    }
+}
+
+#[repr(u8)]
+pub enum PageKind {
+    Base = 0,
+    Split = 1,
+}
+
+impl From<u8> for PageKind {
+    fn from(kind: u8) -> Self {
+        match kind {
+            0 => Self::Base,
+            1 => Self::Split,
+            _ => panic!("invalid page kind"),
+        }
+    }
+}
+
+impl From<PageKind> for u8 {
+    fn from(kind: PageKind) -> Self {
+        kind as u8
     }
 }
 
@@ -172,8 +233,4 @@ pub unsafe trait PageAlloc {
     unsafe fn alloc(&self, size: usize) -> Option<PagePtr>;
 
     unsafe fn dealloc(&self, page: PagePtr);
-
-    unsafe fn alloc_layout(size: usize) -> Layout {
-        Layout::from_size_align_unchecked(size, PAGE_ALIGNMENT)
-    }
 }
