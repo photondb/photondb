@@ -29,7 +29,7 @@ impl SortedPageBuilder {
         self.offsets_len * size_of::<u32>() + self.payload_size
     }
 
-    pub fn is_leaf(self, is_leaf: bool) -> Self {
+    pub fn leaf(self, is_leaf: bool) -> Self {
         Self { is_leaf, ..self }
     }
 

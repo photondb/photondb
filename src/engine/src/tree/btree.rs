@@ -79,7 +79,7 @@ impl BTree {
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
         let page = SortedPageBuilder::default()
-            .is_leaf(true)
+            .leaf(true)
             .build_from_iter(&mut iter, &self.cache)
             .ok_or(Error::Alloc)?;
         loop {
@@ -126,11 +126,12 @@ impl BTree {
 impl BTree {
     fn init(&self) -> Result<()> {
         let ghost = Ghost::pin();
+        // Initializes the tree as root -> leaf.
         let root_id = self.table.alloc(ghost.guard()).unwrap();
         assert_eq!(root_id, ROOT_ID);
         let leaf_id = self.table.alloc(ghost.guard()).unwrap();
         let leaf_page = SortedPageBuilder::default()
-            .is_leaf(true)
+            .leaf(true)
             .build_default(&self.cache)
             .ok_or(Error::Alloc)?;
         let mut leaf_iter = OptionIter::from(([].as_slice(), Index::new(leaf_id, 0)));
@@ -144,6 +145,7 @@ impl BTree {
 
     fn node<'g>(&self, id: u64, ghost: &'g Ghost) -> Node<'g> {
         let addr = self.page_addr(id);
+        // Our access pattern ensures that the address is valid.
         let view = self.page_view(addr, ghost).unwrap();
         Node { id, view }
     }
@@ -166,6 +168,7 @@ impl BTree {
     }
 
     async fn swapin_page<'a>(&self, _id: u64, addr: u64, _: &'a Ghost) -> Result<PageRef<'a>> {
+        // TODO: adds the page to the chain.
         let page = self.store.load_page(addr).await?;
         Ok(page.into())
     }
@@ -209,8 +212,8 @@ impl BTree {
         K: Decodable + Ord,
         V: Decodable,
     {
-        let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
         let mut merger = MergingIterBuilder::default();
+        let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
         loop {
             match unsafe { TypedPageRef::cast(page) } {
                 TypedPageRef::Data(data) => merger.add(data.into_iter()),
@@ -292,7 +295,7 @@ impl BTree {
     {
         let mut iter = self.iter_node::<K, V>(node, ghost).await?;
         let page = SortedPageBuilder::default()
-            .is_leaf(node.view.is_leaf())
+            .leaf(node.view.is_leaf())
             .build_from_iter(&mut iter, &self.cache)
             .ok_or(Error::Alloc)?;
         if self
