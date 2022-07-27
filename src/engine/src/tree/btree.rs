@@ -54,7 +54,7 @@ impl BTree {
     }
 
     async fn try_get<'g>(&self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
-        let node = self.try_find_leaf_node(key.raw, ghost).await?;
+        let node = self.try_find_node(key.raw, ghost).await?;
         self.lookup_data(&node, &key, ghost).await
     }
 
@@ -78,10 +78,10 @@ impl BTree {
 
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
-        let mut page = SortedPageBuilder::default()
+        let page = SortedPageBuilder::default()
+            .is_leaf(true)
             .build_from_iter(&mut iter, &self.cache)
             .ok_or(Error::Alloc)?;
-        page.set_leaf(true);
         loop {
             match self.try_update(key.raw, page, ghost).await {
                 Ok(_) => return Ok(()),
@@ -97,7 +97,7 @@ impl BTree {
     }
 
     async fn try_update<'g>(&self, key: &[u8], mut delta: PagePtr, ghost: &'g Ghost) -> Result<()> {
-        let mut node = self.try_find_leaf_node(key, ghost).await?;
+        let mut node = self.try_find_node(key, ghost).await?;
         loop {
             delta.set_ver(node.view.ver());
             delta.set_len(node.view.len() + 1);
@@ -129,10 +129,10 @@ impl BTree {
         let root_id = self.table.alloc(ghost.guard()).unwrap();
         assert_eq!(root_id, ROOT_ID);
         let leaf_id = self.table.alloc(ghost.guard()).unwrap();
-        let mut leaf_page = SortedPageBuilder::default()
-            .build(&self.cache)
+        let leaf_page = SortedPageBuilder::default()
+            .is_leaf(true)
+            .build_default(&self.cache)
             .ok_or(Error::Alloc)?;
-        leaf_page.set_leaf(true);
         let mut leaf_iter = OptionIter::from(([].as_slice(), Index::new(leaf_id, 0)));
         let root_page = SortedPageBuilder::default()
             .build_from_iter(&mut leaf_iter, &self.cache)
@@ -259,6 +259,23 @@ impl BTree {
         todo!()
     }
 
+    async fn try_find_node<'g>(&self, target: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
+        let mut cursor = ROOT_INDEX;
+        let mut parent = None;
+        loop {
+            let node = self.node(cursor.id, ghost);
+            if node.view.ver() != cursor.ver {
+                self.try_reconcile_node(&node, parent.as_ref(), ghost)?;
+                return Err(Error::Conflict);
+            }
+            if node.view.is_leaf() {
+                return Ok(node);
+            }
+            cursor = self.lookup_index(&node, target, ghost).await?;
+            parent = Some(node);
+        }
+    }
+
     fn try_reconcile_node<'g>(
         &self,
         node: &Node<'g>,
@@ -274,10 +291,10 @@ impl BTree {
         V: Encodable + Decodable,
     {
         let mut iter = self.iter_node::<K, V>(node, ghost).await?;
-        let mut page = SortedPageBuilder::default()
+        let page = SortedPageBuilder::default()
+            .is_leaf(node.view.is_leaf())
             .build_from_iter(&mut iter, &self.cache)
             .ok_or(Error::Alloc)?;
-        page.set_leaf(true);
         if self
             .table
             .cas(node.id, node.view.as_addr().into(), page.into())
@@ -286,22 +303,5 @@ impl BTree {
             return Err(Error::Conflict);
         }
         Ok(())
-    }
-
-    async fn try_find_leaf_node<'g>(&self, target: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
-        let mut cursor = ROOT_INDEX;
-        let mut parent = None;
-        loop {
-            let node = self.node(cursor.id, ghost);
-            if node.view.ver() != cursor.ver {
-                self.try_reconcile_node(&node, parent.as_ref(), ghost)?;
-                return Err(Error::Conflict);
-            }
-            if node.view.is_leaf() {
-                return Ok(node);
-            }
-            cursor = self.lookup_index(&node, target, ghost).await?;
-            parent = Some(node);
-        }
     }
 }

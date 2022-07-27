@@ -11,6 +11,7 @@ use super::*;
 // https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
 #[derive(Default)]
 pub struct SortedPageBuilder {
+    is_leaf: bool,
     offsets_len: usize,
     payload_size: usize,
 }
@@ -33,11 +34,19 @@ impl SortedPageBuilder {
         self.offsets_len * size_of::<u32>() + self.payload_size
     }
 
-    pub fn build<A>(self, alloc: &A) -> Option<PagePtr>
+    pub fn is_leaf(self, is_leaf: bool) -> Self {
+        Self { is_leaf, ..self }
+    }
+
+    pub fn build_default<A>(self, alloc: &A) -> Option<PagePtr>
     where
         A: PageAlloc,
     {
-        alloc.alloc(self.size())
+        let ptr = alloc.alloc(self.size());
+        ptr.map(|ptr| unsafe {
+            SortedPageBuf::new(ptr, self);
+            ptr
+        })
     }
 
     pub fn build_from_iter<A, I, K, V>(mut self, iter: &mut I, alloc: &A) -> Option<PagePtr>
@@ -73,6 +82,7 @@ struct SortedPageBuf {
 impl SortedPageBuf {
     unsafe fn new(mut ptr: PagePtr, builder: SortedPageBuilder) -> Self {
         ptr.set_default();
+        ptr.set_leaf(builder.is_leaf);
         let offsets = ptr.content_mut() as *mut u32;
         let payload = unsafe { offsets.add(builder.offsets_len) as *mut u8 };
         Self {

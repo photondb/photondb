@@ -1,6 +1,6 @@
-use std::{marker::PhantomData, ptr::NonNull};
+use std::{marker::PhantomData, ops::Deref, ptr::NonNull};
 
-// Page header: ver (6B) | tag (1B) | len (1B) | next (8B) | freq (4B) |
+// Page header: tag (1B) | ver (6B) | len (1B) | next (8B) | freq (4B) |
 pub const PAGE_ALIGNMENT: usize = 8;
 pub const PAGE_HEADER_SIZE: usize = 20;
 pub const PAGE_VERSION_SIZE: usize = 6;
@@ -17,16 +17,16 @@ impl PagePtr {
         self.0.as_ptr()
     }
 
-    unsafe fn ver_ptr(self) -> *mut u8 {
+    unsafe fn tag_ptr(self) -> *mut u8 {
         self.as_ptr()
     }
 
-    unsafe fn tag_ptr(self) -> *mut u8 {
-        self.as_ptr().add(PAGE_VERSION_SIZE)
+    unsafe fn ver_ptr(self) -> *mut u8 {
+        self.as_ptr().add(1)
     }
 
     unsafe fn len_ptr(self) -> *mut u8 {
-        self.as_ptr().add(PAGE_VERSION_SIZE + 1)
+        self.ver_ptr().add(PAGE_VERSION_SIZE)
     }
 
     unsafe fn next_ptr(self) -> *mut u64 {
@@ -39,6 +39,16 @@ impl PagePtr {
 
     unsafe fn content_ptr(self) -> *mut u8 {
         self.as_ptr().add(PAGE_HEADER_SIZE)
+    }
+
+    fn tag(&self) -> PageTag {
+        unsafe { self.tag_ptr().read().into() }
+    }
+
+    fn set_tag(&mut self, tag: PageTag) {
+        unsafe {
+            self.tag_ptr().write(tag.into());
+        }
     }
 
     pub fn ver(&self) -> u64 {
@@ -55,16 +65,6 @@ impl PagePtr {
             let ver = ver.to_le();
             let ver_ptr = &ver as *const u64 as *const u8;
             ver_ptr.copy_to_nonoverlapping(self.ver_ptr(), PAGE_VERSION_SIZE);
-        }
-    }
-
-    fn tag(&self) -> PageTag {
-        unsafe { self.tag_ptr().read().into() }
-    }
-
-    fn set_tag(&mut self, tag: PageTag) {
-        unsafe {
-            self.tag_ptr().write(tag.into());
         }
     }
 
@@ -102,8 +102,8 @@ impl PagePtr {
         self.tag().is_leaf()
     }
 
-    pub fn set_leaf(&mut self, v: bool) {
-        self.set_tag(self.tag().set_leaf(v));
+    pub fn set_leaf(&mut self, is_leaf: bool) {
+        self.set_tag(self.tag().set_leaf(is_leaf));
     }
 
     pub fn set_default(&mut self) {
@@ -139,29 +139,13 @@ impl PageRef<'_> {
     pub const fn as_ptr(self) -> *const u8 {
         self.ptr.as_ptr()
     }
+}
 
-    pub fn ver(self) -> u64 {
-        self.ptr.ver()
-    }
+impl Deref for PageRef<'_> {
+    type Target = PagePtr;
 
-    pub fn len(self) -> u8 {
-        self.ptr.len()
-    }
-
-    pub fn next(self) -> u64 {
-        self.ptr.next()
-    }
-
-    pub fn kind(self) -> PageKind {
-        self.ptr.kind()
-    }
-
-    pub fn is_leaf(self) -> bool {
-        self.ptr.is_leaf()
-    }
-
-    pub fn content(self) -> *const u8 {
-        self.ptr.content()
+    fn deref(&self) -> &Self::Target {
+        &self.ptr
     }
 }
 
@@ -198,8 +182,8 @@ impl PageTag {
         self.0 & PAGE_LEAF_MASK == 1
     }
 
-    fn set_leaf(self, leaf: bool) -> Self {
-        if leaf {
+    fn set_leaf(self, is_leaf: bool) -> Self {
+        if is_leaf {
             Self(self.0 | PAGE_LEAF_MASK)
         } else {
             Self(self.0 & !PAGE_LEAF_MASK)
