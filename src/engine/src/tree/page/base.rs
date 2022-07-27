@@ -1,9 +1,9 @@
-use std::{marker::PhantomData, ops::Deref, ptr::NonNull};
+use std::{alloc::Layout, marker::PhantomData, ops::Deref, ptr::NonNull};
 
 // Page header: tag (1B) | ver (6B) | len (1B) | next (8B) |
-pub const PAGE_ALIGNMENT: usize = 8;
-pub const PAGE_HEADER_SIZE: usize = 16;
-pub const PAGE_VERSION_SIZE: usize = 6;
+const PAGE_ALIGNMENT: usize = 8;
+const PAGE_HEADER_SIZE: usize = 16;
+const PAGE_VERSION_SIZE: usize = 6;
 
 #[derive(Copy, Clone, Debug)]
 pub struct PagePtr(NonNull<u8>);
@@ -200,7 +200,9 @@ impl From<PageTag> for u8 {
 }
 
 #[repr(u8)]
+#[derive(Copy, Clone, Default)]
 pub enum PageKind {
+    #[default]
     Data = 0,
     Split = 1,
 }
@@ -225,4 +227,33 @@ pub unsafe trait PageAlloc {
     fn alloc(&self, size: usize) -> Option<PagePtr>;
 
     unsafe fn dealloc(&self, page: PagePtr);
+
+    fn alloc_layout(size: usize) -> Layout {
+        unsafe { Layout::from_size_align_unchecked(size, PAGE_ALIGNMENT) }
+    }
+}
+
+#[derive(Default)]
+pub struct PageBuilder {
+    kind: PageKind,
+    is_leaf: bool,
+}
+
+impl PageBuilder {
+    pub fn new(kind: PageKind, is_leaf: bool) -> Self {
+        Self { kind, is_leaf }
+    }
+
+    pub fn build<A>(&self, alloc: &A, content_size: usize) -> Option<PagePtr>
+    where
+        A: PageAlloc,
+    {
+        let ptr = alloc.alloc(PAGE_HEADER_SIZE + content_size);
+        ptr.map(|mut ptr| {
+            ptr.set_default();
+            ptr.set_kind(self.kind);
+            ptr.set_leaf(self.is_leaf);
+            ptr
+        })
+    }
 }

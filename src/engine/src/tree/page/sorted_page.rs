@@ -1,17 +1,24 @@
-use std::{cmp::Ordering, marker::PhantomData, mem::size_of, ops::Deref};
+use std::{cmp::Ordering, marker::PhantomData, mem::size_of, ops::Deref, slice};
 
 use super::*;
 
 // TODO: Optimizes the page layout with
 // https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
-#[derive(Default)]
 pub struct SortedPageBuilder {
-    is_leaf: bool,
+    base: PageBuilder,
     offsets_len: usize,
     payload_size: usize,
 }
 
 impl SortedPageBuilder {
+    pub fn new(is_leaf: bool) -> Self {
+        Self {
+            base: PageBuilder::new(PageKind::Data, is_leaf),
+            offsets_len: 0,
+            payload_size: 0,
+        }
+    }
+
     fn add<K, V>(&mut self, key: &K, value: &V)
     where
         K: Encodable,
@@ -22,22 +29,14 @@ impl SortedPageBuilder {
     }
 
     fn size(&self) -> usize {
-        PAGE_HEADER_SIZE + self.content_size()
+        (self.offsets_len + 1) * size_of::<u32>() + self.payload_size
     }
 
-    fn content_size(&self) -> usize {
-        self.offsets_len * size_of::<u32>() + self.payload_size
-    }
-
-    pub fn leaf(self, is_leaf: bool) -> Self {
-        Self { is_leaf, ..self }
-    }
-
-    pub fn build_default<A>(self, alloc: &A) -> Option<PagePtr>
+    pub fn build<A>(self, alloc: &A) -> Option<PagePtr>
     where
         A: PageAlloc,
     {
-        let ptr = alloc.alloc(self.size());
+        let ptr = self.base.build(alloc, self.size());
         ptr.map(|ptr| unsafe {
             SortedPageBuf::new(ptr, self);
             ptr
@@ -55,7 +54,7 @@ impl SortedPageBuilder {
         while let Some((key, value)) = iter.next() {
             self.add(key, value);
         }
-        let ptr = alloc.alloc(self.size());
+        let ptr = self.base.build(alloc, self.size());
         ptr.map(|ptr| unsafe {
             let mut buf = SortedPageBuf::new(ptr, self);
             iter.rewind();
@@ -75,9 +74,9 @@ struct SortedPageBuf {
 
 impl SortedPageBuf {
     unsafe fn new(mut ptr: PagePtr, builder: SortedPageBuilder) -> Self {
-        ptr.set_default();
-        ptr.set_leaf(builder.is_leaf);
-        let offsets = ptr.content_mut() as *mut u32;
+        let content = ptr.content_mut() as *mut u32;
+        content.write(builder.offsets_len as u32);
+        let offsets = content.add(1);
         let payload = offsets.add(builder.offsets_len) as *mut u8;
         Self {
             offsets,
@@ -112,9 +111,10 @@ where
     V: Decodable,
 {
     pub unsafe fn new(base: PageRef<'a>) -> Self {
-        let offsets_ptr = base.content() as *const u32;
-        let offsets_len = (offsets_ptr.read() as usize) / size_of::<u32>();
-        let offsets = std::slice::from_raw_parts(offsets_ptr, offsets_len);
+        let content = base.content() as *const u32;
+        let offsets_len = content.read() as usize;
+        let offsets_ptr = content.add(1);
+        let offsets = slice::from_raw_parts(offsets_ptr, offsets_len);
         let payload = offsets_ptr.add(offsets_len) as *const u8;
         Self {
             base,

@@ -78,8 +78,7 @@ impl BTree {
 
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
-        let page = SortedPageBuilder::default()
-            .leaf(true)
+        let page = SortedPageBuilder::new(true)
             .build_from_iter(&mut iter, &self.cache)
             .ok_or(Error::Alloc)?;
         loop {
@@ -130,12 +129,11 @@ impl BTree {
         let root_id = self.table.alloc(ghost.guard()).unwrap();
         assert_eq!(root_id, ROOT_ID);
         let leaf_id = self.table.alloc(ghost.guard()).unwrap();
-        let leaf_page = SortedPageBuilder::default()
-            .leaf(true)
-            .build_default(&self.cache)
+        let leaf_page = SortedPageBuilder::new(true)
+            .build(&self.cache)
             .ok_or(Error::Alloc)?;
         let mut leaf_iter = OptionIter::from(([].as_slice(), Index::new(leaf_id, 0)));
-        let root_page = SortedPageBuilder::default()
+        let root_page = SortedPageBuilder::new(false)
             .build_from_iter(&mut leaf_iter, &self.cache)
             .ok_or(Error::Alloc)?;
         self.table.set(leaf_id, leaf_page.into());
@@ -167,10 +165,9 @@ impl BTree {
         }
     }
 
-    async fn swapin_page<'a>(&self, _id: u64, addr: u64, _: &'a Ghost) -> Result<PageRef<'a>> {
+    async fn swapin_page<'a>(&self, _id: u64, _addr: u64, _: &'a Ghost) -> Result<PageRef<'a>> {
         // TODO: adds the page to the chain.
-        let page = self.store.load_page(addr).await?;
-        Ok(page.into())
+        todo!()
     }
 
     async fn load_page_with_view<'a>(
@@ -294,8 +291,7 @@ impl BTree {
         V: Encodable + Decodable,
     {
         let mut iter = self.iter_node::<K, V>(node, ghost).await?;
-        let page = SortedPageBuilder::default()
-            .leaf(node.view.is_leaf())
+        let page = SortedPageBuilder::new(node.view.is_leaf())
             .build_from_iter(&mut iter, &self.cache)
             .ok_or(Error::Alloc)?;
         if self

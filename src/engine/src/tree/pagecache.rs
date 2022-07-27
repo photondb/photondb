@@ -6,7 +6,7 @@ use std::{
 use jemallocator::{usable_size, Jemalloc};
 
 use super::{
-    page::{PageAlloc, PagePtr, PageRef, PAGE_ALIGNMENT},
+    page::{PageAlloc, PagePtr, PageRef},
     pagestore::PageInfo,
 };
 
@@ -98,7 +98,7 @@ unsafe impl PageAlloc for PageCache {
             return None;
         }
         unsafe {
-            let ptr = Jemalloc.alloc(alloc_layout(size));
+            let ptr = Jemalloc.alloc(Self::alloc_layout(size));
             self.size.fetch_add(usable_size(ptr), Ordering::Relaxed);
             PagePtr::new(ptr)
         }
@@ -108,10 +108,6 @@ unsafe impl PageAlloc for PageCache {
         let ptr = page.as_ptr();
         let size = usable_size(ptr);
         self.size.fetch_sub(size, Ordering::Relaxed);
-        Jemalloc.dealloc(ptr, alloc_layout(size));
+        Jemalloc.dealloc(ptr, Self::alloc_layout(size));
     }
-}
-
-unsafe fn alloc_layout(size: usize) -> Layout {
-    Layout::from_size_align_unchecked(size, PAGE_ALIGNMENT)
 }
