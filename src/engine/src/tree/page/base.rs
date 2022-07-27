@@ -98,12 +98,12 @@ impl PagePtr {
         self.set_tag(self.tag().set_kind(kind));
     }
 
-    pub fn is_data(&self) -> bool {
-        self.tag().is_data()
+    pub fn is_leaf(&self) -> bool {
+        self.tag().is_leaf()
     }
 
-    pub fn set_data(&mut self, data: bool) {
-        self.set_tag(self.tag().set_data(data));
+    pub fn set_leaf(&mut self, v: bool) {
+        self.set_tag(self.tag().set_leaf(v));
     }
 
     pub fn set_default(&mut self) {
@@ -150,8 +150,8 @@ impl PageRef<'_> {
         self.ptr.kind()
     }
 
-    pub fn is_data(self) -> bool {
-        self.ptr.is_data()
+    pub fn is_leaf(self) -> bool {
+        self.ptr.is_leaf()
     }
 
     pub fn content(self) -> *const u8 {
@@ -171,26 +171,26 @@ impl From<PagePtr> for PageRef<'_> {
 #[derive(Copy, Clone, Default)]
 struct PageTag(u8);
 
-const DATA_INDEX_MASK: u8 = 1 << 7;
+const PAGE_LEAF_MASK: u8 = 1 << 7;
 
 impl PageTag {
     fn kind(self) -> PageKind {
-        (self.0 & !DATA_INDEX_MASK).into()
+        (self.0 & !PAGE_LEAF_MASK).into()
     }
 
     fn set_kind(self, kind: PageKind) -> Self {
         Self(self.0 | kind as u8)
     }
 
-    fn is_data(self) -> bool {
-        self.0 & DATA_INDEX_MASK == 0
+    fn is_leaf(self) -> bool {
+        self.0 & PAGE_LEAF_MASK == 1
     }
 
-    fn set_data(self, data: bool) -> Self {
-        if data {
-            Self(self.0 & !DATA_INDEX_MASK)
+    fn set_leaf(self, leaf: bool) -> Self {
+        if leaf {
+            Self(self.0 | PAGE_LEAF_MASK)
         } else {
-            Self(self.0 | DATA_INDEX_MASK)
+            Self(self.0 & !PAGE_LEAF_MASK)
         }
     }
 }
@@ -209,14 +209,14 @@ impl From<PageTag> for u8 {
 
 #[repr(u8)]
 pub enum PageKind {
-    Base = 0,
+    Data = 0,
     Split = 1,
 }
 
 impl From<u8> for PageKind {
     fn from(kind: u8) -> Self {
         match kind {
-            0 => Self::Base,
+            0 => Self::Data,
             1 => Self::Split,
             _ => panic!("invalid page kind"),
         }

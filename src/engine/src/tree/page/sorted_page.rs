@@ -119,7 +119,7 @@ where
     K: Decodable + Ord,
     V: Decodable,
 {
-    unsafe fn new(base: PageRef<'a>) -> Self {
+    pub unsafe fn new(base: PageRef<'a>) -> Self {
         let offsets_ptr = base.content() as *const u32;
         let offsets_len = (offsets_ptr.read() as usize) / size_of::<u32>();
         let offsets = std::slice::from_raw_parts(offsets_ptr, offsets_len);
