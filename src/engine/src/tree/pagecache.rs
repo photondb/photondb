@@ -5,7 +5,72 @@ use std::{
 
 use jemallocator::{usable_size, Jemalloc};
 
-use super::page::{PageAlloc, PagePtr, PAGE_ALIGNMENT};
+use super::{
+    page::{PageAlloc, PagePtr, PageRef, PAGE_ALIGNMENT},
+    pagestore::PageInfo,
+};
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum PageAddr {
+    Mem(u64),
+    Disk(u64),
+}
+
+const MEM_DISK_MASK: u64 = 1 << 63;
+
+impl From<u64> for PageAddr {
+    fn from(addr: u64) -> Self {
+        if addr & MEM_DISK_MASK == 0 {
+            Self::Mem(addr)
+        } else {
+            Self::Disk(addr & !MEM_DISK_MASK)
+        }
+    }
+}
+
+impl From<PageAddr> for u64 {
+    fn from(addr: PageAddr) -> u64 {
+        match addr {
+            PageAddr::Mem(addr) => addr,
+            PageAddr::Disk(addr) => addr | MEM_DISK_MASK,
+        }
+    }
+}
+
+pub enum PageView<'a> {
+    Mem(PageRef<'a>),
+    Disk(PageInfo, u64),
+}
+
+impl<'a> PageView<'a> {
+    pub fn ver(&self) -> u64 {
+        match self {
+            Self::Mem(page) => page.ver(),
+            Self::Disk(info, _) => info.ver,
+        }
+    }
+
+    pub fn len(&self) -> u8 {
+        match self {
+            Self::Mem(page) => page.len(),
+            Self::Disk(info, _) => info.len,
+        }
+    }
+
+    pub fn is_leaf(&self) -> bool {
+        match self {
+            Self::Mem(page) => page.is_leaf(),
+            Self::Disk(info, _) => info.is_leaf,
+        }
+    }
+
+    pub fn as_addr(&self) -> PageAddr {
+        match self {
+            Self::Mem(page) => PageAddr::Mem(page.as_ptr() as u64),
+            Self::Disk(_, addr) => PageAddr::Disk(*addr),
+        }
+    }
+}
 
 pub struct PageCache {
     size: AtomicUsize,
@@ -28,10 +93,11 @@ impl PageCache {
 }
 
 unsafe impl PageAlloc for PageCache {
-    unsafe fn alloc(&self, size: usize) -> Option<PagePtr> {
+    fn alloc(&self, size: usize) -> Option<PagePtr> {
         if self.size.load(Ordering::Relaxed) + size > self.limit {
-            None
-        } else {
+            return None;
+        }
+        unsafe {
             let ptr = Jemalloc.alloc(alloc_layout(size));
             self.size.fetch_add(usable_size(ptr), Ordering::Relaxed);
             PagePtr::new(ptr)

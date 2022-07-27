@@ -5,39 +5,38 @@ use std::{
 };
 
 pub trait ForwardIter {
-    type Item;
-
-    fn next(&mut self) -> Option<&Self::Item>;
-}
-
-pub trait SequentialIter: ForwardIter {
-    // Positions the next entry at the beginning.
-    fn rewind(&mut self);
+    type Key;
+    type Value;
 
     // Returns the current entry.
-    fn current(&self) -> Option<&Self::Item>;
+    fn current(&self) -> Option<&(Self::Key, Self::Value)>;
+
+    fn next(&mut self) -> Option<&(Self::Key, Self::Value)>;
 }
 
-pub trait RandomAccessIter: SequentialIter {
-    type Target;
-
+pub trait SeekableIter: ForwardIter {
     // Positions the next entry at or past the target.
-    fn seek(&mut self, target: &Self::Target);
+    fn seek(&mut self, target: &Self::Key);
 }
 
-pub struct OptionIter<'a, T> {
-    next: Option<&'a T>,
-    current: Option<&'a T>,
+pub trait RewindableIter: ForwardIter {
+    // Positions the next entry at the beginning.
+    fn rewind(&mut self);
 }
 
-impl<'a, T> From<&'a T> for OptionIter<'a, T> {
-    fn from(item: &'a T) -> Self {
+pub struct OptionIter<K, V> {
+    next: Option<(K, V)>,
+    current: Option<(K, V)>,
+}
+
+impl<K, V> From<(K, V)> for OptionIter<K, V> {
+    fn from(item: (K, V)) -> Self {
         Some(item).into()
     }
 }
 
-impl<'a, T> From<Option<&'a T>> for OptionIter<'a, T> {
-    fn from(next: Option<&'a T>) -> Self {
+impl<K, V> From<Option<(K, V)>> for OptionIter<K, V> {
+    fn from(next: Option<(K, V)>) -> Self {
         Self {
             next,
             current: None,
@@ -45,28 +44,29 @@ impl<'a, T> From<Option<&'a T>> for OptionIter<'a, T> {
     }
 }
 
-impl<'a, T> ForwardIter for OptionIter<'a, T> {
-    type Item = T;
+impl<K, V> ForwardIter for OptionIter<K, V> {
+    type Key = K;
+    type Value = V;
 
-    fn next(&mut self) -> Option<&Self::Item> {
+    fn current(&self) -> Option<&(K, V)> {
+        self.current.as_ref()
+    }
+
+    fn next(&mut self) -> Option<&(K, V)> {
         if let Some(next) = self.next.take() {
             self.current = Some(next);
-            self.current
+            self.current.as_ref()
         } else {
             None
         }
     }
 }
 
-impl<'a, T> SequentialIter for OptionIter<'a, T> {
+impl<K, V> RewindableIter for OptionIter<K, V> {
     fn rewind(&mut self) {
         if let Some(current) = self.current.take() {
             self.next = Some(current);
         }
-    }
-
-    fn current(&self) -> Option<&Self::Item> {
-        self.current
     }
 }
 
@@ -88,15 +88,15 @@ impl<I> DerefMut for ReverseIter<I> {
 
 impl<I> Eq for ReverseIter<I>
 where
-    I: SequentialIter,
-    I::Item: Ord,
+    I: ForwardIter,
+    I::Key: Ord,
 {
 }
 
 impl<I> PartialEq for ReverseIter<I>
 where
-    I: SequentialIter,
-    I::Item: Ord,
+    I: ForwardIter,
+    I::Key: Ord,
 {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
@@ -105,12 +105,12 @@ where
 
 impl<I> Ord for ReverseIter<I>
 where
-    I: SequentialIter,
-    I::Item: Ord,
+    I: ForwardIter,
+    I::Key: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self.current(), other.current()) {
-            (Some(a), Some(b)) => b.cmp(a),
+            (Some(a), Some(b)) => b.0.cmp(&a.0),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
             (None, None) => Ordering::Equal,
@@ -120,8 +120,8 @@ where
 
 impl<I> PartialOrd for ReverseIter<I>
 where
-    I: SequentialIter,
-    I::Item: Ord,
+    I: ForwardIter,
+    I::Key: Ord,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -130,8 +130,8 @@ where
 
 pub struct MergingIter<I>
 where
-    I: SequentialIter,
-    I::Item: Ord,
+    I: ForwardIter,
+    I::Key: Ord,
 {
     heap: BinaryHeap<ReverseIter<I>>,
     children: Vec<ReverseIter<I>>,
@@ -139,8 +139,8 @@ where
 
 impl<I> MergingIter<I>
 where
-    I: SequentialIter,
-    I::Item: Ord,
+    I: ForwardIter,
+    I::Key: Ord,
 {
     fn new(children: Vec<ReverseIter<I>>) -> Self {
         Self {
@@ -165,12 +165,17 @@ where
 
 impl<I> ForwardIter for MergingIter<I>
 where
-    I: SequentialIter,
-    I::Item: Ord,
+    I: ForwardIter,
+    I::Key: Ord,
 {
-    type Item = I::Item;
+    type Key = I::Key;
+    type Value = I::Value;
 
-    fn next(&mut self) -> Option<&Self::Item> {
+    fn current(&self) -> Option<&(Self::Key, Self::Value)> {
+        self.heap.peek().and_then(|iter| iter.current())
+    }
+
+    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
         if let Some(mut iter) = self.heap.pop() {
             iter.next();
             self.heap.push(iter);
@@ -181,35 +186,29 @@ where
     }
 }
 
-impl<I> SequentialIter for MergingIter<I>
+impl<I> SeekableIter for MergingIter<I>
 where
-    I: SequentialIter,
-    I::Item: Ord,
+    I: SeekableIter,
+    I::Key: Ord,
+{
+    fn seek(&mut self, target: &Self::Key) {
+        let mut children = self.take_children();
+        for iter in children.iter_mut() {
+            iter.seek(target);
+        }
+        std::mem::swap(&mut self.children, &mut children);
+    }
+}
+
+impl<I> RewindableIter for MergingIter<I>
+where
+    I: RewindableIter,
+    I::Key: Ord,
 {
     fn rewind(&mut self) {
         let mut children = self.take_children();
         for iter in children.iter_mut() {
             iter.rewind();
-        }
-        std::mem::swap(&mut self.children, &mut children);
-    }
-
-    fn current(&self) -> Option<&Self::Item> {
-        self.heap.peek().and_then(|iter| iter.current())
-    }
-}
-
-impl<I> RandomAccessIter for MergingIter<I>
-where
-    I: RandomAccessIter,
-    I::Item: Ord,
-{
-    type Target = I::Target;
-
-    fn seek(&mut self, target: &Self::Target) {
-        let mut children = self.take_children();
-        for iter in children.iter_mut() {
-            iter.seek(target);
         }
         std::mem::swap(&mut self.children, &mut children);
     }
@@ -229,8 +228,8 @@ impl<I> Default for MergingIterBuilder<I> {
 
 impl<I> MergingIterBuilder<I>
 where
-    I: SequentialIter,
-    I::Item: Ord,
+    I: ForwardIter,
+    I::Key: Ord,
 {
     pub fn add(&mut self, child: I) {
         self.children.push(ReverseIter(child));

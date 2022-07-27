@@ -7,8 +7,8 @@ pub use error::{Error, Result};
 mod ghost;
 use ghost::{Ghost, Guard};
 
-// mod btree;
-// use btree::BTree;
+mod btree;
+use btree::BTree;
 
 mod page;
 mod pagecache;

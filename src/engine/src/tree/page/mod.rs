@@ -3,7 +3,7 @@ pub use base::{PageAlloc, PageKind, PagePtr, PageRef, PAGE_ALIGNMENT, PAGE_HEADE
 
 mod iter;
 pub use iter::{
-    ForwardIter, MergingIter, MergingIterBuilder, OptionIter, RandomAccessIter, SequentialIter,
+    ForwardIter, MergingIter, MergingIterBuilder, OptionIter, RewindableIter, SeekableIter,
 };
 
 mod util;
@@ -16,4 +16,4 @@ mod pages;
 pub use pages::TypedPageRef;
 
 mod sorted_page;
-pub use sorted_page::{SortedPageBuilder, SortedPageIter, SortedPagePtr, SortedPageRef};
+pub use sorted_page::{SortedPageBuilder, SortedPageIter, SortedPageRef};

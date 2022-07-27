@@ -119,6 +119,12 @@ impl PagePtr {
     }
 }
 
+impl From<PagePtr> for u64 {
+    fn from(ptr: PagePtr) -> Self {
+        ptr.as_ptr() as u64
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct PageRef<'a> {
     ptr: PagePtr,
@@ -165,6 +171,12 @@ impl From<PagePtr> for PageRef<'_> {
             ptr,
             _mark: PhantomData,
         }
+    }
+}
+
+impl From<PageRef<'_>> for u64 {
+    fn from(page: PageRef<'_>) -> Self {
+        page.ptr.into()
     }
 }
 
@@ -230,7 +242,7 @@ impl From<PageKind> for u8 {
 }
 
 pub unsafe trait PageAlloc {
-    unsafe fn alloc(&self, size: usize) -> Option<PagePtr>;
+    fn alloc(&self, size: usize) -> Option<PagePtr>;
 
     unsafe fn dealloc(&self, page: PagePtr);
 }
