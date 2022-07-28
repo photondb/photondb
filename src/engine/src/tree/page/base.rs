@@ -178,11 +178,11 @@ impl From<PageRef<'_>> for u64 {
 #[derive(Copy, Clone, Default)]
 struct PageTag(u8);
 
-const PAGE_LEAF_MASK: u8 = 1 << 7;
+const LEAF_PAGE_MASK: u8 = 1 << 7;
 
 impl PageTag {
     fn kind(self) -> PageKind {
-        (self.0 & !PAGE_LEAF_MASK).into()
+        (self.0 & !LEAF_PAGE_MASK).into()
     }
 
     fn set_kind(self, kind: PageKind) -> Self {
@@ -190,14 +190,14 @@ impl PageTag {
     }
 
     fn is_leaf(self) -> bool {
-        self.0 & PAGE_LEAF_MASK != 0
+        self.0 & LEAF_PAGE_MASK != 0
     }
 
     fn set_leaf(self, is_leaf: bool) -> Self {
         if is_leaf {
-            Self(self.0 | PAGE_LEAF_MASK)
+            Self(self.0 | LEAF_PAGE_MASK)
         } else {
-            Self(self.0 & !PAGE_LEAF_MASK)
+            Self(self.0 & !LEAF_PAGE_MASK)
         }
     }
 }
@@ -215,9 +215,8 @@ impl From<PageTag> for u8 {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone)]
 pub enum PageKind {
-    #[default]
     Data = 0,
     Split = 1,
 }
@@ -254,7 +253,6 @@ pub unsafe trait PageAlloc {
 }
 
 /// A builder to build base pages.
-#[derive(Default)]
 pub struct PageBuilder {
     kind: PageKind,
     is_leaf: bool,

@@ -14,7 +14,7 @@ struct Node<'a> {
     view: PageView<'a>,
 }
 
-type NodeIter<'a, K, V> = MergingIter<SortedPageIter<'a, K, V>>;
+type NodeIter<'a, K, V> = MergingIter<DataPageIter<'a, K, V>>;
 
 pub struct BTree {
     opts: Options,
@@ -78,8 +78,8 @@ impl BTree {
 
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
-        let page = SortedPageBuilder::new(true)
-            .build_from_iter(&mut iter, &self.cache)
+        let page = DataPageBuilder::new(true)
+            .build_from_iter(&self.cache, &mut iter)
             .ok_or(Error::Alloc)?;
         loop {
             match self.try_update(key.raw, page, ghost).await {
@@ -129,12 +129,12 @@ impl BTree {
         let root_id = self.table.alloc(ghost.guard()).unwrap();
         assert_eq!(root_id, ROOT_ID);
         let leaf_id = self.table.alloc(ghost.guard()).unwrap();
-        let leaf_page = SortedPageBuilder::new(true)
+        let leaf_page = DataPageBuilder::new(true)
             .build(&self.cache)
             .ok_or(Error::Alloc)?;
-        let mut leaf_iter = OptionIter::from(([].as_slice(), Index::new(leaf_id, 0)));
-        let root_page = SortedPageBuilder::new(false)
-            .build_from_iter(&mut leaf_iter, &self.cache)
+        let mut root_iter = OptionIter::from(([].as_slice(), Index::new(leaf_id, 0)));
+        let root_page = DataPageBuilder::new(false)
+            .build_from_iter(&self.cache, &mut root_iter)
             .ok_or(Error::Alloc)?;
         self.table.set(leaf_id, leaf_page.into());
         self.table.set(root_id, root_page.into());
@@ -202,6 +202,22 @@ impl BTree {
         }
     }
 
+    async fn walk_node<'g, F>(&self, node: &Node<'g>, ghost: &'g Ghost, mut f: F) -> Result<()>
+    where
+        F: FnMut(PageRef<'g>),
+    {
+        let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
+        loop {
+            f(page);
+            let next = page.next().into();
+            match self.load_page_with_addr(node.id, next, ghost).await? {
+                Some(next) => page = next,
+                None => break,
+            }
+        }
+        Ok(())
+    }
+
     async fn iter_node<'g, K, V>(
         &self,
         node: &Node<'g>,
@@ -212,18 +228,13 @@ impl BTree {
         V: Decodable,
     {
         let mut merger = MergingIterBuilder::default();
-        let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
-        loop {
+        self.walk_node(node, ghost, |page| {
             match unsafe { TypedPageRef::cast(page) } {
                 TypedPageRef::Data(data) => merger.add(data.into_iter()),
                 _ => {}
             }
-            let addr = page.next().into();
-            match self.load_page_with_addr(node.id, addr, ghost).await? {
-                Some(next) => page = next,
-                None => break,
-            }
-        }
+        })
+        .await?;
         Ok(merger.build())
     }
 
@@ -233,14 +244,7 @@ impl BTree {
         node: &Node<'g>,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
-        let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
-        loop {
-            let addr = page.next().into();
-            match self.load_page_with_addr(node.id, addr, ghost).await? {
-                Some(next) => page = next,
-                None => break,
-            }
-        }
+        self.walk_node(node, ghost, |_| {}).await?;
         Ok(None)
     }
 
@@ -249,16 +253,9 @@ impl BTree {
         key: &[u8],
         node: &Node<'g>,
         ghost: &'g Ghost,
-    ) -> Result<Index> {
-        let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
-        loop {
-            let addr = page.next().into();
-            match self.load_page_with_addr(node.id, addr, ghost).await? {
-                Some(next) => page = next,
-                None => break,
-            }
-        }
-        todo!()
+    ) -> Result<Option<Index>> {
+        self.walk_node(node, ghost, |_| {}).await?;
+        Ok(None)
     }
 
     async fn try_find_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
@@ -273,7 +270,7 @@ impl BTree {
             if node.view.is_leaf() {
                 return Ok(node);
             }
-            cursor = self.lookup_index(key, &node, ghost).await?;
+            cursor = self.lookup_index(key, &node, ghost).await?.unwrap();
             parent = Some(node);
         }
     }
@@ -293,8 +290,8 @@ impl BTree {
         V: Encodable + Decodable,
     {
         let mut iter = self.iter_node::<K, V>(node, ghost).await?;
-        let page = SortedPageBuilder::new(node.view.is_leaf())
-            .build_from_iter(&mut iter, &self.cache)
+        let page = DataPageBuilder::new(node.view.is_leaf())
+            .build_from_iter(&self.cache, &mut iter)
             .ok_or(Error::Alloc)?;
         if self
             .table
