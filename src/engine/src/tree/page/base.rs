@@ -99,7 +99,7 @@ impl PagePtr {
     }
 
     pub fn set_kind(&mut self, kind: PageKind) {
-        self.set_tag(self.tag().set_kind(kind));
+        self.set_tag(self.tag().with_kind(kind));
     }
 
     pub fn is_leaf(&self) -> bool {
@@ -107,7 +107,7 @@ impl PagePtr {
     }
 
     pub fn set_leaf(&mut self, is_leaf: bool) {
-        self.set_tag(self.tag().set_leaf(is_leaf));
+        self.set_tag(self.tag().with_leaf(is_leaf));
     }
 
     pub fn set_default(&mut self) {
@@ -169,26 +169,30 @@ impl From<PageRef<'_>> for u64 {
 #[derive(Copy, Clone, Default)]
 struct PageTag(u8);
 
-const LEAF_PAGE_MASK: u8 = 1 << 7;
+const PAGE_KIND_MASK: u8 = 0b01111111;
 
 impl PageTag {
     fn kind(self) -> PageKind {
-        (self.0 & !LEAF_PAGE_MASK).into()
+        (self.0 & PAGE_KIND_MASK).into()
     }
 
-    fn set_kind(self, kind: PageKind) -> Self {
-        Self(self.0 | kind as u8)
+    fn with_kind(self, kind: PageKind) -> Self {
+        Self(self.leaf() | kind as u8)
+    }
+
+    fn leaf(self) -> u8 {
+        self.0 & !PAGE_KIND_MASK
     }
 
     fn is_leaf(self) -> bool {
-        self.0 & LEAF_PAGE_MASK != 0
+        self.leaf() == 0
     }
 
-    fn set_leaf(self, is_leaf: bool) -> Self {
+    fn with_leaf(self, is_leaf: bool) -> Self {
         if is_leaf {
-            Self(self.0 | LEAF_PAGE_MASK)
+            Self(self.0 & PAGE_KIND_MASK)
         } else {
-            Self(self.0 & !LEAF_PAGE_MASK)
+            Self(self.0 | !PAGE_KIND_MASK)
         }
     }
 }
@@ -206,7 +210,7 @@ impl From<PageTag> for u8 {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PageKind {
     Data = 0,
     Split = 1,
@@ -265,5 +269,32 @@ impl PageBuilder {
             ptr.set_kind(self.kind);
             ptr
         })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn page_ptr() {
+        let mut buf = [1u8; PAGE_HEADER_SIZE];
+        let mut ptr = unsafe { PagePtr::new(buf.as_mut_ptr()).unwrap() };
+        ptr.set_default();
+        assert_eq!(ptr.ver(), 0);
+        ptr.set_ver(1);
+        assert_eq!(ptr.ver(), 1);
+        assert_eq!(ptr.len(), 0);
+        ptr.set_len(1);
+        assert_eq!(ptr.len(), 1);
+        assert_eq!(ptr.next(), 0);
+        ptr.set_next(1);
+        assert_eq!(ptr.next(), 1);
+        assert_eq!(ptr.kind(), PageKind::Data);
+        ptr.set_kind(PageKind::Split);
+        assert_eq!(ptr.kind(), PageKind::Split);
+        assert_eq!(ptr.is_leaf(), true);
+        ptr.set_leaf(false);
+        assert_eq!(ptr.is_leaf(), false);
     }
 }

@@ -38,9 +38,9 @@ impl BTree {
         Ok(tree)
     }
 
-    pub async fn get<'g>(
+    pub async fn get<'k, 'g>(
         &self,
-        key: &[u8],
+        key: &'k [u8],
         lsn: u64,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
@@ -53,9 +53,9 @@ impl BTree {
         }
     }
 
-    async fn try_get<'g>(&self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
+    async fn try_get<'k, 'g>(&self, key: Key<'k>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_node(key.raw, ghost).await?;
-        self.lookup_value(&key, &node, ghost).await
+        self.lookup_value(key, &node, ghost).await
     }
 
     pub async fn put<'g>(
@@ -163,39 +163,35 @@ impl BTree {
         }
     }
 
-    async fn swapin_page<'a>(&self, _id: u64, addr: u64, _: &'a Ghost) -> Result<PageRef<'a>> {
-        // TODO: adds the page to the chain.
-        let page = self.store.load_page(addr).await?;
-        let page: PageRef<'a> = page.into();
-        Ok(page)
-    }
-
-    async fn load_page_with_view<'a>(
+    async fn load_page_with_view<'v, 'g>(
         &self,
         id: u64,
-        view: &PageView<'a>,
-        ghost: &'a Ghost,
-    ) -> Result<PageRef<'a>> {
+        view: &'v PageView<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<PageRef<'g>> {
         match *view {
             PageView::Mem(page) => Ok(page),
-            PageView::Disk(_, addr) => self.swapin_page(id, addr, ghost).await,
+            PageView::Disk(_, addr) => {
+                // self.swapin_page(id, addr, ghost).await,
+                todo!()
+            }
         }
     }
 
-    async fn load_page_with_addr<'a>(
+    async fn load_page_with_addr<'g>(
         &self,
         id: u64,
         addr: PageAddr,
-        ghost: &'a Ghost,
-    ) -> Result<Option<PageRef<'a>>> {
+        ghost: &'g Ghost,
+    ) -> Result<Option<PageRef<'g>>> {
         match addr {
             PageAddr::Mem(addr) => {
                 let page = unsafe { PagePtr::new(addr as *mut u8) };
                 Ok(page.map(PageRef::from))
             }
             PageAddr::Disk(addr) => {
-                let page = self.swapin_page(id, addr, ghost).await?;
-                Ok(Some(page))
+                // self.swapin_page(id, addr, ghost).await,
+                todo!()
             }
         }
     }
@@ -239,9 +235,9 @@ impl BTree {
         Ok(merger.build())
     }
 
-    async fn lookup_value<'g>(
+    async fn lookup_value<'k, 'g>(
         &self,
-        key: &Key<'_>,
+        key: Key<'k>,
         node: &Node<'g>,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
@@ -249,7 +245,7 @@ impl BTree {
         self.walk_node(node, ghost, |page| {
             let page = unsafe { TypedPageRef::<Key, Value>::cast(page) };
             if let TypedPageRef::Data(data) = page {
-                if let Some((k, v)) = data.seek(key) {
+                if let Some((k, v)) = data.seek(&key) {
                     if k.raw == key.raw {
                         value = v.into();
                         return true;
