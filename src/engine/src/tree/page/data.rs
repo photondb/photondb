@@ -151,6 +151,15 @@ impl Decodable for Value<'_> {
     }
 }
 
+impl<'a> From<Value<'a>> for Option<&'a [u8]> {
+    fn from(v: Value<'a>) -> Self {
+        match v {
+            Value::Put(value) => Some(value),
+            Value::Delete => None,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct Index {
     pub id: u64,
