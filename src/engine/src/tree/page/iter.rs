@@ -31,15 +31,6 @@ pub struct SliceIter<'a, K, V> {
     current: usize,
 }
 
-impl<'a, K, V> From<&'a [(K, V)]> for SliceIter<'a, K, V> {
-    fn from(entries: &'a [(K, V)]) -> Self {
-        SliceIter {
-            entries,
-            current: 0,
-        }
-    }
-}
-
 impl<'a, K, V> ForwardIter for SliceIter<'a, K, V> {
     type Key = K;
     type Value = V;
@@ -49,14 +40,36 @@ impl<'a, K, V> ForwardIter for SliceIter<'a, K, V> {
     }
 
     fn next(&mut self) -> Option<&(K, V)> {
-        self.current += 1;
+        if self.current >= self.entries.len() {
+            self.current = 0;
+        } else {
+            self.current += 1;
+        }
         self.current()
     }
 }
 
 impl<'a, K, V> RewindableIter for SliceIter<'a, K, V> {
     fn rewind(&mut self) {
-        self.current = 0;
+        self.current = self.entries.len();
+    }
+}
+
+impl<'a, K, V> From<&'a [(K, V)]> for SliceIter<'a, K, V> {
+    fn from(entries: &'a [(K, V)]) -> Self {
+        SliceIter {
+            entries,
+            current: 0,
+        }
+    }
+}
+
+impl<'a, K, V, const N: usize> From<&'a [(K, V); N]> for SliceIter<'a, K, V> {
+    fn from(entries: &'a [(K, V); N]) -> Self {
+        SliceIter {
+            entries: entries.as_slice(),
+            current: entries.len(),
+        }
     }
 }
 
@@ -64,21 +77,6 @@ impl<'a, K, V> RewindableIter for SliceIter<'a, K, V> {
 pub struct OptionIter<K, V> {
     next: Option<(K, V)>,
     current: Option<(K, V)>,
-}
-
-impl<K, V> From<(K, V)> for OptionIter<K, V> {
-    fn from(item: (K, V)) -> Self {
-        Some(item).into()
-    }
-}
-
-impl<K, V> From<Option<(K, V)>> for OptionIter<K, V> {
-    fn from(next: Option<(K, V)>) -> Self {
-        Self {
-            next,
-            current: None,
-        }
-    }
 }
 
 impl<K, V> ForwardIter for OptionIter<K, V> {
@@ -103,6 +101,21 @@ impl<K, V> RewindableIter for OptionIter<K, V> {
     fn rewind(&mut self) {
         if let Some(current) = self.current.take() {
             self.next = Some(current);
+        }
+    }
+}
+
+impl<K, V> From<(K, V)> for OptionIter<K, V> {
+    fn from(item: (K, V)) -> Self {
+        Some(item).into()
+    }
+}
+
+impl<K, V> From<Option<(K, V)>> for OptionIter<K, V> {
+    fn from(next: Option<(K, V)>) -> Self {
+        Self {
+            next,
+            current: None,
         }
     }
 }
@@ -280,5 +293,24 @@ where
 
     pub fn build(self) -> MergingIter<I> {
         MergingIter::new(self.children)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn slice_iter() {
+        let mut iter = SliceIter::from(&[(1, 2), (3, 4)]);
+        assert_eq!(iter.next(), Some(&(1, 2)));
+        assert_eq!(iter.current(), Some(&(1, 2)));
+        assert_eq!(iter.next(), Some(&(3, 4)));
+        assert_eq!(iter.current(), Some(&(3, 4)));
+        assert_eq!(iter.next(), None);
+        iter.rewind();
+        assert_eq!(iter.next(), Some(&(1, 2)));
+        assert_eq!(iter.next(), Some(&(3, 4)));
+        assert_eq!(iter.next(), None);
     }
 }

@@ -4,6 +4,7 @@ pub use base::{PageAlloc, PageBuilder, PageKind, PagePtr, PageRef};
 mod iter;
 pub use iter::{
     ForwardIter, MergingIter, MergingIterBuilder, OptionIter, RewindableIter, SeekableIter,
+    SliceIter,
 };
 
 mod util;
