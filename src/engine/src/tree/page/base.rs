@@ -137,18 +137,12 @@ pub struct PageRef<'a> {
 }
 
 impl PageRef<'_> {
-    /// Creates a new `PageRef` if `ptr` is non-null.
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe because it does not check if `ptr` points to a valid page.
-    pub unsafe fn new(ptr: *const u8) -> Option<Self> {
-        PagePtr::new(ptr as *mut u8).map(Self::from)
-    }
-
-    /// Returns the underlying raw pointer.
-    pub const fn as_ptr(self) -> *const u8 {
-        self.ptr.as_ptr()
+    /// Creates a new `PageRef` from a `PagePtr`.
+    pub fn new(ptr: PagePtr) -> Self {
+        Self {
+            ptr,
+            _mark: PhantomData,
+        }
     }
 }
 
@@ -162,10 +156,7 @@ impl Deref for PageRef<'_> {
 
 impl From<PagePtr> for PageRef<'_> {
     fn from(ptr: PagePtr) -> Self {
-        Self {
-            ptr,
-            _mark: PhantomData,
-        }
+        Self::new(ptr)
     }
 }
 
@@ -257,12 +248,11 @@ pub unsafe trait PageAlloc {
 /// A builder to create base pages.
 pub struct PageBuilder {
     kind: PageKind,
-    is_leaf: bool,
 }
 
 impl PageBuilder {
-    pub fn new(kind: PageKind, is_leaf: bool) -> Self {
-        Self { kind, is_leaf }
+    pub fn new(kind: PageKind) -> Self {
+        Self { kind }
     }
 
     pub fn build<A>(&self, alloc: &A, content_size: usize) -> Result<PagePtr, A::Error>
@@ -273,7 +263,6 @@ impl PageBuilder {
         ptr.map(|mut ptr| {
             ptr.set_default();
             ptr.set_kind(self.kind);
-            ptr.set_leaf(self.is_leaf);
             ptr
         })
     }

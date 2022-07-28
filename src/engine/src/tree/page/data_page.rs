@@ -9,17 +9,19 @@ pub struct DataPageBuilder {
     payload_size: usize,
 }
 
-// TODO: Optimizes the page layout with
-// https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
-impl DataPageBuilder {
-    pub fn new(is_leaf: bool) -> Self {
+impl Default for DataPageBuilder {
+    fn default() -> Self {
         Self {
-            base: PageBuilder::new(PageKind::Data, is_leaf),
+            base: PageBuilder::new(PageKind::Data),
             offsets_len: 0,
             payload_size: 0,
         }
     }
+}
 
+// TODO: Optimizes the page layout with
+// https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
+impl DataPageBuilder {
     fn add<K, V>(&mut self, key: &K, value: &V)
     where
         K: Encodable,

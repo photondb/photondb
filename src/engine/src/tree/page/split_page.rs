@@ -8,14 +8,16 @@ pub struct SplitPageBuilder {
     size: usize,
 }
 
-impl SplitPageBuilder {
-    pub fn new(is_leaf: bool) -> Self {
+impl Default for SplitPageBuilder {
+    fn default() -> Self {
         Self {
-            base: PageBuilder::new(PageKind::Split, is_leaf),
+            base: PageBuilder::new(PageKind::Split),
             size: 0,
         }
     }
+}
 
+impl SplitPageBuilder {
     fn add(&mut self, range: Range<&[u8]>, index: Index) {
         self.size += range.encode_size() + index.encode_size();
     }
