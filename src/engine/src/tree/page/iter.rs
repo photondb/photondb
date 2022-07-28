@@ -25,6 +25,41 @@ pub trait RewindableIter: ForwardIter {
     fn rewind(&mut self);
 }
 
+/// A wrapper that turns a slice into a `RewindableIter`.
+pub struct SliceIter<'a, K, V> {
+    entries: &'a [(K, V)],
+    current: usize,
+}
+
+impl<'a, K, V> From<&'a [(K, V)]> for SliceIter<'a, K, V> {
+    fn from(entries: &'a [(K, V)]) -> Self {
+        SliceIter {
+            entries,
+            current: 0,
+        }
+    }
+}
+
+impl<'a, K, V> ForwardIter for SliceIter<'a, K, V> {
+    type Key = K;
+    type Value = V;
+
+    fn current(&self) -> Option<&(K, V)> {
+        self.entries.get(self.current)
+    }
+
+    fn next(&mut self) -> Option<&(K, V)> {
+        self.current += 1;
+        self.current()
+    }
+}
+
+impl<'a, K, V> RewindableIter for SliceIter<'a, K, V> {
+    fn rewind(&mut self) {
+        self.current = 0;
+    }
+}
+
 /// A wrapper that turns an option into a `RewindableIter`.
 pub struct OptionIter<K, V> {
     next: Option<(K, V)>,
