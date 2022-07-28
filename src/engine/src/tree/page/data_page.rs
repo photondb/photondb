@@ -222,7 +222,7 @@ impl<'a, K, V> From<DataPageRef<'a, K, V>> for PageRef<'a> {
 pub struct DataPageIter<'a, K, V> {
     page: DataPageRef<'a, K, V>,
     next: usize,
-    current: Option<(K, V)>,
+    last: Option<(K, V)>,
 }
 
 impl<'a, K, V> DataPageIter<'a, K, V>
@@ -234,7 +234,7 @@ where
         Self {
             page,
             next: 0,
-            current: None,
+            last: None,
         }
     }
 }
@@ -247,16 +247,16 @@ where
     type Key = K;
     type Value = V;
 
-    fn current(&self) -> Option<&(K, V)> {
-        self.current.as_ref()
+    fn last(&self) -> Option<&(K, V)> {
+        self.last.as_ref()
     }
 
     fn next(&mut self) -> Option<&(K, V)> {
-        self.current = self.page.index(self.next).map(|next| {
+        self.last = self.page.index(self.next).map(|next| {
             self.next += 1;
             next
         });
-        self.current.as_ref()
+        self.last.as_ref()
     }
 }
 
@@ -267,7 +267,7 @@ where
 {
     fn seek(&mut self, target: &K) {
         self.next = self.page.rank(target);
-        self.current = None;
+        self.last = None;
     }
 }
 
@@ -278,6 +278,6 @@ where
 {
     fn rewind(&mut self) {
         self.next = 0;
-        self.current = None;
+        self.last = None;
     }
 }

@@ -2,14 +2,15 @@ use std::{
     cmp::{Ord, Ordering},
     collections::BinaryHeap,
     ops::{Deref, DerefMut},
+    slice,
 };
 
 pub trait ForwardIter {
     type Key;
     type Value;
 
-    /// Returns the current entry.
-    fn current(&self) -> Option<&(Self::Key, Self::Value)>;
+    /// Returns the last entry.
+    fn last(&self) -> Option<&(Self::Key, Self::Value)>;
 
     /// Advances to the next entry and returns it.
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)>;
@@ -27,70 +28,78 @@ pub trait RewindableIter: ForwardIter {
 
 /// A wrapper that turns a slice into a `RewindableIter`.
 pub struct SliceIter<'a, K, V> {
-    entries: &'a [(K, V)],
-    current: usize,
+    data: &'a [(K, V)],
+    iter: slice::Iter<'a, (K, V)>,
+    last: Option<&'a (K, V)>,
+}
+
+impl<'a, K, V> SliceIter<'a, K, V> {
+    pub fn new(data: &'a [(K, V)]) -> Self {
+        SliceIter {
+            data,
+            iter: data.iter(),
+            last: None,
+        }
+    }
 }
 
 impl<'a, K, V> ForwardIter for SliceIter<'a, K, V> {
     type Key = K;
     type Value = V;
 
-    fn current(&self) -> Option<&(K, V)> {
-        self.entries.get(self.current)
+    fn last(&self) -> Option<&(K, V)> {
+        self.last
     }
 
     fn next(&mut self) -> Option<&(K, V)> {
-        if self.current >= self.entries.len() {
-            self.current = 0;
-        } else {
-            self.current += 1;
-        }
-        self.current()
+        self.last = self.iter.next();
+        self.last
     }
 }
 
 impl<'a, K, V> RewindableIter for SliceIter<'a, K, V> {
     fn rewind(&mut self) {
-        self.current = self.entries.len();
+        self.iter = self.data.iter();
+        self.last = None;
     }
 }
 
 impl<'a, K, V> From<&'a [(K, V)]> for SliceIter<'a, K, V> {
     fn from(entries: &'a [(K, V)]) -> Self {
-        SliceIter {
-            entries,
-            current: 0,
-        }
+        Self::new(entries)
     }
 }
 
 impl<'a, K, V, const N: usize> From<&'a [(K, V); N]> for SliceIter<'a, K, V> {
     fn from(entries: &'a [(K, V); N]) -> Self {
-        SliceIter {
-            entries: entries.as_slice(),
-            current: entries.len(),
-        }
+        Self::new(entries.as_slice())
     }
 }
 
 /// A wrapper that turns an option into a `RewindableIter`.
 pub struct OptionIter<K, V> {
     next: Option<(K, V)>,
-    current: Option<(K, V)>,
+    last: Option<(K, V)>,
+}
+
+impl<K, V> OptionIter<K, V> {
+    pub fn new(next: Option<(K, V)>) -> Self {
+        OptionIter { next, last: None }
+    }
 }
 
 impl<K, V> ForwardIter for OptionIter<K, V> {
     type Key = K;
     type Value = V;
 
-    fn current(&self) -> Option<&(K, V)> {
-        self.current.as_ref()
+    fn last(&self) -> Option<&(K, V)> {
+        self.last.as_ref()
     }
 
     fn next(&mut self) -> Option<&(K, V)> {
         if let Some(next) = self.next.take() {
-            self.current = Some(next);
-            self.current.as_ref()
+            self.last = Some(next);
+            self.last.as_ref()
         } else {
             None
         }
@@ -99,24 +108,21 @@ impl<K, V> ForwardIter for OptionIter<K, V> {
 
 impl<K, V> RewindableIter for OptionIter<K, V> {
     fn rewind(&mut self) {
-        if let Some(current) = self.current.take() {
-            self.next = Some(current);
+        if let Some(last) = self.last.take() {
+            self.next = Some(last);
         }
     }
 }
 
 impl<K, V> From<(K, V)> for OptionIter<K, V> {
     fn from(item: (K, V)) -> Self {
-        Some(item).into()
+        Self::new(Some(item))
     }
 }
 
 impl<K, V> From<Option<(K, V)>> for OptionIter<K, V> {
     fn from(next: Option<(K, V)>) -> Self {
-        Self {
-            next,
-            current: None,
-        }
+        Self::new(next)
     }
 }
 
@@ -160,7 +166,7 @@ where
     I::Key: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
-        match (self.current(), other.current()) {
+        match (self.last(), other.last()) {
             (Some(a), Some(b)) => b.0.cmp(&a.0),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
@@ -234,8 +240,8 @@ where
     type Key = I::Key;
     type Value = I::Value;
 
-    fn current(&self) -> Option<&(Self::Key, Self::Value)> {
-        self.heap.peek().and_then(|iter| iter.current())
+    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
+        self.heap.peek().and_then(|iter| iter.last())
     }
 
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
@@ -245,7 +251,7 @@ where
         } else {
             self.init_heap();
         }
-        self.current()
+        self.last()
     }
 }
 
@@ -304,9 +310,9 @@ mod test {
     fn slice_iter() {
         let mut iter = SliceIter::from(&[(1, 2), (3, 4)]);
         assert_eq!(iter.next(), Some(&(1, 2)));
-        assert_eq!(iter.current(), Some(&(1, 2)));
+        assert_eq!(iter.last(), Some(&(1, 2)));
         assert_eq!(iter.next(), Some(&(3, 4)));
-        assert_eq!(iter.current(), Some(&(3, 4)));
+        assert_eq!(iter.last(), Some(&(3, 4)));
         assert_eq!(iter.next(), None);
         iter.rewind();
         assert_eq!(iter.next(), Some(&(1, 2)));
