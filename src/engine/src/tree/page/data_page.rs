@@ -135,6 +135,19 @@ where
         self.index(self.rank(target))
     }
 
+    // Returns the first entry that is no greater than the target.
+    pub fn seek_back(&self, target: &K) -> Option<(K, V)> {
+        let index = self.rank(target);
+        for i in (0..=index).rev() {
+            if let Some((key, value)) = self.index(i) {
+                if &key <= target {
+                    return Some((key, value));
+                }
+            }
+        }
+        None
+    }
+
     pub fn iter(&self) -> DataPageIter<'a, K, V> {
         DataPageIter::new(self.clone())
     }

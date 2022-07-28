@@ -16,7 +16,7 @@ pub trait ForwardIter {
 }
 
 pub trait SeekableIter: ForwardIter {
-    /// Positions the next entry at or past the target.
+    /// Positions the next entry at or after the target.
     fn seek(&mut self, target: &Self::Key);
 }
 
@@ -153,6 +153,17 @@ where
         }
     }
 
+    fn reset<F>(&mut self, f: F)
+    where
+        F: Fn(&mut I),
+    {
+        let mut children = self.take_children();
+        for iter in children.iter_mut() {
+            f(iter);
+        }
+        std::mem::swap(&mut self.children, &mut children);
+    }
+
     fn init_heap(&mut self) {
         let mut children = std::mem::take(&mut self.children);
         for iter in children.iter_mut() {
@@ -196,11 +207,7 @@ where
     I::Key: Ord,
 {
     fn seek(&mut self, target: &Self::Key) {
-        let mut children = self.take_children();
-        for iter in children.iter_mut() {
-            iter.seek(target);
-        }
-        std::mem::swap(&mut self.children, &mut children);
+        self.reset(|iter| iter.seek(target));
     }
 }
 
@@ -210,11 +217,7 @@ where
     I::Key: Ord,
 {
     fn rewind(&mut self) {
-        let mut children = self.take_children();
-        for iter in children.iter_mut() {
-            iter.rewind();
-        }
-        std::mem::swap(&mut self.children, &mut children);
+        self.reset(|iter| iter.rewind());
     }
 }
 

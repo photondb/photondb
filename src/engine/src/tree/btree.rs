@@ -55,7 +55,7 @@ impl BTree {
 
     async fn try_get<'g>(&self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_node(key.raw, ghost).await?;
-        self.lookup_data(&key, &node, ghost).await
+        self.lookup_value(&key, &node, ghost).await
     }
 
     pub async fn put<'g>(
@@ -236,7 +236,7 @@ impl BTree {
         Ok(merger.build())
     }
 
-    async fn lookup_data<'g>(
+    async fn lookup_value<'g>(
         &self,
         key: &Key<'_>,
         node: &Node<'g>,
@@ -269,7 +269,7 @@ impl BTree {
         self.walk_node(node, ghost, |page| {
             let page = unsafe { TypedPageRef::<&[u8], Index>::cast(page) };
             if let TypedPageRef::Data(data) = page {
-                if let Some((_, v)) = data.seek(&key) {
+                if let Some((_, v)) = data.seek_back(&key) {
                     index = v.into();
                     return true;
                 }
