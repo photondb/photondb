@@ -102,6 +102,7 @@ impl BTree {
             match self.table.cas(node.id, delta.next(), delta.into()) {
                 None => {
                     if delta.len() >= self.opts.data_delta_length {
+                        node.view = delta.into();
                         let _ = self.try_consolidate_node::<Key, Value>(&node, ghost).await;
                     }
                     return Ok(());
@@ -312,8 +313,9 @@ impl BTree {
         V: Encodable + Decodable,
     {
         let mut iter = self.iter_node::<K, V>(node, ghost).await?;
-        let page =
+        let mut page =
             DataPageBuilder::new(node.view.is_leaf()).build_from_iter(&self.cache, &mut iter)?;
+        page.set_ver(node.view.ver());
         // TODO: replace the node and deallocate the chain.
         if self
             .table

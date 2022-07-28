@@ -73,6 +73,18 @@ impl<'a> PageView<'a> {
     }
 }
 
+impl<'a> From<PagePtr> for PageView<'a> {
+    fn from(page: PagePtr) -> Self {
+        PageRef::from(page).into()
+    }
+}
+
+impl<'a> From<PageRef<'a>> for PageView<'a> {
+    fn from(page: PageRef<'a>) -> Self {
+        Self::Mem(page)
+    }
+}
+
 pub struct PageCache {
     size: AtomicUsize,
 }
