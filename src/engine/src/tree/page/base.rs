@@ -273,8 +273,31 @@ impl PageBuilder {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
+    use std::alloc::GlobalAlloc;
+
+    use jemallocator::{usable_size, Jemalloc};
+
     use super::*;
+
+    pub struct TestAlloc;
+
+    unsafe impl PageAlloc for TestAlloc {
+        type Error = ();
+
+        fn alloc(&self, size: usize) -> Result<PagePtr, Self::Error> {
+            unsafe {
+                let ptr = Jemalloc.alloc(Self::alloc_layout(size));
+                PagePtr::new(ptr).ok_or(())
+            }
+        }
+
+        unsafe fn dealloc(&self, page: PagePtr) {
+            let ptr = page.as_ptr();
+            let size = usable_size(ptr);
+            Jemalloc.dealloc(ptr, Self::alloc_layout(size));
+        }
+    }
 
     #[test]
     fn page_ptr() {
@@ -285,11 +308,11 @@ mod test {
         ptr.set_ver(1);
         assert_eq!(ptr.ver(), 1);
         assert_eq!(ptr.len(), 0);
-        ptr.set_len(1);
-        assert_eq!(ptr.len(), 1);
+        ptr.set_len(2);
+        assert_eq!(ptr.len(), 2);
         assert_eq!(ptr.next(), 0);
-        ptr.set_next(1);
-        assert_eq!(ptr.next(), 1);
+        ptr.set_next(3);
+        assert_eq!(ptr.next(), 3);
         assert_eq!(ptr.kind(), PageKind::Data);
         ptr.set_kind(PageKind::Split);
         assert_eq!(ptr.kind(), PageKind::Split);
