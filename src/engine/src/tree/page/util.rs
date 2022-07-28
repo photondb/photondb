@@ -1,6 +1,6 @@
 use std::{mem::size_of, slice};
 
-// An unsafe, little-endian buffer reader.
+/// An unsafe, little-endian buffer reader.
 pub struct BufReader {
     ptr: *const u8,
     pos: usize,
@@ -41,7 +41,7 @@ impl BufReader {
     }
 }
 
-// An unsafe, little-endian buffer writer.
+/// An unsafe, little-endian buffer writer.
 pub struct BufWriter {
     ptr: *mut u8,
     pos: usize,

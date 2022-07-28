@@ -5,14 +5,21 @@ const PAGE_ALIGNMENT: usize = 8;
 const PAGE_HEADER_SIZE: usize = 16;
 const PAGE_VERSION_SIZE: usize = 6;
 
+/// An unsafe, non-null pointer to a page.
 #[derive(Copy, Clone, Debug)]
 pub struct PagePtr(NonNull<u8>);
 
 impl PagePtr {
+    /// Creates a new `PagePtr` if `ptr` is non-null.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because it does not check if `ptr` points to a valid page.
     pub unsafe fn new(ptr: *mut u8) -> Option<Self> {
         NonNull::new(ptr).map(Self)
     }
 
+    /// Returns the underlying raw pointer.
     pub const fn as_ptr(self) -> *mut u8 {
         self.0.as_ptr()
     }
@@ -47,6 +54,7 @@ impl PagePtr {
         }
     }
 
+    /// Returns the page version.
     pub fn ver(&self) -> u64 {
         unsafe {
             let mut ver = 0u64;
@@ -64,7 +72,7 @@ impl PagePtr {
         }
     }
 
-    // Returns the length of the chain.
+    /// Returns the length of the chain.
     pub fn len(&self) -> u8 {
         unsafe { self.len_ptr().read() }
     }
@@ -75,7 +83,7 @@ impl PagePtr {
         }
     }
 
-    // Returns the address of the next page in the chain.
+    /// Returns the address of the next page in the chain.
     pub fn next(&self) -> u64 {
         unsafe { self.next_ptr().read().to_le() }
     }
@@ -121,6 +129,7 @@ impl From<PagePtr> for u64 {
     }
 }
 
+/// An unsafe reference to a page.
 #[derive(Copy, Clone, Debug)]
 pub struct PageRef<'a> {
     ptr: PagePtr,
@@ -128,10 +137,16 @@ pub struct PageRef<'a> {
 }
 
 impl PageRef<'_> {
+    /// Creates a new `PageRef` if `ptr` is non-null.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because it does not check if `ptr` points to a valid page.
     pub unsafe fn new(ptr: *const u8) -> Option<Self> {
         PagePtr::new(ptr as *mut u8).map(Self::from)
     }
 
+    /// Returns the underlying raw pointer.
     pub const fn as_ptr(self) -> *const u8 {
         self.ptr.as_ptr()
     }
@@ -223,6 +238,11 @@ impl From<PageKind> for u8 {
     }
 }
 
+/// An interface to allocate and deallocate pages.
+///
+/// # Safety
+///
+/// Similar to `std::alloc::Allocator`.
 pub unsafe trait PageAlloc {
     fn alloc(&self, size: usize) -> Option<PagePtr>;
 
@@ -233,6 +253,7 @@ pub unsafe trait PageAlloc {
     }
 }
 
+/// A builder to build base pages.
 #[derive(Default)]
 pub struct PageBuilder {
     kind: PageKind,

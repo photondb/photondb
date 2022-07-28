@@ -8,22 +8,24 @@ pub trait ForwardIter {
     type Key;
     type Value;
 
-    // Returns the current entry.
+    /// Returns the current entry.
     fn current(&self) -> Option<&(Self::Key, Self::Value)>;
 
+    /// Advances to the next entry and returns it.
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)>;
 }
 
 pub trait SeekableIter: ForwardIter {
-    // Positions the next entry at or past the target.
+    /// Positions the next entry at or past the target.
     fn seek(&mut self, target: &Self::Key);
 }
 
 pub trait RewindableIter: ForwardIter {
-    // Positions the next entry at the beginning.
+    /// Positions the next entry at the beginning.
     fn rewind(&mut self);
 }
 
+/// A wrapper that turns an option into a `RewindableIter`.
 pub struct OptionIter<K, V> {
     next: Option<(K, V)>,
     current: Option<(K, V)>,
@@ -70,6 +72,7 @@ impl<K, V> RewindableIter for OptionIter<K, V> {
     }
 }
 
+/// A wrapper to sorts iterators by their current entries in reverse order.
 struct ReverseIter<I>(I);
 
 impl<I> Deref for ReverseIter<I> {
@@ -128,6 +131,7 @@ where
     }
 }
 
+/// A iterator that merges entries from multiple iterators in ascending order.
 pub struct MergingIter<I>
 where
     I: ForwardIter,
@@ -214,6 +218,7 @@ where
     }
 }
 
+/// A builder to construct `MergingIter`.
 pub struct MergingIterBuilder<I> {
     children: Vec<ReverseIter<I>>,
 }
