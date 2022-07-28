@@ -5,7 +5,7 @@ const PAGE_ALIGNMENT: usize = 8;
 const PAGE_HEADER_SIZE: usize = 16;
 const PAGE_VERSION_SIZE: usize = 6;
 
-/// An unsafe, non-null pointer to a page.
+/// A non-null pointer to a page.
 #[derive(Copy, Clone, Debug)]
 pub struct PagePtr(NonNull<u8>);
 
@@ -129,7 +129,7 @@ impl From<PagePtr> for u64 {
     }
 }
 
-/// An unsafe reference to a page.
+/// An immutable reference to a page.
 #[derive(Copy, Clone, Debug)]
 pub struct PageRef<'a> {
     ptr: PagePtr,
@@ -243,7 +243,9 @@ impl From<PageKind> for u8 {
 ///
 /// Similar to `std::alloc::Allocator`.
 pub unsafe trait PageAlloc {
-    fn alloc(&self, size: usize) -> Option<PagePtr>;
+    type Error;
+
+    fn alloc(&self, size: usize) -> Result<PagePtr, Self::Error>;
 
     unsafe fn dealloc(&self, page: PagePtr);
 
@@ -252,7 +254,7 @@ pub unsafe trait PageAlloc {
     }
 }
 
-/// A builder to build base pages.
+/// A builder to create base pages.
 pub struct PageBuilder {
     kind: PageKind,
     is_leaf: bool,
@@ -263,7 +265,7 @@ impl PageBuilder {
         Self { kind, is_leaf }
     }
 
-    pub fn build<A>(&self, alloc: &A, content_size: usize) -> Option<PagePtr>
+    pub fn build<A>(&self, alloc: &A, content_size: usize) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
     {

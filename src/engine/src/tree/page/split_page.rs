@@ -2,6 +2,7 @@ use std::ops::{Deref, Range};
 
 use super::*;
 
+/// A builder to create split pages.
 pub struct SplitPageBuilder {
     base: PageBuilder,
     size: usize,
@@ -24,7 +25,7 @@ impl SplitPageBuilder {
         alloc: &A,
         range: Range<&[u8]>,
         index: Index,
-    ) -> Option<PagePtr>
+    ) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
     {
@@ -55,6 +56,7 @@ impl SplitPageBuf {
     }
 }
 
+/// An immutable reference to a split page.
 pub struct SplitPageRef<'a> {
     base: PageRef<'a>,
     range: Range<&'a [u8]>,

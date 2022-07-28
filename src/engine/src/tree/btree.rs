@@ -26,7 +26,7 @@ pub struct BTree {
 impl BTree {
     pub async fn open(opts: Options) -> Result<Self> {
         let table = PageTable::default();
-        let cache = PageCache::with_limit(opts.cache_size);
+        let cache = PageCache::default();
         let store = PageStore::open(opts.clone()).await?;
         let tree = Self {
             opts,
@@ -78,9 +78,7 @@ impl BTree {
 
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
-        let page = DataPageBuilder::new(true)
-            .build_from_iter(&self.cache, &mut iter)
-            .ok_or(Error::Alloc)?;
+        let page = DataPageBuilder::new(true).build_from_iter(&self.cache, &mut iter)?;
         loop {
             match self.try_update(key.raw, page, ghost).await {
                 Ok(_) => return Ok(()),
@@ -129,13 +127,10 @@ impl BTree {
         let root_id = self.table.alloc(ghost.guard()).unwrap();
         assert_eq!(root_id, ROOT_ID);
         let leaf_id = self.table.alloc(ghost.guard()).unwrap();
-        let leaf_page = DataPageBuilder::new(true)
-            .build(&self.cache)
-            .ok_or(Error::Alloc)?;
-        let mut root_iter = OptionIter::from(([].as_slice(), Index::new(leaf_id, 0)));
-        let root_page = DataPageBuilder::new(false)
-            .build_from_iter(&self.cache, &mut root_iter)
-            .ok_or(Error::Alloc)?;
+        let leaf_page = DataPageBuilder::new(true).build(&self.cache)?;
+        let leaf_index = Index::new(leaf_id, 0);
+        let mut root_iter = OptionIter::from(([].as_slice(), leaf_index));
+        let root_page = DataPageBuilder::new(false).build_from_iter(&self.cache, &mut root_iter)?;
         self.table.set(leaf_id, leaf_page.into());
         self.table.set(root_id, root_page.into());
         Ok(())
@@ -229,9 +224,9 @@ impl BTree {
     {
         let mut merger = MergingIterBuilder::default();
         self.walk_node(node, ghost, |page| {
-            match unsafe { TypedPageRef::cast(page) } {
-                TypedPageRef::Data(data) => merger.add(data.into_iter()),
-                _ => {}
+            let page = unsafe { TypedPageRef::cast(page) };
+            if let TypedPageRef::Data(data) = page {
+                merger.add(data.into_iter());
             }
         })
         .await?;
@@ -290,9 +285,8 @@ impl BTree {
         V: Encodable + Decodable,
     {
         let mut iter = self.iter_node::<K, V>(node, ghost).await?;
-        let page = DataPageBuilder::new(node.view.is_leaf())
-            .build_from_iter(&self.cache, &mut iter)
-            .ok_or(Error::Alloc)?;
+        let page =
+            DataPageBuilder::new(node.view.is_leaf()).build_from_iter(&self.cache, &mut iter)?;
         if self
             .table
             .cas(node.id, node.view.as_addr().into(), page.into())

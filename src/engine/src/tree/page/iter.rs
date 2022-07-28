@@ -218,7 +218,7 @@ where
     }
 }
 
-/// A builder to construct `MergingIter`.
+/// A builder to create `MergingIter`.
 pub struct MergingIterBuilder<I> {
     children: Vec<ReverseIter<I>>,
 }

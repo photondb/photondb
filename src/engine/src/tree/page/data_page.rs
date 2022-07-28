@@ -2,14 +2,15 @@ use std::{cmp::Ordering, marker::PhantomData, mem::size_of, ops::Deref, slice};
 
 use super::*;
 
-// TODO: Optimizes the page layout with
-// https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
+/// A builder to create data pages.
 pub struct DataPageBuilder {
     base: PageBuilder,
     offsets_len: usize,
     payload_size: usize,
 }
 
+// TODO: Optimizes the page layout with
+// https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
 impl DataPageBuilder {
     pub fn new(is_leaf: bool) -> Self {
         Self {
@@ -32,7 +33,7 @@ impl DataPageBuilder {
         (self.offsets_len + 1) * size_of::<u32>() + self.payload_size
     }
 
-    pub fn build<A>(self, alloc: &A) -> Option<PagePtr>
+    pub fn build<A>(self, alloc: &A) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
     {
@@ -43,7 +44,7 @@ impl DataPageBuilder {
         })
     }
 
-    pub fn build_from_iter<A, I>(mut self, alloc: &A, iter: &mut I) -> Option<PagePtr>
+    pub fn build_from_iter<A, I>(mut self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
         I: RewindableIter,
@@ -98,6 +99,7 @@ impl DataPageBuf {
     }
 }
 
+/// An immutable reference to a data page.
 pub struct DataPageRef<'a, K, V> {
     base: PageRef<'a>,
     offsets: &'a [u32],

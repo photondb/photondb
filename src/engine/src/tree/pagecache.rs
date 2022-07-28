@@ -1,5 +1,5 @@
 use std::{
-    alloc::{GlobalAlloc, Layout},
+    alloc::GlobalAlloc,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -8,6 +8,7 @@ use jemallocator::{usable_size, Jemalloc};
 use super::{
     page::{PageAlloc, PagePtr, PageRef},
     pagestore::PageInfo,
+    Error, Result,
 };
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -74,33 +75,24 @@ impl<'a> PageView<'a> {
 
 pub struct PageCache {
     size: AtomicUsize,
-    limit: usize,
 }
 
 impl Default for PageCache {
     fn default() -> Self {
-        Self::with_limit(usize::MAX)
-    }
-}
-
-impl PageCache {
-    pub fn with_limit(limit: usize) -> Self {
         Self {
             size: AtomicUsize::new(0),
-            limit,
         }
     }
 }
 
 unsafe impl PageAlloc for PageCache {
-    fn alloc(&self, size: usize) -> Option<PagePtr> {
-        if self.size.load(Ordering::Relaxed) + size > self.limit {
-            return None;
-        }
+    type Error = Error;
+
+    fn alloc(&self, size: usize) -> Result<PagePtr> {
         unsafe {
             let ptr = Jemalloc.alloc(Self::alloc_layout(size));
             self.size.fetch_add(usable_size(ptr), Ordering::Relaxed);
-            PagePtr::new(ptr)
+            PagePtr::new(ptr).ok_or(Error::Alloc)
         }
     }
 
