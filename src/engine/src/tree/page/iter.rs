@@ -44,7 +44,7 @@ where
     }
 }
 
-/// A wrapper that turns a slice into a `RewindableIter`.
+/// A wrapper that turns a slice into a `SeekableIter` and `RewindableIter`.
 pub struct SliceIter<'a, K, V> {
     data: &'a [(K, V)],
     iter: slice::Iter<'a, (K, V)>,
@@ -97,14 +97,14 @@ impl<'a, K, V> RewindableIter for SliceIter<'a, K, V> {
 }
 
 impl<'a, K, V> From<&'a [(K, V)]> for SliceIter<'a, K, V> {
-    fn from(entries: &'a [(K, V)]) -> Self {
-        Self::new(entries)
+    fn from(data: &'a [(K, V)]) -> Self {
+        Self::new(data)
     }
 }
 
 impl<'a, K, V, const N: usize> From<&'a [(K, V); N]> for SliceIter<'a, K, V> {
-    fn from(entries: &'a [(K, V); N]) -> Self {
-        Self::new(entries.as_slice())
+    fn from(data: &'a [(K, V); N]) -> Self {
+        Self::new(data.as_slice())
     }
 }
 
@@ -158,7 +158,7 @@ impl<K, V> From<Option<(K, V)>> for OptionIter<K, V> {
     }
 }
 
-/// A wrapper to sorts iterators by their current entries in reverse order.
+/// A wrapper to sorts iterators by their last entries in reverse order.
 struct ReverseIter<I>(I);
 
 impl<I> Deref for ReverseIter<I> {
