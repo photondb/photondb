@@ -79,7 +79,7 @@ impl BTree {
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
         let page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-        let page = page.as_ptr();
+        let page = page.into_ptr();
         loop {
             match self.try_update(key.raw, page, ghost).await {
                 Ok(_) => return Ok(()),
@@ -129,12 +129,12 @@ impl BTree {
         let root_id = self.table.alloc(ghost.guard()).unwrap();
         let leaf_id = self.table.alloc(ghost.guard()).unwrap();
         let leaf_page = DataPageBuilder::default().build(&self.cache)?;
-        self.table.set(leaf_id, leaf_page.as_ptr().into());
+        self.table.set(leaf_id, leaf_page.into_ptr().into());
         let mut root_iter = OptionIter::from(([].as_slice(), Index::with_id(leaf_id)));
         let mut root_page =
             DataPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
         root_page.set_index(true);
-        self.table.set(root_id, root_page.as_ptr().into());
+        self.table.set(root_id, root_page.into_ptr().into());
         Ok(())
     }
 
@@ -248,15 +248,15 @@ impl BTree {
         Ok(merger.build())
     }
 
-    async fn lookup_value<'k, 'n, 'g>(
-        &self,
-        key: Key<'k>,
-        node: &'n Node<'g>,
+    async fn lookup_value<'a, 'g>(
+        &'a self,
+        key: Key<'_>,
+        node: &Node<'g>,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.walk_node(node, ghost, |page| {
-            let page = unsafe { TypedPageRef::<Key, Value>::cast(page) };
+            let page = unsafe { TypedPageRef::<'g, Key, Value>::cast(page) };
             if let TypedPageRef::Data(data) = page {
                 if let Some((k, v)) = data.seek(&key) {
                     if k.raw == key.raw {
@@ -271,10 +271,10 @@ impl BTree {
         Ok(value)
     }
 
-    async fn lookup_index<'n, 'g>(
-        &self,
+    async fn lookup_index<'a, 'g>(
+        &'a self,
         key: &[u8],
-        node: &'n Node<'g>,
+        node: &Node<'g>,
         ghost: &'g Ghost,
     ) -> Result<Option<Index>> {
         let mut index = None;
@@ -332,7 +332,7 @@ impl BTree {
         let old_addr = node.view.as_addr();
         if self
             .table
-            .cas(node.id, old_addr.into(), page.as_ptr().into())
+            .cas(node.id, old_addr.into(), page.into_ptr().into())
             .is_some()
         {
             return Err(Error::Conflict);

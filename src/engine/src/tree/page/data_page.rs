@@ -96,6 +96,18 @@ impl DataPageBuf {
         }
     }
 
+    pub fn into_ptr(self) -> PagePtr {
+        self.ptr
+    }
+
+    pub fn into_ref<'a, K, V>(self) -> DataPageRef<'a, K, V>
+    where
+        K: Decodable + Ord,
+        V: Decodable,
+    {
+        unsafe { DataPageRef::new(self.ptr.into()) }
+    }
+
     unsafe fn add<K, V>(&mut self, key: &K, value: &V)
     where
         K: Encodable,
@@ -106,18 +118,6 @@ impl DataPageBuf {
         self.current += 1;
         key.encode_to(&mut self.content);
         value.encode_to(&mut self.content);
-    }
-
-    pub fn as_ptr(&self) -> PagePtr {
-        self.ptr
-    }
-
-    pub fn as_ref<K, V>(&self) -> DataPageRef<K, V>
-    where
-        K: Decodable + Ord,
-        V: Decodable,
-    {
-        unsafe { DataPageRef::new(self.ptr.into()) }
     }
 }
 
@@ -327,7 +327,7 @@ mod test {
             .build_from_iter(&ALLOC, &mut iter)
             .unwrap();
 
-        let page = page.as_ref::<u64, u64>();
+        let page = page.into_ref::<u64, u64>();
         assert_eq!(page.kind(), PageKind::Data);
         assert_eq!(page.is_index(), false);
 

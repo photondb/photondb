@@ -54,17 +54,17 @@ impl SplitPageBuf {
         }
     }
 
-    unsafe fn add(&mut self, range: Range<&[u8]>, index: Index) {
-        range.encode_to(&mut self.content);
-        index.encode_to(&mut self.content);
-    }
-
-    pub fn as_ptr(&self) -> PagePtr {
+    pub fn into_ptr(self) -> PagePtr {
         self.ptr
     }
 
-    pub fn as_ref(&self) -> SplitPageRef {
+    pub fn into_ref<'a>(self) -> SplitPageRef<'a> {
         unsafe { SplitPageRef::new(self.ptr.into()) }
+    }
+
+    unsafe fn add(&mut self, range: Range<&[u8]>, index: Index) {
+        range.encode_to(&mut self.content);
+        index.encode_to(&mut self.content);
     }
 }
 
