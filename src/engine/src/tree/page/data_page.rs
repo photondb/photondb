@@ -1,4 +1,10 @@
-use std::{cmp::Ordering, marker::PhantomData, mem::size_of, ops::Deref, slice};
+use std::{
+    cmp::Ordering,
+    marker::PhantomData,
+    mem::size_of,
+    ops::{Deref, DerefMut},
+    slice,
+};
 
 use super::*;
 
@@ -35,18 +41,15 @@ impl DataPageBuilder {
         (self.offsets_len + 1) * size_of::<u32>() + self.payload_size
     }
 
-    pub fn build<A>(self, alloc: &A) -> Result<PagePtr, A::Error>
+    pub fn build<A>(self, alloc: &A) -> Result<DataPageBuf, A::Error>
     where
         A: PageAlloc,
     {
         let ptr = self.base.build(alloc, self.size());
-        ptr.map(|ptr| unsafe {
-            DataPageBuf::new(ptr, self);
-            ptr
-        })
+        ptr.map(|ptr| unsafe { DataPageBuf::new(ptr, self) })
     }
 
-    pub fn build_from_iter<A, I>(mut self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
+    pub fn build_from_iter<A, I>(mut self, alloc: &A, iter: &mut I) -> Result<DataPageBuf, A::Error>
     where
         A: PageAlloc,
         I: RewindableIter,
@@ -64,12 +67,13 @@ impl DataPageBuilder {
             while let Some((key, value)) = iter.next() {
                 buf.add(key, value);
             }
-            ptr
+            buf
         })
     }
 }
 
-struct DataPageBuf {
+pub struct DataPageBuf {
+    ptr: PagePtr,
     offsets: *mut u32,
     payload: BufWriter,
     current: usize,
@@ -82,6 +86,7 @@ impl DataPageBuf {
         let offsets = content.add(1);
         let payload = offsets.add(builder.offsets_len) as *mut u8;
         Self {
+            ptr,
             offsets,
             payload: BufWriter::new(payload),
             current: 0,
@@ -98,6 +103,32 @@ impl DataPageBuf {
         self.current += 1;
         key.encode_to(&mut self.payload);
         value.encode_to(&mut self.payload);
+    }
+
+    pub fn as_ptr(&self) -> PagePtr {
+        self.ptr
+    }
+
+    pub fn as_ref<K, V>(&self) -> DataPageRef<K, V>
+    where
+        K: Decodable + Ord,
+        V: Decodable,
+    {
+        unsafe { DataPageRef::new(self.ptr.into()) }
+    }
+}
+
+impl Deref for DataPageBuf {
+    type Target = PagePtr;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ptr
+    }
+}
+
+impl DerefMut for DataPageBuf {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ptr
     }
 }
 
@@ -294,7 +325,7 @@ mod test {
             .build_from_iter(&ALLOC, &mut iter)
             .unwrap();
 
-        let page: DataPageRef<'_, u64, u64> = unsafe { DataPageRef::new(page.into()) };
+        let page = page.as_ref::<u64, u64>();
         assert_eq!(page.kind(), PageKind::Data);
         assert_eq!(page.is_index(), false);
 

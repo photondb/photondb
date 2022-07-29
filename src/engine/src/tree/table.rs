@@ -59,7 +59,7 @@ mod test {
 
     #[tokio::test]
     async fn large_dataset() {
-        const N: u64 = 4096;
+        const N: u64 = 1024;
         let table = open_table().await;
         for i in 0..N {
             let buf = i.to_be_bytes();

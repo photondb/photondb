@@ -79,6 +79,7 @@ impl BTree {
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
         let page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
+        let page = page.as_ptr();
         loop {
             match self.try_update(key.raw, page, ghost).await {
                 Ok(_) => return Ok(()),
@@ -128,12 +129,12 @@ impl BTree {
         let root_id = self.table.alloc(ghost.guard()).unwrap();
         let leaf_id = self.table.alloc(ghost.guard()).unwrap();
         let leaf_page = DataPageBuilder::default().build(&self.cache)?;
-        self.table.set(leaf_id, leaf_page.into());
+        self.table.set(leaf_id, leaf_page.as_ptr().into());
         let mut root_iter = OptionIter::from(([].as_slice(), Index::with_id(leaf_id)));
         let mut root_page =
             DataPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
         root_page.set_index(true);
-        self.table.set(root_id, root_page.into());
+        self.table.set(root_id, root_page.as_ptr().into());
         Ok(())
     }
 
@@ -317,7 +318,7 @@ impl BTree {
         // TODO: replace the node and deallocate the chain.
         if self
             .table
-            .cas(node.id, node.view.as_addr().into(), page.into())
+            .cas(node.id, node.view.as_addr().into(), page.as_ptr().into())
             .is_some()
         {
             return Err(Error::Conflict);
