@@ -233,9 +233,9 @@ impl BTree {
         Ok(merger.build())
     }
 
-    async fn lookup_value<'k, 'g>(
-        &self,
-        key: Key<'k>,
+    async fn lookup_value<'a, 'g>(
+        &'a self,
+        key: Key<'_>,
         node: &Node,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
@@ -256,8 +256,8 @@ impl BTree {
         Ok(value)
     }
 
-    async fn lookup_index<'g>(
-        &self,
+    async fn lookup_index<'a, 'g>(
+        &'a self,
         key: &[u8],
         node: &Node,
         ghost: &'g Ghost,

@@ -11,7 +11,7 @@ use super::*;
 /// A builder to create data pages.
 pub struct DataPageBuilder {
     base: PageBuilder,
-    offsets_len: usize,
+    offsets_size: usize,
     payload_size: usize,
 }
 
@@ -19,7 +19,7 @@ impl Default for DataPageBuilder {
     fn default() -> Self {
         Self {
             base: PageBuilder::new(PageKind::Data),
-            offsets_len: 0,
+            offsets_size: 0,
             payload_size: 0,
         }
     }
@@ -33,18 +33,15 @@ impl DataPageBuilder {
         K: Encodable,
         V: Encodable,
     {
-        self.offsets_len += 1;
+        self.offsets_size += size_of::<u32>();
         self.payload_size += key.encode_size() + value.encode_size();
     }
 
     fn size(&self) -> usize {
-        self.offsets_size() + self.payload_size
+        self.offsets_size + self.payload_size
     }
 
-    fn offsets_size(&self) -> usize {
-        self.offsets_len * size_of::<u32>()
-    }
-
+    /// Builds an empty data page.
     pub fn build<A>(self, alloc: &A) -> Result<DataPageBuf, A::Error>
     where
         A: PageAlloc,
@@ -53,6 +50,7 @@ impl DataPageBuilder {
         ptr.map(|ptr| unsafe { DataPageBuf::new(ptr, self) })
     }
 
+    /// Builds a data page with entries from the given iterator.
     pub fn build_from_iter<A, I>(mut self, alloc: &A, iter: &mut I) -> Result<DataPageBuf, A::Error>
     where
         A: PageAlloc,
@@ -87,7 +85,7 @@ impl DataPageBuf {
     unsafe fn new(mut ptr: PagePtr, builder: DataPageBuilder) -> Self {
         let offsets = ptr.content_mut() as *mut u32;
         let mut content = BufWriter::new(ptr.content_mut());
-        content.skip(builder.offsets_size());
+        content.skip(builder.offsets_size);
         Self {
             ptr,
             offsets,
@@ -163,10 +161,12 @@ where
         }
     }
 
+    /// Returns the number of entries in the page.
     pub fn len(&self) -> usize {
         self.offsets.len()
     }
 
+    /// Returns the entry at the give position.
     pub fn get(&self, index: usize) -> Option<(K, V)> {
         if let Some(&offset) = self.offsets.get(index) {
             unsafe {
@@ -181,12 +181,12 @@ where
         }
     }
 
-    // Returns the first entry that is no less than the target.
+    /// Returns the first entry that is no less than `target`.
     pub fn seek(&self, target: &K) -> Option<(K, V)> {
         self.get(self.rank(target))
     }
 
-    // Returns the first entry that is no greater than the target.
+    /// Returns the first entry that is no greater than `target`.
     pub fn seek_back(&self, target: &K) -> Option<(K, V)> {
         let index = self.rank(target);
         for i in (0..=index).rev() {
@@ -199,13 +199,9 @@ where
         None
     }
 
+    /// Returns an iterator over the entries in the page.
     pub fn iter(&self) -> DataPageIter<'a, K, V> {
         DataPageIter::new(self.clone())
-    }
-
-    fn content_at(&self, offset: u32) -> *const u8 {
-        let offset = offset.to_le() as usize;
-        unsafe { self.base.content().add(offset) }
     }
 
     fn rank(&self, target: &K) -> usize {
@@ -225,6 +221,11 @@ where
             }
         }
         left
+    }
+
+    fn content_at(&self, offset: u32) -> *const u8 {
+        let offset = offset.to_le() as usize;
+        unsafe { self.base.content().add(offset) }
     }
 }
 
