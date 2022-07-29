@@ -22,6 +22,7 @@ impl SplitPageBuilder {
         self.size += range.encode_size() + index.encode_size();
     }
 
+    /// Builds a split page with the given index.
     pub fn build_with_index<A>(
         mut self,
         alloc: &A,
