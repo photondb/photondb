@@ -6,7 +6,7 @@ use std::{
 use jemallocator::{usable_size, Jemalloc};
 
 use super::{
-    page::{PageAlloc, PagePtr, PageRef},
+    page::{PageAlloc, PagePtr, PageRef, PageVer},
     pagestore::PageInfo,
     Error, Result,
 };
@@ -44,7 +44,7 @@ pub enum PageView<'a> {
 }
 
 impl<'a> PageView<'a> {
-    pub fn ver(&self) -> u64 {
+    pub fn ver(&self) -> PageVer {
         match self {
             Self::Mem(page) => page.ver(),
             Self::Disk(info, _) => info.ver,
@@ -58,10 +58,10 @@ impl<'a> PageView<'a> {
         }
     }
 
-    pub fn is_leaf(&self) -> bool {
+    pub fn is_index(&self) -> bool {
         match self {
-            Self::Mem(page) => page.is_leaf(),
-            Self::Disk(info, _) => info.is_leaf,
+            Self::Mem(page) => page.is_index(),
+            Self::Disk(info, _) => info.is_index,
         }
     }
 

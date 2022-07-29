@@ -4,7 +4,7 @@ use std::{
     ops::Range,
 };
 
-use super::{BufReader, BufWriter};
+use super::{BufReader, BufWriter, PageVer};
 
 pub trait Encodable {
     fn encode_size(&self) -> usize;
@@ -163,12 +163,17 @@ impl<'a> From<Value<'a>> for Option<&'a [u8]> {
 #[derive(Copy, Clone, Debug)]
 pub struct Index {
     pub id: u64,
-    pub ver: u64,
+    pub ver: PageVer,
 }
 
 impl Index {
-    pub const fn new(id: u64, ver: u64) -> Self {
+    pub const fn new(id: u64, ver: PageVer) -> Self {
         Self { id, ver }
+    }
+
+    /// Creates an index with the given id and a default version.
+    pub const fn with_id(id: u64) -> Self {
+        Self::new(id, PageVer::new(0))
     }
 }
 
@@ -179,7 +184,7 @@ impl Encodable for Index {
 
     unsafe fn encode_to(&self, w: &mut BufWriter) {
         w.put_u64(self.id);
-        w.put_u64(self.ver);
+        w.put_u64(self.ver.into());
     }
 }
 
@@ -187,7 +192,7 @@ impl Decodable for Index {
     unsafe fn decode_from(r: &mut BufReader) -> Self {
         let id = r.get_u64();
         let ver = r.get_u64();
-        Self { id, ver }
+        Self::new(id, PageVer::new(ver))
     }
 }
 

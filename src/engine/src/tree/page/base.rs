@@ -55,18 +55,18 @@ impl PagePtr {
     }
 
     /// Returns the page version.
-    pub fn ver(&self) -> u64 {
+    pub fn ver(&self) -> PageVer {
         unsafe {
             let mut ver = 0u64;
             let ver_ptr = &mut ver as *mut u64 as *mut u8;
             ver_ptr.copy_from_nonoverlapping(self.ver_ptr(), PAGE_VERSION_SIZE);
-            u64::from_le(ver)
+            PageVer(u64::from_le(ver))
         }
     }
 
-    pub fn set_ver(&mut self, ver: u64) {
+    pub fn set_ver(&mut self, ver: PageVer) {
         unsafe {
-            let ver = ver.to_le();
+            let ver = ver.0.to_le();
             let ver_ptr = &ver as *const u64 as *const u8;
             ver_ptr.copy_to_nonoverlapping(self.ver_ptr(), PAGE_VERSION_SIZE);
         }
@@ -102,12 +102,12 @@ impl PagePtr {
         self.set_tag(self.tag().with_kind(kind));
     }
 
-    pub fn is_leaf(&self) -> bool {
-        self.tag().is_leaf()
+    pub fn is_index(&self) -> bool {
+        self.tag().is_index()
     }
 
-    pub fn set_leaf(&mut self, is_leaf: bool) {
-        self.set_tag(self.tag().with_leaf(is_leaf));
+    pub fn set_index(&mut self, is_index: bool) {
+        self.set_tag(self.tag().with_index(is_index));
     }
 
     pub fn set_default(&mut self) {
@@ -166,30 +166,52 @@ impl From<PageRef<'_>> for u64 {
     }
 }
 
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct PageVer(u64);
+
+const PAGE_VERSION_MAX: u64 = (1 << 48) - 1;
+
+impl PageVer {
+    pub const fn new(ver: u64) -> Self {
+        assert!(ver <= PAGE_VERSION_MAX);
+        Self(ver)
+    }
+
+    pub const fn next(self) -> Self {
+        Self::new(self.0 + 1)
+    }
+}
+
+impl From<PageVer> for u64 {
+    fn from(ver: PageVer) -> Self {
+        ver.0
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
 struct PageTag(u8);
 
 const PAGE_KIND_MASK: u8 = 0b01111111;
 
 impl PageTag {
-    fn kind(self) -> PageKind {
-        (self.0 & PAGE_KIND_MASK).into()
+    const fn kind(self) -> PageKind {
+        PageKind::new(self.0 & PAGE_KIND_MASK)
     }
 
-    fn with_kind(self, kind: PageKind) -> Self {
-        Self(self.leaf() | kind as u8)
+    const fn with_kind(self, kind: PageKind) -> Self {
+        Self(self.index() | kind as u8)
     }
 
-    fn leaf(self) -> u8 {
+    const fn index(self) -> u8 {
         self.0 & !PAGE_KIND_MASK
     }
 
-    fn is_leaf(self) -> bool {
-        self.leaf() == 0
+    const fn is_index(self) -> bool {
+        self.index() != 0
     }
 
-    fn with_leaf(self, is_leaf: bool) -> Self {
-        if is_leaf {
+    const fn with_index(self, is_index: bool) -> Self {
+        if is_index {
             Self(self.0 & PAGE_KIND_MASK)
         } else {
             Self(self.0 | !PAGE_KIND_MASK)
@@ -216,8 +238,8 @@ pub enum PageKind {
     Split = 1,
 }
 
-impl From<u8> for PageKind {
-    fn from(kind: u8) -> Self {
+impl PageKind {
+    const fn new(kind: u8) -> Self {
         match kind {
             0 => Self::Data,
             1 => Self::Split,
@@ -304,9 +326,9 @@ pub mod test {
         let mut buf = [1u8; PAGE_HEADER_SIZE];
         let mut ptr = unsafe { PagePtr::new(buf.as_mut_ptr()).unwrap() };
         ptr.set_default();
-        assert_eq!(ptr.ver(), 0);
-        ptr.set_ver(1);
-        assert_eq!(ptr.ver(), 1);
+        assert_eq!(ptr.ver(), PageVer(0));
+        ptr.set_ver(ptr.ver().next());
+        assert_eq!(ptr.ver(), PageVer(1));
         assert_eq!(ptr.len(), 0);
         ptr.set_len(2);
         assert_eq!(ptr.len(), 2);
@@ -316,8 +338,8 @@ pub mod test {
         assert_eq!(ptr.kind(), PageKind::Data);
         ptr.set_kind(PageKind::Split);
         assert_eq!(ptr.kind(), PageKind::Split);
-        assert_eq!(ptr.is_leaf(), true);
-        ptr.set_leaf(false);
-        assert_eq!(ptr.is_leaf(), false);
+        assert_eq!(ptr.is_index(), false);
+        ptr.set_index(true);
+        assert_eq!(ptr.is_index(), true);
     }
 }

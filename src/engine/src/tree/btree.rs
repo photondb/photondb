@@ -7,7 +7,7 @@ use super::{
 };
 
 const ROOT_ID: u64 = 0;
-const ROOT_INDEX: Index = Index::new(ROOT_ID, 0);
+const ROOT_INDEX: Index = Index::with_id(ROOT_ID);
 
 struct Node<'a> {
     id: u64,
@@ -78,8 +78,7 @@ impl BTree {
 
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
-        let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-        page.set_leaf(true);
+        let page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         loop {
             match self.try_update(key.raw, page, ghost).await {
                 Ok(_) => return Ok(()),
@@ -129,12 +128,12 @@ impl BTree {
         let root_id = self.table.alloc(ghost.guard()).unwrap();
         assert_eq!(root_id, ROOT_ID);
         let leaf_id = self.table.alloc(ghost.guard()).unwrap();
-        let mut leaf_page = DataPageBuilder::default().build(&self.cache)?;
-        leaf_page.set_leaf(true);
+        let leaf_page = DataPageBuilder::default().build(&self.cache)?;
         self.table.set(leaf_id, leaf_page.into());
-        let leaf_index = Index::new(leaf_id, 0);
-        let mut root_iter = OptionIter::from(([].as_slice(), leaf_index));
-        let root_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
+        let mut root_iter = OptionIter::from(([].as_slice(), Index::with_id(leaf_id)));
+        let mut root_page =
+            DataPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
+        root_page.set_index(true);
         self.table.set(root_id, root_page.into());
         Ok(())
     }
@@ -288,11 +287,12 @@ impl BTree {
                 self.try_reconcile_node(&node, parent.as_ref(), ghost)?;
                 return Err(Error::Conflict);
             }
-            if node.view.is_leaf() {
+            if node.view.is_index() {
+                cursor = self.lookup_index(key, &node, ghost).await?.unwrap();
+                parent = Some(node);
+            } else {
                 return Ok(node);
             }
-            cursor = self.lookup_index(key, &node, ghost).await?.unwrap();
-            parent = Some(node);
         }
     }
 
@@ -313,7 +313,7 @@ impl BTree {
         let mut iter = self.iter_node::<K, V>(node, ghost).await?;
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
-        page.set_leaf(node.view.is_leaf());
+        page.set_index(node.view.is_index());
         // TODO: replace the node and deallocate the chain.
         if self
             .table
