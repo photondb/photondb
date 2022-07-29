@@ -1,6 +1,9 @@
 use std::{
     alloc::GlobalAlloc,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use jemallocator::{usable_size, Jemalloc};
@@ -67,7 +70,7 @@ impl<'a> PageView<'a> {
 
     pub fn as_addr(&self) -> PageAddr {
         match self {
-            Self::Mem(page) => PageAddr::Mem(page.as_ptr() as u64),
+            Self::Mem(page) => PageAddr::Mem(page.as_raw() as u64),
             Self::Disk(_, addr) => PageAddr::Disk(*addr),
         }
     }
@@ -85,14 +88,15 @@ impl<'a> From<PageRef<'a>> for PageView<'a> {
     }
 }
 
+#[derive(Clone)]
 pub struct PageCache {
-    size: AtomicUsize,
+    size: Arc<AtomicUsize>,
 }
 
 impl Default for PageCache {
     fn default() -> Self {
         Self {
-            size: AtomicUsize::new(0),
+            size: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -109,7 +113,7 @@ unsafe impl PageAlloc for PageCache {
     }
 
     unsafe fn dealloc(&self, page: PagePtr) {
-        let ptr = page.as_ptr();
+        let ptr = page.as_raw();
         let size = usable_size(ptr);
         self.size.fetch_sub(size, Ordering::Relaxed);
         Jemalloc.dealloc(ptr, Self::alloc_layout(size));

@@ -162,6 +162,20 @@ impl BTree {
         }
     }
 
+    fn dealloc_page_chain<'g>(&self, mut addr: PageAddr, ghost: &'g Ghost) {
+        let cache = self.cache.clone();
+        ghost.guard().defer(move || unsafe {
+            while let PageAddr::Mem(ptr) = addr {
+                if let Some(page) = PagePtr::new(ptr as *mut u8) {
+                    addr = page.next().into();
+                    cache.dealloc(page);
+                } else {
+                    break;
+                }
+            }
+        });
+    }
+
     async fn load_page_with_view<'v, 'g>(
         &self,
         id: u64,
@@ -315,14 +329,16 @@ impl BTree {
         page.set_ver(node.view.ver());
         page.set_index(node.view.is_index());
 
-        // TODO: replace the node and deallocate the chain.
+        let old_addr = node.view.as_addr();
         if self
             .table
-            .cas(node.id, node.view.as_addr().into(), page.as_ptr().into())
+            .cas(node.id, old_addr.into(), page.as_ptr().into())
             .is_some()
         {
             return Err(Error::Conflict);
         }
+
+        self.dealloc_page_chain(old_addr, ghost);
         Ok(())
     }
 }

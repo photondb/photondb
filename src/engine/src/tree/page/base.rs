@@ -20,16 +20,16 @@ impl PagePtr {
     }
 
     /// Returns the underlying raw pointer.
-    pub const fn as_ptr(self) -> *mut u8 {
+    pub const fn as_raw(self) -> *mut u8 {
         self.0.as_ptr()
     }
 
     unsafe fn tag_ptr(self) -> *mut u8 {
-        self.as_ptr()
+        self.as_raw()
     }
 
     unsafe fn ver_ptr(self) -> *mut u8 {
-        self.as_ptr().add(1)
+        self.as_raw().add(1)
     }
 
     unsafe fn len_ptr(self) -> *mut u8 {
@@ -37,11 +37,11 @@ impl PagePtr {
     }
 
     unsafe fn next_ptr(self) -> *mut u64 {
-        (self.as_ptr() as *mut u64).add(1)
+        (self.as_raw() as *mut u64).add(1)
     }
 
     unsafe fn content_size_ptr(self) -> *mut u32 {
-        (self.as_ptr() as *mut u32).add(4)
+        (self.as_raw() as *mut u32).add(4)
     }
 
     fn tag(&self) -> PageTag {
@@ -111,15 +111,15 @@ impl PagePtr {
     }
 
     pub fn set_default(&mut self) {
-        unsafe { self.as_ptr().write_bytes(0, PAGE_HEADER_SIZE) };
+        unsafe { self.as_raw().write_bytes(0, PAGE_HEADER_SIZE) };
     }
 
     pub fn content(&self) -> *const u8 {
-        unsafe { self.as_ptr().add(PAGE_HEADER_SIZE) }
+        unsafe { self.as_raw().add(PAGE_HEADER_SIZE) }
     }
 
     pub fn content_mut(&mut self) -> *mut u8 {
-        unsafe { self.as_ptr().add(PAGE_HEADER_SIZE) }
+        unsafe { self.as_raw().add(PAGE_HEADER_SIZE) }
     }
 
     pub fn page_size(&self) -> usize {
@@ -139,7 +139,7 @@ impl PagePtr {
 
 impl From<PagePtr> for u64 {
     fn from(ptr: PagePtr) -> Self {
-        ptr.as_ptr() as u64
+        ptr.as_raw() as u64
     }
 }
 
@@ -333,7 +333,7 @@ pub mod test {
         }
 
         unsafe fn dealloc(&self, page: PagePtr) {
-            let ptr = page.as_ptr();
+            let ptr = page.as_raw();
             let size = usable_size(ptr);
             Jemalloc.dealloc(ptr, Self::alloc_layout(size));
         }
