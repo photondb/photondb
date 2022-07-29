@@ -101,7 +101,8 @@ unsafe impl PageAlloc for PageCache {
     fn alloc(&self, size: usize) -> Result<PagePtr> {
         unsafe {
             let ptr = Jemalloc.alloc(Self::alloc_layout(size));
-            self.size.fetch_add(usable_size(ptr), Ordering::Relaxed);
+            let size = usable_size(ptr);
+            self.size.fetch_add(size, Ordering::Relaxed);
             PagePtr::new(ptr).ok_or(Error::Alloc)
         }
     }

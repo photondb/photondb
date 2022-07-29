@@ -34,8 +34,7 @@ impl BTree {
             cache,
             store,
         };
-        tree.init()?;
-        Ok(tree)
+        tree.init()
     }
 
     pub async fn get<'a, 'g>(
@@ -47,7 +46,7 @@ impl BTree {
         let key = Key::new(key, lsn);
         loop {
             match self.try_get(key, ghost).await {
-                Err(Error::Conflict) => continue,
+                Err(Error::Again) => continue,
                 other => return other,
             }
         }
@@ -82,7 +81,7 @@ impl BTree {
         loop {
             match self.try_update(key.raw, page.as_ptr(), ghost).await {
                 Ok(_) => return Ok(()),
-                Err(Error::Conflict) => continue,
+                Err(Error::Again) => continue,
                 Err(err) => {
                     unsafe {
                         self.cache.dealloc(page.as_ptr());
@@ -114,7 +113,7 @@ impl BTree {
                             continue;
                         }
                     }
-                    return Err(Error::Conflict);
+                    return Err(Error::Again);
                 }
             }
         }
@@ -122,7 +121,7 @@ impl BTree {
 }
 
 impl BTree {
-    fn init(&self) -> Result<()> {
+    fn init(self) -> Result<Self> {
         let ghost = Ghost::pin();
         // Initializes the tree as root -> leaf.
         let root_id = self.table.alloc(ghost.guard()).unwrap();
@@ -134,12 +133,12 @@ impl BTree {
             DataPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
         root_page.set_index(true);
         self.table.set(root_id, root_page.as_ptr().into());
-        Ok(())
+        Ok(self)
     }
 
     fn node(&self, id: u64) -> Node {
         let addr = self.page_addr(id);
-        // Our access pattern ensures that the address is valid.
+        // Our access pattern ensures that the address must be valid.
         let view = self.page_view(addr).unwrap();
         Node { id, view }
     }
@@ -179,8 +178,8 @@ impl BTree {
         match *view {
             PageView::Mem(page) => Ok(page),
             PageView::Disk(_, addr) => {
-                // self.swapin_page(id, addr, ghost).await,
-                panic!()
+                // self.swapin_page(id, addr).await,
+                todo!()
             }
         }
     }
@@ -192,8 +191,8 @@ impl BTree {
                 Ok(page)
             }
             PageAddr::Disk(addr) => {
-                // self.swapin_page(id, addr, ghost).await,
-                panic!()
+                // self.swapin_page(id, addr).await,
+                todo!()
             }
         }
     }
@@ -284,7 +283,7 @@ impl BTree {
             let node = self.node(cursor.id);
             if node.view.ver() != cursor.ver {
                 self.try_reconcile_node(&node, parent.as_ref(), ghost)?;
-                return Err(Error::Conflict);
+                return Err(Error::Again);
             }
             if node.view.is_index() {
                 cursor = self.lookup_index(key, &node, ghost).await?.unwrap();
@@ -324,7 +323,7 @@ impl BTree {
             .cas(node.id, old_addr.into(), new_ptr.into())
             .map_err(|_| {
                 unsafe { self.cache.dealloc(new_ptr) };
-                Error::Conflict
+                Error::Again
             })?;
 
         self.dealloc_page_chain(old_addr, ghost);

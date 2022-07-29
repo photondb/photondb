@@ -4,8 +4,8 @@ use thiserror::Error;
 pub enum Error {
     #[error("Alloc")]
     Alloc,
-    #[error("Conflict")]
-    Conflict,
+    #[error("Again")]
+    Again,
     #[error("Corrupted: {0}")]
     Corrupted(String),
     #[error(transparent)]
