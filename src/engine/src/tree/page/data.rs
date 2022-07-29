@@ -7,22 +7,23 @@ use std::{
 use super::{BufReader, BufWriter, PageVer};
 
 pub trait Encodable {
+    /// Returns the size to encode this object.
     fn encode_size(&self) -> usize;
 
-    /// Encodes the object to a `BufWriter`.
+    /// Encodes this object to a `BufWriter`.
     ///
     /// # Safety
     ///
-    /// The `BufWriter` must be initialized with enough space to encode the object.
+    /// The `BufWriter` must be initialized with enough space to encode this object.
     unsafe fn encode_to(&self, w: &mut BufWriter);
 }
 
 pub trait Decodable {
-    /// Decodes the object from a `BufReader`.
+    /// Decodes an object from a `BufReader`.
     ///
     /// # Safety
     ///
-    /// The `BufReader` must be initialized with enough data to decode the object.
+    /// The `BufReader` must be initialized with enough data to decode such an object.
     unsafe fn decode_from(r: &mut BufReader) -> Self;
 }
 

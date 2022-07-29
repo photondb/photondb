@@ -17,7 +17,7 @@ macro_rules! get_int {
 }
 
 impl BufReader {
-    pub fn new(ptr: *const u8) -> Self {
+    pub const fn new(ptr: *const u8) -> Self {
         Self { ptr, pos: 0 }
     }
 
@@ -62,7 +62,7 @@ macro_rules! put_int {
 }
 
 impl BufWriter {
-    pub fn new(ptr: *mut u8) -> Self {
+    pub const fn new(ptr: *mut u8) -> Self {
         Self { ptr, pos: 0 }
     }
 
