@@ -3,8 +3,8 @@ pub use base::{PageAlloc, PageBuilder, PageKind, PagePtr, PageRef, PageVer};
 
 mod iter;
 pub use iter::{
-    ForwardIter, MergingIter, MergingIterBuilder, OptionIter, RewindableIter, SeekableIter,
-    SliceIter,
+    ForwardIter, MergingIter, MergingIterBuilder, OptionIter, PrintableIter, RewindableIter,
+    SeekableIter, SliceIter,
 };
 
 mod util;

@@ -126,7 +126,6 @@ impl BTree {
         let ghost = Ghost::pin();
         // Initializes the tree as root -> leaf.
         let root_id = self.table.alloc(ghost.guard()).unwrap();
-        assert_eq!(root_id, ROOT_ID);
         let leaf_id = self.table.alloc(ghost.guard()).unwrap();
         let leaf_page = DataPageBuilder::default().build(&self.cache)?;
         self.table.set(leaf_id, leaf_page.into());
@@ -307,13 +306,14 @@ impl BTree {
 
     async fn try_consolidate_node<'g, K, V>(&self, node: &Node<'g>, ghost: &'g Ghost) -> Result<()>
     where
-        K: Encodable + Decodable + Ord,
-        V: Encodable + Decodable,
+        K: Encodable + Decodable + Ord + std::fmt::Debug,
+        V: Encodable + Decodable + std::fmt::Debug,
     {
         let mut iter = self.iter_node::<K, V>(node, ghost).await?;
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
         page.set_index(node.view.is_index());
+
         // TODO: replace the node and deallocate the chain.
         if self
             .table

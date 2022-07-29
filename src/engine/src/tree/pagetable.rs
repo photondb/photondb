@@ -212,7 +212,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_alloc() {
+    fn alloc() {
         let guard = unsafe { unprotected() };
         let table = PageTable::default();
         assert_eq!(table.alloc(guard), Some(0));
@@ -224,7 +224,7 @@ mod test {
     }
 
     #[test]
-    fn test_index() {
+    fn index() {
         let table = PageTable::default();
         for i in [0, L0_MAX - 1, L0_MAX, L1_MAX - 1, L1_MAX, L2_MAX - 1] {
             table.set(i, i);

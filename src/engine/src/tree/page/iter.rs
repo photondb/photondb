@@ -1,6 +1,7 @@
 use std::{
     cmp::{Ord, Ordering},
     collections::BinaryHeap,
+    fmt::Debug,
     ops::{Deref, DerefMut},
     slice,
 };
@@ -24,6 +25,23 @@ pub trait SeekableIter: ForwardIter {
 pub trait RewindableIter: ForwardIter {
     /// Positions the next entry at the beginning.
     fn rewind(&mut self);
+}
+
+pub trait PrintableIter: ForwardIter {
+    fn print(&mut self);
+}
+
+impl<I> PrintableIter for I
+where
+    I: ForwardIter,
+    I::Key: Debug,
+    I::Value: Debug,
+{
+    fn print(&mut self) {
+        while let Some(ent) = self.next() {
+            println!("{:?}", ent);
+        }
+    }
 }
 
 /// A wrapper that turns a slice into a `RewindableIter`.

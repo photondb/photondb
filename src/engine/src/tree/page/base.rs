@@ -191,11 +191,11 @@ impl From<PageVer> for u64 {
 #[derive(Copy, Clone, Debug, Default)]
 struct PageTag(u8);
 
-const PAGE_KIND_MASK: u8 = 0b01111111;
+const INDEX_PAGE_MASK: u8 = 1 << 7;
 
 impl PageTag {
     const fn kind(self) -> PageKind {
-        PageKind::new(self.0 & PAGE_KIND_MASK)
+        PageKind::new(self.0 & !INDEX_PAGE_MASK)
     }
 
     const fn with_kind(self, kind: PageKind) -> Self {
@@ -203,7 +203,7 @@ impl PageTag {
     }
 
     const fn index(self) -> u8 {
-        self.0 & !PAGE_KIND_MASK
+        self.0 & INDEX_PAGE_MASK
     }
 
     const fn is_index(self) -> bool {
@@ -212,9 +212,9 @@ impl PageTag {
 
     const fn with_index(self, is_index: bool) -> Self {
         if is_index {
-            Self(self.0 & PAGE_KIND_MASK)
+            Self(self.0 | INDEX_PAGE_MASK)
         } else {
-            Self(self.0 | !PAGE_KIND_MASK)
+            Self(self.0 & !INDEX_PAGE_MASK)
         }
     }
 }
