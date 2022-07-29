@@ -23,15 +23,10 @@ impl PageTable {
         self.inner.index(id).store(ptr, Ordering::Release);
     }
 
-    pub fn cas(&self, id: u64, old: u64, new: u64) -> Option<u64> {
-        match self
-            .inner
+    pub fn cas(&self, id: u64, old: u64, new: u64) -> Result<u64, u64> {
+        self.inner
             .index(id)
             .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
-        {
-            Ok(_) => None,
-            Err(now) => Some(now),
-        }
     }
 
     pub fn alloc(&self, _: &Guard) -> Option<u64> {

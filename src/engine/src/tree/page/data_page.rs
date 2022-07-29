@@ -96,18 +96,6 @@ impl DataPageBuf {
         }
     }
 
-    pub fn into_ptr(self) -> PagePtr {
-        self.ptr
-    }
-
-    pub fn into_ref<'a, K, V>(self) -> DataPageRef<'a, K, V>
-    where
-        K: Decodable + Ord,
-        V: Decodable,
-    {
-        unsafe { DataPageRef::new(self.ptr.into()) }
-    }
-
     unsafe fn add<K, V>(&mut self, key: &K, value: &V)
     where
         K: Encodable,
@@ -118,6 +106,18 @@ impl DataPageBuf {
         self.current += 1;
         key.encode_to(&mut self.content);
         value.encode_to(&mut self.content);
+    }
+
+    pub fn as_ptr(&mut self) -> PagePtr {
+        self.ptr
+    }
+
+    pub fn as_ref<'a, K, V>(&self) -> DataPageRef<'a, K, V>
+    where
+        K: Decodable + Ord,
+        V: Decodable,
+    {
+        unsafe { DataPageRef::new(self.ptr.into()) }
     }
 }
 
@@ -167,16 +167,30 @@ where
         self.offsets.len()
     }
 
+    pub fn get(&self, index: usize) -> Option<(K, V)> {
+        if let Some(&offset) = self.offsets.get(index) {
+            unsafe {
+                let ptr = self.content_at(offset);
+                let mut buf = BufReader::new(ptr);
+                let key = K::decode_from(&mut buf);
+                let value = V::decode_from(&mut buf);
+                Some((key, value))
+            }
+        } else {
+            None
+        }
+    }
+
     // Returns the first entry that is no less than the target.
     pub fn seek(&self, target: &K) -> Option<(K, V)> {
-        self.index(self.rank(target))
+        self.get(self.rank(target))
     }
 
     // Returns the first entry that is no greater than the target.
     pub fn seek_back(&self, target: &K) -> Option<(K, V)> {
         let index = self.rank(target);
         for i in (0..=index).rev() {
-            if let Some((key, value)) = self.index(i) {
+            if let Some((key, value)) = self.get(i) {
                 if &key <= target {
                     return Some((key, value));
                 }
@@ -211,20 +225,6 @@ where
             }
         }
         left
-    }
-
-    fn index(&self, index: usize) -> Option<(K, V)> {
-        if let Some(&offset) = self.offsets.get(index) {
-            unsafe {
-                let ptr = self.content_at(offset);
-                let mut buf = BufReader::new(ptr);
-                let key = K::decode_from(&mut buf);
-                let value = V::decode_from(&mut buf);
-                Some((key, value))
-            }
-        } else {
-            None
-        }
     }
 }
 
@@ -285,7 +285,7 @@ where
     }
 
     fn next(&mut self) -> Option<&(K, V)> {
-        self.last = self.page.index(self.next).map(|next| {
+        self.last = self.page.get(self.next).map(|next| {
             self.next += 1;
             next
         });
@@ -327,7 +327,7 @@ mod test {
             .build_from_iter(&ALLOC, &mut iter)
             .unwrap();
 
-        let page = page.into_ref::<u64, u64>();
+        let page = page.as_ref::<u64, u64>();
         assert_eq!(page.kind(), PageKind::Data);
         assert_eq!(page.is_index(), false);
 

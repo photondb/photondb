@@ -122,7 +122,7 @@ impl PagePtr {
         unsafe { self.as_raw().add(PAGE_HEADER_SIZE) }
     }
 
-    pub fn page_size(&self) -> usize {
+    pub fn size(&self) -> usize {
         PAGE_HEADER_SIZE + self.content_size() as usize
     }
 

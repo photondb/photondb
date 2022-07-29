@@ -37,8 +37,6 @@ mod test {
         let opts = Options {
             data_node_size: 64,
             data_delta_length: 4,
-            index_node_size: 32,
-            index_delta_length: 2,
             ..Default::default()
         };
         Table::open(opts).await.unwrap()

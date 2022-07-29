@@ -38,9 +38,9 @@ impl BTree {
         Ok(tree)
     }
 
-    pub async fn get<'k, 'g>(
-        &self,
-        key: &'k [u8],
+    pub async fn get<'a, 'g>(
+        &'a self,
+        key: &[u8],
         lsn: u64,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
@@ -53,7 +53,7 @@ impl BTree {
         }
     }
 
-    async fn try_get<'k, 'g>(&self, key: Key<'k>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
+    async fn try_get<'a, 'g>(&'a self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_node(key.raw, ghost).await?;
         self.lookup_value(key, &node, ghost).await
     }
@@ -78,15 +78,14 @@ impl BTree {
 
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
-        let page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-        let page = page.into_ptr();
+        let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         loop {
-            match self.try_update(key.raw, page, ghost).await {
+            match self.try_update(key.raw, page.as_ptr(), ghost).await {
                 Ok(_) => return Ok(()),
                 Err(Error::Conflict) => continue,
                 Err(err) => {
                     unsafe {
-                        self.cache.dealloc(page);
+                        self.cache.dealloc(page.as_ptr());
                     }
                     return Err(err);
                 }
@@ -101,14 +100,14 @@ impl BTree {
             delta.set_len(node.view.len() + 1);
             delta.set_next(node.view.as_addr().into());
             match self.table.cas(node.id, delta.next(), delta.into()) {
-                None => {
+                Ok(_) => {
                     if delta.len() >= self.opts.data_delta_length {
                         node.view = delta.into();
                         let _ = self.try_consolidate_node::<Key, Value>(&node, ghost).await;
                     }
                     return Ok(());
                 }
-                Some(addr) => {
+                Err(addr) => {
                     if let Some(view) = self.page_view(addr.into(), ghost) {
                         if view.ver() == node.view.ver() {
                             node.view = view;
@@ -128,13 +127,13 @@ impl BTree {
         // Initializes the tree as root -> leaf.
         let root_id = self.table.alloc(ghost.guard()).unwrap();
         let leaf_id = self.table.alloc(ghost.guard()).unwrap();
-        let leaf_page = DataPageBuilder::default().build(&self.cache)?;
-        self.table.set(leaf_id, leaf_page.into_ptr().into());
+        let mut leaf_page = DataPageBuilder::default().build(&self.cache)?;
+        self.table.set(leaf_id, leaf_page.as_ptr().into());
         let mut root_iter = OptionIter::from(([].as_slice(), Index::with_id(leaf_id)));
         let mut root_page =
             DataPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
         root_page.set_index(true);
-        self.table.set(root_id, root_page.into_ptr().into());
+        self.table.set(root_id, root_page.as_ptr().into());
         Ok(())
     }
 
@@ -176,10 +175,10 @@ impl BTree {
         });
     }
 
-    async fn load_page_with_view<'v, 'g>(
-        &self,
+    async fn load_page_with_view<'a, 'g>(
+        &'a self,
         id: u64,
-        view: &'v PageView<'g>,
+        view: &PageView<'g>,
         ghost: &'g Ghost,
     ) -> Result<PageRef<'g>> {
         match *view {
@@ -248,9 +247,9 @@ impl BTree {
         Ok(merger.build())
     }
 
-    async fn lookup_value<'a, 'g>(
+    async fn lookup_value<'a, 'k, 'g>(
         &'a self,
-        key: Key<'_>,
+        key: Key<'k>,
         node: &Node<'g>,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
@@ -319,26 +318,30 @@ impl BTree {
         todo!()
     }
 
-    async fn try_consolidate_node<'g, K, V>(&self, node: &Node<'g>, ghost: &'g Ghost) -> Result<()>
+    async fn try_consolidate_node<'g, K, V>(
+        &self,
+        node: &Node<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<DataPageRef<'g, K, V>>
     where
-        K: Encodable + Decodable + Ord + std::fmt::Debug,
-        V: Encodable + Decodable + std::fmt::Debug,
+        K: Encodable + Decodable + Ord,
+        V: Encodable + Decodable,
     {
         let mut iter = self.iter_node::<K, V>(node, ghost).await?;
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
         page.set_index(node.view.is_index());
 
+        let new_ptr = page.as_ptr();
         let old_addr = node.view.as_addr();
-        if self
-            .table
-            .cas(node.id, old_addr.into(), page.into_ptr().into())
-            .is_some()
-        {
-            return Err(Error::Conflict);
-        }
+        self.table
+            .cas(node.id, old_addr.into(), new_ptr.into())
+            .map_err(|_| {
+                unsafe { self.cache.dealloc(new_ptr) };
+                Error::Conflict
+            })?;
 
         self.dealloc_page_chain(old_addr, ghost);
-        Ok(())
+        Ok(page.as_ref())
     }
 }
