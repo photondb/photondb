@@ -57,6 +57,20 @@ impl<'a, K, V> ForwardIter for SliceIter<'a, K, V> {
     }
 }
 
+impl<'a, K, V> SeekableIter for SliceIter<'a, K, V>
+where
+    K: Ord,
+{
+    fn seek(&mut self, target: &K) {
+        let index = match self.data.binary_search_by(|(key, _)| key.cmp(target)) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+        self.iter = self.data[index..].iter();
+        self.last = None;
+    }
+}
+
 impl<'a, K, V> RewindableIter for SliceIter<'a, K, V> {
     fn rewind(&mut self) {
         self.iter = self.data.iter();
@@ -168,8 +182,8 @@ where
     fn cmp(&self, other: &Self) -> Ordering {
         match (self.last(), other.last()) {
             (Some(a), Some(b)) => b.0.cmp(&a.0),
-            (Some(_), None) => Ordering::Less,
-            (None, Some(_)) => Ordering::Greater,
+            (Some(_), None) => Ordering::Greater,
+            (None, Some(_)) => Ordering::Less,
             (None, None) => Ordering::Equal,
         }
     }
@@ -228,7 +242,11 @@ where
     }
 
     fn take_children(&mut self) -> Vec<ReverseIter<I>> {
-        std::mem::take(&mut self.heap).into_vec()
+        if !self.heap.is_empty() {
+            std::mem::take(&mut self.heap).into_vec()
+        } else {
+            std::mem::take(&mut self.children)
+        }
     }
 }
 
@@ -309,14 +327,75 @@ mod test {
     #[test]
     fn slice_iter() {
         let mut iter = SliceIter::from(&[(1, 2), (3, 4)]);
-        assert_eq!(iter.next(), Some(&(1, 2)));
-        assert_eq!(iter.last(), Some(&(1, 2)));
-        assert_eq!(iter.next(), Some(&(3, 4)));
-        assert_eq!(iter.last(), Some(&(3, 4)));
+        for _ in 0..2 {
+            assert_eq!(iter.last(), None);
+            assert_eq!(iter.next(), Some(&(1, 2)));
+            assert_eq!(iter.last(), Some(&(1, 2)));
+            assert_eq!(iter.next(), Some(&(3, 4)));
+            assert_eq!(iter.last(), Some(&(3, 4)));
+            assert_eq!(iter.next(), None);
+            iter.rewind();
+        }
+    }
+
+    #[test]
+    fn option_iter() {
+        let mut iter = OptionIter::from((1, 2));
+        for _ in 0..2 {
+            assert_eq!(iter.last(), None);
+            assert_eq!(iter.next(), Some(&(1, 2)));
+            assert_eq!(iter.last(), Some(&(1, 2)));
+            assert_eq!(iter.next(), None);
+            iter.rewind();
+        }
+    }
+
+    #[test]
+    fn merging_iter() {
+        let data = [
+            [(1, 0), (3, 0)],
+            [(2, 0), (4, 0)],
+            [(1, 0), (8, 0)],
+            [(3, 0), (7, 0)],
+        ];
+        let sorted_data = [
+            (1, 0),
+            (1, 0),
+            (2, 0),
+            (3, 0),
+            (3, 0),
+            (4, 0),
+            (7, 0),
+            (8, 0),
+        ];
+
+        let mut merger = MergingIterBuilder::default();
+        for item in data.iter() {
+            merger.add(SliceIter::from(item));
+        }
+        let mut iter = merger.build();
+
+        // Tests next() and rewind()
+        for _ in 0..2 {
+            assert_eq!(iter.last(), None);
+            for item in sorted_data.iter() {
+                assert_eq!(iter.next(), Some(item));
+                assert_eq!(iter.last(), Some(item));
+            }
+            assert_eq!(iter.next(), None);
+            iter.rewind();
+        }
+
+        // Tests seek()
+        iter.seek(&0);
+        assert_eq!(iter.next(), Some(&(1, 0)));
+        iter.seek(&9);
         assert_eq!(iter.next(), None);
-        iter.rewind();
-        assert_eq!(iter.next(), Some(&(1, 2)));
-        assert_eq!(iter.next(), Some(&(3, 4)));
-        assert_eq!(iter.next(), None);
+        iter.seek(&1);
+        assert_eq!(iter.next(), Some(&(1, 0)));
+        iter.seek(&3);
+        assert_eq!(iter.next(), Some(&(3, 0)));
+        iter.seek(&5);
+        assert_eq!(iter.next(), Some(&(7, 0)));
     }
 }
