@@ -302,6 +302,8 @@ pub mod test {
 
     use super::*;
 
+    pub const ALLOC: TestAlloc = TestAlloc;
+
     pub struct TestAlloc;
 
     unsafe impl PageAlloc for TestAlloc {

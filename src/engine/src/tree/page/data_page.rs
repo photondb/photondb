@@ -281,3 +281,38 @@ where
         self.last = None;
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::{base::test::ALLOC, *};
+
+    #[test]
+    fn data_page() {
+        let data = [(1, 0), (2, 0), (4, 0), (7, 0), (8, 0)];
+        let mut iter = SliceIter::from(&data);
+        let page = DataPageBuilder::default()
+            .build_from_iter(&ALLOC, &mut iter)
+            .unwrap();
+
+        let page: DataPageRef<'_, u64, u64> = unsafe { DataPageRef::new(page.into()) };
+        assert_eq!(page.kind(), PageKind::Data);
+        assert_eq!(page.is_index(), false);
+
+        assert_eq!(page.seek(&0), Some((1, 0)));
+        assert_eq!(page.seek_back(&0), None);
+        assert_eq!(page.seek(&3), Some((4, 0)));
+        assert_eq!(page.seek_back(&3), Some((2, 0)));
+        assert_eq!(page.seek(&9), None);
+        assert_eq!(page.seek_back(&9), Some((8, 0)));
+
+        let mut iter = page.iter();
+        assert_eq!(iter.last(), None);
+        for _ in 0..2 {
+            for item in data.iter() {
+                assert_eq!(iter.next(), Some(item));
+                assert_eq!(iter.last(), Some(item));
+            }
+            iter.rewind();
+        }
+    }
+}

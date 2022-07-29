@@ -26,6 +26,22 @@ pub trait Decodable {
     unsafe fn decode_from(r: &mut BufReader) -> Self;
 }
 
+impl Encodable for u64 {
+    fn encode_size(&self) -> usize {
+        size_of::<u64>()
+    }
+
+    unsafe fn encode_to(&self, w: &mut BufWriter) {
+        w.put_u64(*self);
+    }
+}
+
+impl Decodable for u64 {
+    unsafe fn decode_from(r: &mut BufReader) -> Self {
+        r.get_u64()
+    }
+}
+
 impl Encodable for &[u8] {
     fn encode_size(&self) -> usize {
         BufWriter::length_prefixed_slice_size(self)
