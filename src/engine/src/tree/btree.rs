@@ -172,7 +172,7 @@ impl BTree {
             PageView::Mem(page) => Ok(page),
             PageView::Disk(_, addr) => {
                 // self.swapin_page(id, addr, ghost).await,
-                unimplemented!()
+                panic!()
             }
         }
     }
@@ -190,7 +190,7 @@ impl BTree {
             }
             PageAddr::Disk(addr) => {
                 // self.swapin_page(id, addr, ghost).await,
-                unimplemented!()
+                panic!()
             }
         }
     }
@@ -226,7 +226,7 @@ impl BTree {
         self.walk_node(node, ghost, |page| {
             let page = unsafe { TypedPageRef::cast(page) };
             if let TypedPageRef::Data(data) = page {
-                merger.add(data.into_iter());
+                merger.add(data.iter());
             }
             false
         })
@@ -234,10 +234,10 @@ impl BTree {
         Ok(merger.build())
     }
 
-    async fn lookup_value<'k, 'g>(
+    async fn lookup_value<'k, 'n, 'g>(
         &self,
         key: Key<'k>,
-        node: &Node<'g>,
+        node: &'n Node<'g>,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
@@ -257,10 +257,10 @@ impl BTree {
         Ok(value)
     }
 
-    async fn lookup_index<'g>(
+    async fn lookup_index<'n, 'g>(
         &self,
         key: &[u8],
-        node: &Node<'g>,
+        node: &'n Node<'g>,
         ghost: &'g Ghost,
     ) -> Result<Option<Index>> {
         let mut index = None;

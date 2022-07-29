@@ -58,6 +58,14 @@ impl SplitPageBuf {
         range.encode_to(&mut self.content);
         index.encode_to(&mut self.content);
     }
+
+    pub fn as_ptr(&self) -> PagePtr {
+        self.ptr
+    }
+
+    pub fn as_ref(&self) -> SplitPageRef {
+        unsafe { SplitPageRef::new(self.ptr.into()) }
+    }
 }
 
 impl Deref for SplitPageBuf {

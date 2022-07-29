@@ -1,8 +1,8 @@
 use std::{alloc::Layout, marker::PhantomData, ops::Deref, ptr::NonNull};
 
-// Page header: tag (1B) | ver (6B) | len (1B) | next (8B) |
+// Page header: tag (1B) | ver (6B) | len (1B) | next (8B) | content_size (4B) |
 const PAGE_ALIGNMENT: usize = 8;
-const PAGE_HEADER_SIZE: usize = 16;
+const PAGE_HEADER_SIZE: usize = 20;
 const PAGE_VERSION_SIZE: usize = 6;
 
 /// A non-null pointer to a page.
@@ -40,8 +40,8 @@ impl PagePtr {
         (self.as_ptr() as *mut u64).add(1)
     }
 
-    unsafe fn content_ptr(self) -> *mut u8 {
-        self.as_ptr().add(PAGE_HEADER_SIZE)
+    unsafe fn content_size_ptr(self) -> *mut u32 {
+        (self.as_ptr() as *mut u32).add(4)
     }
 
     fn tag(&self) -> PageTag {
@@ -115,11 +115,25 @@ impl PagePtr {
     }
 
     pub fn content(&self) -> *const u8 {
-        unsafe { self.content_ptr() }
+        unsafe { self.as_ptr().add(PAGE_HEADER_SIZE) }
     }
 
     pub fn content_mut(&mut self) -> *mut u8 {
-        unsafe { self.content_ptr() }
+        unsafe { self.as_ptr().add(PAGE_HEADER_SIZE) }
+    }
+
+    pub fn page_size(&self) -> usize {
+        PAGE_HEADER_SIZE + self.content_size() as usize
+    }
+
+    pub fn content_size(&self) -> u32 {
+        unsafe { self.content_size_ptr().read().to_le() }
+    }
+
+    fn set_content_size(&mut self, size: u32) {
+        unsafe {
+            self.content_size_ptr().write(size.to_le());
+        }
     }
 }
 
@@ -285,10 +299,12 @@ impl PageBuilder {
     where
         A: PageAlloc,
     {
+        assert!(content_size <= u32::MAX as usize);
         let ptr = alloc.alloc(PAGE_HEADER_SIZE + content_size);
         ptr.map(|mut ptr| {
             ptr.set_default();
             ptr.set_kind(self.kind);
+            ptr.set_content_size(content_size as u32);
             ptr
         })
     }
@@ -343,5 +359,8 @@ pub mod test {
         assert_eq!(ptr.is_index(), false);
         ptr.set_index(true);
         assert_eq!(ptr.is_index(), true);
+        assert_eq!(ptr.content_size(), 0);
+        ptr.set_content_size(4);
+        assert_eq!(ptr.content_size(), 4);
     }
 }

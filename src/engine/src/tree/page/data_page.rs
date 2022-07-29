@@ -38,7 +38,11 @@ impl DataPageBuilder {
     }
 
     fn size(&self) -> usize {
-        (self.offsets_len + 1) * size_of::<u32>() + self.payload_size
+        self.offsets_size() + self.payload_size
+    }
+
+    fn offsets_size(&self) -> usize {
+        self.offsets_len * size_of::<u32>()
     }
 
     pub fn build<A>(self, alloc: &A) -> Result<DataPageBuf, A::Error>
@@ -75,20 +79,19 @@ impl DataPageBuilder {
 pub struct DataPageBuf {
     ptr: PagePtr,
     offsets: *mut u32,
-    payload: BufWriter,
+    content: BufWriter,
     current: usize,
 }
 
 impl DataPageBuf {
     unsafe fn new(mut ptr: PagePtr, builder: DataPageBuilder) -> Self {
-        let content = ptr.content_mut() as *mut u32;
-        content.write(builder.offsets_len as u32);
-        let offsets = content.add(1);
-        let payload = offsets.add(builder.offsets_len) as *mut u8;
+        let offsets = ptr.content_mut() as *mut u32;
+        let mut content = BufWriter::new(ptr.content_mut());
+        content.skip(builder.offsets_size());
         Self {
             ptr,
             offsets,
-            payload: BufWriter::new(payload),
+            content,
             current: 0,
         }
     }
@@ -98,11 +101,11 @@ impl DataPageBuf {
         K: Encodable,
         V: Encodable,
     {
-        let offset = self.payload.pos() as u32;
+        let offset = self.content.pos() as u32;
         self.offsets.add(self.current).write(offset.to_le());
         self.current += 1;
-        key.encode_to(&mut self.payload);
-        value.encode_to(&mut self.payload);
+        key.encode_to(&mut self.content);
+        value.encode_to(&mut self.content);
     }
 
     pub fn as_ptr(&self) -> PagePtr {
@@ -136,7 +139,6 @@ impl DerefMut for DataPageBuf {
 pub struct DataPageRef<'a, K, V> {
     base: PageRef<'a>,
     offsets: &'a [u32],
-    payload: *const u8,
     _mark: PhantomData<(K, V)>,
 }
 
@@ -146,15 +148,17 @@ where
     V: Decodable,
 {
     pub unsafe fn new(base: PageRef<'a>) -> Self {
-        let content = base.content() as *const u32;
-        let offsets_len = content.read() as usize;
-        let offsets_ptr = content.add(1);
+        let offsets_ptr = base.content() as *const u32;
+        let offsets_len = if base.content_size() == 0 {
+            0
+        } else {
+            let offset = offsets_ptr.read();
+            offset as usize / size_of::<u32>()
+        };
         let offsets = slice::from_raw_parts(offsets_ptr, offsets_len);
-        let payload = offsets_ptr.add(offsets_len) as *const u8;
         Self {
             base,
             offsets,
-            payload,
             _mark: PhantomData,
         }
     }
@@ -185,8 +189,9 @@ where
         DataPageIter::new(self.clone())
     }
 
-    pub fn into_iter(self) -> DataPageIter<'a, K, V> {
-        DataPageIter::new(self)
+    fn content_at(&self, offset: u32) -> *const u8 {
+        let offset = offset.to_le() as usize;
+        unsafe { self.base.content().add(offset) }
     }
 
     fn rank(&self, target: &K) -> usize {
@@ -195,8 +200,7 @@ where
         while left < right {
             let mid = (left + right) / 2;
             let key = unsafe {
-                let offset = self.offsets[mid].to_le() as usize;
-                let ptr = self.payload.add(offset);
+                let ptr = self.content_at(self.offsets[mid]);
                 let mut buf = BufReader::new(ptr);
                 K::decode_from(&mut buf)
             };
@@ -212,8 +216,7 @@ where
     fn index(&self, index: usize) -> Option<(K, V)> {
         if let Some(&offset) = self.offsets.get(index) {
             unsafe {
-                let offset = offset.to_le() as usize;
-                let ptr = self.payload.add(offset);
+                let ptr = self.content_at(offset);
                 let mut buf = BufReader::new(ptr);
                 let key = K::decode_from(&mut buf);
                 let value = V::decode_from(&mut buf);
@@ -230,7 +233,6 @@ impl<'a, K, V> Clone for DataPageRef<'a, K, V> {
         Self {
             base: self.base,
             offsets: self.offsets,
-            payload: self.payload,
             _mark: PhantomData,
         }
     }

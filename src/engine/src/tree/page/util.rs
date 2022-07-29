@@ -25,6 +25,10 @@ impl BufReader {
         self.pos
     }
 
+    pub fn skip(&mut self, n: usize) {
+        self.pos += n;
+    }
+
     get_int!(get_u8, u8);
     get_int!(get_u32, u32);
     get_int!(get_u64, u64);
@@ -66,6 +70,10 @@ impl BufWriter {
         self.pos
     }
 
+    pub fn skip(&mut self, n: usize) {
+        self.pos += n;
+    }
+
     put_int!(put_u8, u8);
     put_int!(put_u32, u32);
     put_int!(put_u64, u64);
@@ -77,6 +85,7 @@ impl BufWriter {
     }
 
     pub unsafe fn put_length_prefixed_slice(&mut self, slice: &[u8]) {
+        assert!(slice.len() <= u32::MAX as usize);
         self.put_u32(slice.len() as u32);
         self.put_slice(slice);
     }
