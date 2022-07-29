@@ -9,7 +9,7 @@ use std::{
 use jemallocator::{usable_size, Jemalloc};
 
 use super::{
-    page::{PageAlloc, PagePtr, PageRef, PageVer},
+    page::{PageAlloc, PagePtr, PageVer},
     pagestore::PageInfo,
     Error, Result,
 };
@@ -41,12 +41,12 @@ impl From<PageAddr> for u64 {
     }
 }
 
-pub enum PageView<'a> {
-    Mem(PageRef<'a>),
+pub enum PageView {
+    Mem(PagePtr),
     Disk(PageInfo, u64),
 }
 
-impl<'a> PageView<'a> {
+impl PageView {
     pub fn ver(&self) -> PageVer {
         match self {
             Self::Mem(page) => page.ver(),
@@ -69,22 +69,16 @@ impl<'a> PageView<'a> {
     }
 
     pub fn as_addr(&self) -> PageAddr {
-        match self {
-            Self::Mem(page) => PageAddr::Mem(page.as_raw() as u64),
-            Self::Disk(_, addr) => PageAddr::Disk(*addr),
+        match *self {
+            Self::Mem(page) => PageAddr::Mem(page.into()),
+            Self::Disk(_, addr) => PageAddr::Disk(addr),
         }
     }
 }
 
-impl<'a> From<PagePtr> for PageView<'a> {
+impl From<PagePtr> for PageView {
     fn from(page: PagePtr) -> Self {
-        PageRef::from(page).into()
-    }
-}
-
-impl<'a> From<PageRef<'a>> for PageView<'a> {
-    fn from(page: PageRef<'a>) -> Self {
-        Self::Mem(page)
+        PageView::Mem(page)
     }
 }
 

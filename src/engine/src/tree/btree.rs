@@ -9,9 +9,9 @@ use super::{
 const ROOT_ID: u64 = 0;
 const ROOT_INDEX: Index = Index::with_id(ROOT_ID);
 
-struct Node<'a> {
+struct Node {
     id: u64,
-    view: PageView<'a>,
+    view: PageView,
 }
 
 type NodeIter<'a, K, V> = MergingIter<DataPageIter<'a, K, V>>;
@@ -108,7 +108,7 @@ impl BTree {
                     return Ok(());
                 }
                 Err(addr) => {
-                    if let Some(view) = self.page_view(addr.into(), ghost) {
+                    if let Some(view) = self.page_view(addr.into()) {
                         if view.ver() == node.view.ver() {
                             node.view = view;
                             continue;
@@ -137,10 +137,10 @@ impl BTree {
         Ok(())
     }
 
-    fn node<'g>(&self, id: u64, ghost: &'g Ghost) -> Node<'g> {
+    fn node(&self, id: u64) -> Node {
         let addr = self.page_addr(id);
         // Our access pattern ensures that the address is valid.
-        let view = self.page_view(addr, ghost).unwrap();
+        let view = self.page_view(addr).unwrap();
         Node { id, view }
     }
 
@@ -148,7 +148,7 @@ impl BTree {
         self.table.get(id).into()
     }
 
-    fn page_view<'g>(&self, addr: PageAddr, _: &'g Ghost) -> Option<PageView<'g>> {
+    fn page_view(&self, addr: PageAddr) -> Option<PageView> {
         match addr {
             PageAddr::Mem(addr) => {
                 let page = unsafe { PagePtr::new(addr as *mut u8) };
@@ -175,12 +175,7 @@ impl BTree {
         });
     }
 
-    async fn load_page_with_view<'a, 'g>(
-        &'a self,
-        id: u64,
-        view: &PageView<'g>,
-        ghost: &'g Ghost,
-    ) -> Result<PageRef<'g>> {
+    async fn load_page_with_view(&self, id: u64, view: &PageView) -> Result<PagePtr> {
         match *view {
             PageView::Mem(page) => Ok(page),
             PageView::Disk(_, addr) => {
@@ -190,16 +185,11 @@ impl BTree {
         }
     }
 
-    async fn load_page_with_addr<'g>(
-        &self,
-        id: u64,
-        addr: PageAddr,
-        ghost: &'g Ghost,
-    ) -> Result<Option<PageRef<'g>>> {
+    async fn load_page_with_addr(&self, id: u64, addr: PageAddr) -> Result<Option<PagePtr>> {
         match addr {
             PageAddr::Mem(addr) => {
                 let page = unsafe { PagePtr::new(addr as *mut u8) };
-                Ok(page.map(PageRef::from))
+                Ok(page)
             }
             PageAddr::Disk(addr) => {
                 // self.swapin_page(id, addr, ghost).await,
@@ -208,17 +198,17 @@ impl BTree {
         }
     }
 
-    async fn walk_node<'g, F>(&self, node: &Node<'g>, ghost: &'g Ghost, mut f: F) -> Result<()>
+    async fn walk_node<F>(&self, node: &Node, mut f: F) -> Result<()>
     where
-        F: FnMut(PageRef<'g>) -> bool,
+        F: FnMut(PagePtr) -> bool,
     {
-        let mut page = self.load_page_with_view(node.id, &node.view, ghost).await?;
+        let mut page = self.load_page_with_view(node.id, &node.view).await?;
         loop {
             if f(page) {
                 break;
             }
             let next = page.next().into();
-            match self.load_page_with_addr(node.id, next, ghost).await? {
+            match self.load_page_with_addr(node.id, next).await? {
                 Some(next) => page = next,
                 None => break,
             }
@@ -226,17 +216,13 @@ impl BTree {
         Ok(())
     }
 
-    async fn iter_node<'g, K, V>(
-        &self,
-        node: &Node<'g>,
-        ghost: &'g Ghost,
-    ) -> Result<NodeIter<'g, K, V>>
+    async fn iter_node<'g, K, V>(&self, node: &Node, ghost: &'g Ghost) -> Result<NodeIter<'g, K, V>>
     where
         K: Decodable + Ord,
         V: Decodable,
     {
         let mut merger = MergingIterBuilder::default();
-        self.walk_node(node, ghost, |page| {
+        self.walk_node(node, |page| {
             let page = unsafe { TypedPageRef::cast(page) };
             if let TypedPageRef::Data(data) = page {
                 merger.add(data.iter());
@@ -247,14 +233,14 @@ impl BTree {
         Ok(merger.build())
     }
 
-    async fn lookup_value<'a, 'k, 'g>(
-        &'a self,
+    async fn lookup_value<'k, 'g>(
+        &self,
         key: Key<'k>,
-        node: &Node<'g>,
+        node: &Node,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
-        self.walk_node(node, ghost, |page| {
+        self.walk_node(node, |page| {
             let page = unsafe { TypedPageRef::<'g, Key, Value>::cast(page) };
             if let TypedPageRef::Data(data) = page {
                 if let Some((k, v)) = data.seek(&key) {
@@ -270,15 +256,15 @@ impl BTree {
         Ok(value)
     }
 
-    async fn lookup_index<'a, 'g>(
-        &'a self,
+    async fn lookup_index<'g>(
+        &self,
         key: &[u8],
-        node: &Node<'g>,
+        node: &Node,
         ghost: &'g Ghost,
     ) -> Result<Option<Index>> {
         let mut index = None;
-        self.walk_node(node, ghost, |page| {
-            let page = unsafe { TypedPageRef::<&[u8], Index>::cast(page) };
+        self.walk_node(node, |page| {
+            let page = unsafe { TypedPageRef::<'g, &[u8], Index>::cast(page) };
             if let TypedPageRef::Data(data) = page {
                 if let Some((_, v)) = data.seek_back(&key) {
                     index = v.into();
@@ -291,11 +277,11 @@ impl BTree {
         Ok(index)
     }
 
-    async fn try_find_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
+    async fn try_find_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Node> {
         let mut cursor = ROOT_INDEX;
         let mut parent = None;
         loop {
-            let node = self.node(cursor.id, ghost);
+            let node = self.node(cursor.id);
             if node.view.ver() != cursor.ver {
                 self.try_reconcile_node(&node, parent.as_ref(), ghost)?;
                 return Err(Error::Conflict);
@@ -311,8 +297,8 @@ impl BTree {
 
     fn try_reconcile_node<'g>(
         &self,
-        node: &Node<'g>,
-        parent: Option<&Node<'g>>,
+        node: &Node,
+        parent: Option<&Node>,
         ghost: &'g Ghost,
     ) -> Result<()> {
         todo!()
@@ -320,7 +306,7 @@ impl BTree {
 
     async fn try_consolidate_node<'g, K, V>(
         &self,
-        node: &Node<'g>,
+        node: &Node,
         ghost: &'g Ghost,
     ) -> Result<DataPageRef<'g, K, V>>
     where

@@ -54,17 +54,17 @@ impl SplitPageBuf {
         }
     }
 
-    pub fn into_ptr(self) -> PagePtr {
-        self.ptr
-    }
-
-    pub fn into_ref<'a>(self) -> SplitPageRef<'a> {
-        unsafe { SplitPageRef::new(self.ptr.into()) }
-    }
-
     unsafe fn add(&mut self, range: Range<&[u8]>, index: Index) {
         range.encode_to(&mut self.content);
         index.encode_to(&mut self.content);
+    }
+
+    pub fn as_ptr(self) -> PagePtr {
+        self.ptr
+    }
+
+    pub fn as_ref<'a>(self) -> SplitPageRef<'a> {
+        unsafe { SplitPageRef::new(self.ptr) }
     }
 }
 
@@ -84,13 +84,13 @@ impl DerefMut for SplitPageBuf {
 
 /// An immutable reference to a split page.
 pub struct SplitPageRef<'a> {
-    base: PageRef<'a>,
+    base: PagePtr,
     range: Range<&'a [u8]>,
     index: Index,
 }
 
 impl<'a> SplitPageRef<'a> {
-    pub unsafe fn new(base: PageRef<'a>) -> Self {
+    pub unsafe fn new(base: PagePtr) -> Self {
         let mut content = BufReader::new(base.content());
         let range = Range::decode_from(&mut content);
         let index = Index::decode_from(&mut content);
@@ -107,15 +107,9 @@ impl<'a> SplitPageRef<'a> {
 }
 
 impl<'a> Deref for SplitPageRef<'a> {
-    type Target = PageRef<'a>;
+    type Target = PagePtr;
 
     fn deref(&self) -> &Self::Target {
         &self.base
-    }
-}
-
-impl<'a> From<SplitPageRef<'a>> for PageRef<'a> {
-    fn from(page: SplitPageRef<'a>) -> Self {
-        page.base
     }
 }

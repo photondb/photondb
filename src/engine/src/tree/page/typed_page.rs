@@ -1,4 +1,4 @@
-use super::{DataPageRef, Decodable, PageKind, PageRef, SplitPageRef};
+use super::{DataPageRef, Decodable, PageKind, PagePtr, SplitPageRef};
 
 pub enum TypedPageRef<'a, K, V> {
     Data(DataPageRef<'a, K, V>),
@@ -10,7 +10,7 @@ where
     K: Decodable + Ord,
     V: Decodable,
 {
-    pub unsafe fn cast(base: PageRef<'a>) -> Self {
+    pub unsafe fn cast(base: PagePtr) -> Self {
         match base.kind() {
             PageKind::Data => Self::Data(DataPageRef::new(base)),
             PageKind::Split => Self::Split(SplitPageRef::new(base)),

@@ -1,6 +1,6 @@
-use std::{alloc::Layout, marker::PhantomData, ops::Deref, ptr::NonNull};
+use std::{alloc::Layout, ptr::NonNull};
 
-// Page header: tag (1B) | ver (6B) | len (1B) | next (8B) | content_size (4B) |
+// Page header: ver (6B) | len (1B) | tag (1B) | next (8B) | content_size (4B) |
 const PAGE_ALIGNMENT: usize = 8;
 const PAGE_HEADER_SIZE: usize = 20;
 const PAGE_VERSION_SIZE: usize = 6;
@@ -24,16 +24,16 @@ impl PagePtr {
         self.0.as_ptr()
     }
 
-    unsafe fn tag_ptr(self) -> *mut u8 {
+    unsafe fn ver_ptr(self) -> *mut u8 {
         self.as_raw()
     }
 
-    unsafe fn ver_ptr(self) -> *mut u8 {
-        self.as_raw().add(1)
+    unsafe fn len_ptr(self) -> *mut u8 {
+        self.as_raw().add(PAGE_VERSION_SIZE)
     }
 
-    unsafe fn len_ptr(self) -> *mut u8 {
-        self.ver_ptr().add(PAGE_VERSION_SIZE)
+    unsafe fn tag_ptr(self) -> *mut u8 {
+        self.as_raw().add(PAGE_VERSION_SIZE + 1)
     }
 
     unsafe fn next_ptr(self) -> *mut u64 {
@@ -42,16 +42,6 @@ impl PagePtr {
 
     unsafe fn content_size_ptr(self) -> *mut u32 {
         (self.as_raw() as *mut u32).add(4)
-    }
-
-    fn tag(&self) -> PageTag {
-        unsafe { self.tag_ptr().read().into() }
-    }
-
-    fn set_tag(&mut self, tag: PageTag) {
-        unsafe {
-            self.tag_ptr().write(tag.into());
-        }
     }
 
     /// Returns the page version.
@@ -91,6 +81,16 @@ impl PagePtr {
     pub fn set_next(&mut self, next: u64) {
         unsafe {
             self.next_ptr().write(next.to_le());
+        }
+    }
+
+    fn tag(&self) -> PageTag {
+        unsafe { self.tag_ptr().read().into() }
+    }
+
+    fn set_tag(&mut self, tag: PageTag) {
+        unsafe {
+            self.tag_ptr().write(tag.into());
         }
     }
 
@@ -143,43 +143,6 @@ impl From<PagePtr> for u64 {
     }
 }
 
-/// An immutable reference to a page.
-#[derive(Copy, Clone, Debug)]
-pub struct PageRef<'a> {
-    ptr: PagePtr,
-    _mark: PhantomData<&'a [u8]>,
-}
-
-impl PageRef<'_> {
-    /// Creates a new `PageRef` from a `PagePtr`.
-    pub fn new(ptr: PagePtr) -> Self {
-        Self {
-            ptr,
-            _mark: PhantomData,
-        }
-    }
-}
-
-impl Deref for PageRef<'_> {
-    type Target = PagePtr;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ptr
-    }
-}
-
-impl From<PagePtr> for PageRef<'_> {
-    fn from(ptr: PagePtr) -> Self {
-        Self::new(ptr)
-    }
-}
-
-impl From<PageRef<'_>> for u64 {
-    fn from(page: PageRef<'_>) -> Self {
-        page.ptr.into()
-    }
-}
-
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct PageVer(u64);
 
@@ -205,11 +168,11 @@ impl From<PageVer> for u64 {
 #[derive(Copy, Clone, Debug, Default)]
 struct PageTag(u8);
 
-const INDEX_PAGE_MASK: u8 = 1 << 7;
+const PAGE_KIND_MASK: u8 = 0x7F;
 
 impl PageTag {
     const fn kind(self) -> PageKind {
-        PageKind::new(self.0 & !INDEX_PAGE_MASK)
+        PageKind::new(self.0 & PAGE_KIND_MASK)
     }
 
     const fn with_kind(self, kind: PageKind) -> Self {
@@ -217,7 +180,7 @@ impl PageTag {
     }
 
     const fn index(self) -> u8 {
-        self.0 & INDEX_PAGE_MASK
+        self.0 & !PAGE_KIND_MASK
     }
 
     const fn is_index(self) -> bool {
@@ -226,9 +189,9 @@ impl PageTag {
 
     const fn with_index(self, is_index: bool) -> Self {
         if is_index {
-            Self(self.0 | INDEX_PAGE_MASK)
+            Self(self.0 | !PAGE_KIND_MASK)
         } else {
-            Self(self.0 & !INDEX_PAGE_MASK)
+            Self(self.0 & PAGE_KIND_MASK)
         }
     }
 }

@@ -117,7 +117,7 @@ impl DataPageBuf {
         K: Decodable + Ord,
         V: Decodable,
     {
-        unsafe { DataPageRef::new(self.ptr.into()) }
+        unsafe { DataPageRef::new(self.ptr) }
     }
 }
 
@@ -137,7 +137,7 @@ impl DerefMut for DataPageBuf {
 
 /// An immutable reference to a data page.
 pub struct DataPageRef<'a, K, V> {
-    base: PageRef<'a>,
+    base: PagePtr,
     offsets: &'a [u32],
     _mark: PhantomData<(K, V)>,
 }
@@ -147,7 +147,7 @@ where
     K: Decodable + Ord,
     V: Decodable,
 {
-    pub unsafe fn new(base: PageRef<'a>) -> Self {
+    pub unsafe fn new(base: PagePtr) -> Self {
         let offsets_ptr = base.content() as *const u32;
         let offsets_len = if base.content_size() == 0 {
             0
@@ -239,16 +239,10 @@ impl<'a, K, V> Clone for DataPageRef<'a, K, V> {
 }
 
 impl<'a, K, V> Deref for DataPageRef<'a, K, V> {
-    type Target = PageRef<'a>;
+    type Target = PagePtr;
 
     fn deref(&self) -> &Self::Target {
         &self.base
-    }
-}
-
-impl<'a, K, V> From<DataPageRef<'a, K, V>> for PageRef<'a> {
-    fn from(page: DataPageRef<'a, K, V>) -> Self {
-        page.base
     }
 }
 
