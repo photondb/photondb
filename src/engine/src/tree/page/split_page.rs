@@ -1,4 +1,4 @@
-use std::ops::{Deref, Range};
+use std::ops::{Deref, DerefMut, Range};
 
 use super::*;
 
@@ -27,7 +27,7 @@ impl SplitPageBuilder {
         alloc: &A,
         range: Range<&[u8]>,
         index: Index,
-    ) -> Result<PagePtr, A::Error>
+    ) -> Result<SplitPageBuf, A::Error>
     where
         A: PageAlloc,
     {
@@ -36,18 +36,20 @@ impl SplitPageBuilder {
         ptr.map(|ptr| unsafe {
             let mut buf = SplitPageBuf::new(ptr, self);
             buf.add(range, index);
-            ptr
+            buf
         })
     }
 }
 
-struct SplitPageBuf {
+pub struct SplitPageBuf {
+    ptr: PagePtr,
     content: BufWriter,
 }
 
 impl SplitPageBuf {
     unsafe fn new(mut ptr: PagePtr, builder: SplitPageBuilder) -> Self {
         Self {
+            ptr,
             content: BufWriter::new(ptr.content_mut()),
         }
     }
@@ -55,6 +57,20 @@ impl SplitPageBuf {
     unsafe fn add(&mut self, range: Range<&[u8]>, index: Index) {
         range.encode_to(&mut self.content);
         index.encode_to(&mut self.content);
+    }
+}
+
+impl Deref for SplitPageBuf {
+    type Target = PagePtr;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ptr
+    }
+}
+
+impl DerefMut for SplitPageBuf {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ptr
     }
 }
 
