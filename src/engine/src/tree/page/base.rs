@@ -94,6 +94,7 @@ impl PagePtr {
         }
     }
 
+    /// Returns the page kind.
     pub fn kind(&self) -> PageKind {
         self.tag().kind()
     }
@@ -102,6 +103,7 @@ impl PagePtr {
         self.set_tag(self.tag().with_kind(kind));
     }
 
+    /// Returns true if this is an index page.
     pub fn is_index(&self) -> bool {
         self.tag().is_index()
     }
@@ -110,22 +112,27 @@ impl PagePtr {
         self.set_tag(self.tag().with_index(is_index));
     }
 
+    /// Sets the page header as default.
     pub fn set_default(&mut self) {
         unsafe { self.as_raw().write_bytes(0, PAGE_HEADER_SIZE) };
     }
 
+    /// Returns a pointer to the page content.
     pub fn content(&self) -> *const u8 {
         unsafe { self.as_raw().add(PAGE_HEADER_SIZE) }
     }
 
+    /// Returns a mutable pointer to the page content.
     pub fn content_mut(&mut self) -> *mut u8 {
         unsafe { self.as_raw().add(PAGE_HEADER_SIZE) }
     }
 
+    /// Returns the page size in bytes.
     pub fn size(&self) -> usize {
         PAGE_HEADER_SIZE + self.content_size() as usize
     }
 
+    /// Returns the page content size in bytes.
     pub fn content_size(&self) -> u32 {
         unsafe { self.content_size_ptr().read().to_le() }
     }
@@ -235,7 +242,7 @@ impl From<PageKind> for u8 {
 ///
 /// # Safety
 ///
-/// Similar to `std::alloc::Allocator`.
+/// Similar to the `std::alloc::Allocator` trait.
 pub unsafe trait PageAlloc {
     type Error;
 
