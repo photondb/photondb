@@ -57,7 +57,7 @@ impl PageView {
         }
     }
 
-    pub fn is_leaf(&self) -> bool {
+    pub fn is_data(&self) -> bool {
         !self.is_index()
     }
 

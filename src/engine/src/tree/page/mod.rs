@@ -10,8 +10,8 @@ pub use iter::{
 mod data;
 pub use data::{Decodable, Encodable, Index, Key, Value};
 
-mod data_page;
-pub use data_page::{DataPageBuilder, DataPageIter, DataPageRef};
+mod delta_page;
+pub use delta_page::{DeltaPageBuilder, DeltaPageIter, DeltaPageRef};
 
 mod split_page;
 pub use split_page::{SplitPageBuilder, SplitPageRef};
@@ -21,7 +21,7 @@ use util::{BufReader, BufWriter};
 
 /// An aggregated type with all kinds of page references.
 pub enum PageRef<'a> {
-    Leaf(LeafPageRef<'a>),
+    Data(DataPageRef<'a>),
     Index(IndexPageRef<'a>),
     Split(SplitPageRef<'a>),
 }
@@ -30,11 +30,11 @@ impl<'a> PageRef<'a> {
     /// Creates a `PageRef` from a `PagePtr`.
     pub fn cast(base: PagePtr) -> Self {
         match base.kind() {
-            PageKind::Data => {
-                if base.is_leaf() {
-                    Self::Leaf(DataPageRef::new(base))
+            PageKind::Delta => {
+                if base.is_data() {
+                    Self::Data(DeltaPageRef::new(base))
                 } else {
-                    Self::Index(DataPageRef::new(base))
+                    Self::Index(DeltaPageRef::new(base))
                 }
             }
             PageKind::Split => Self::Split(SplitPageRef::new(base)),
@@ -42,8 +42,8 @@ impl<'a> PageRef<'a> {
     }
 }
 
-pub type LeafPageRef<'a> = DataPageRef<'a, Key<'a>, Value<'a>>;
-pub type IndexPageRef<'a> = DataPageRef<'a, &'a [u8], Index>;
+pub type DataPageRef<'a> = DeltaPageRef<'a, Key<'a>, Value<'a>>;
+pub type IndexPageRef<'a> = DeltaPageRef<'a, &'a [u8], Index>;
 
 /// An aggregated trait that satisfies multiple iterator traits.
 pub trait PageIter: SeekableIter + RewindableIter

@@ -9,16 +9,16 @@ use std::{
 use super::*;
 
 /// A builder to create data pages.
-pub struct DataPageBuilder {
+pub struct DeltaPageBuilder {
     base: PageBuilder,
     offsets_size: usize,
     payload_size: usize,
 }
 
-impl Default for DataPageBuilder {
+impl Default for DeltaPageBuilder {
     fn default() -> Self {
         Self {
-            base: PageBuilder::new(PageKind::Data),
+            base: PageBuilder::new(PageKind::Delta),
             offsets_size: 0,
             payload_size: 0,
         }
@@ -27,7 +27,7 @@ impl Default for DataPageBuilder {
 
 // TODO: Optimizes the page layout with
 // https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
-impl DataPageBuilder {
+impl DeltaPageBuilder {
     fn add<K, V>(&mut self, key: &K, value: &V)
     where
         K: Encodable,
@@ -42,16 +42,20 @@ impl DataPageBuilder {
     }
 
     /// Builds an empty data page.
-    pub fn build<A>(self, alloc: &A) -> Result<DataPageBuf, A::Error>
+    pub fn build<A>(self, alloc: &A) -> Result<DeltaPageBuf, A::Error>
     where
         A: PageAlloc,
     {
         let ptr = self.base.build(alloc, self.size());
-        ptr.map(|ptr| unsafe { DataPageBuf::new(ptr, self) })
+        ptr.map(|ptr| unsafe { DeltaPageBuf::new(ptr, self) })
     }
 
     /// Builds a data page with entries from the given iterator.
-    pub fn build_from_iter<A, I>(mut self, alloc: &A, iter: &mut I) -> Result<DataPageBuf, A::Error>
+    pub fn build_from_iter<A, I>(
+        mut self,
+        alloc: &A,
+        iter: &mut I,
+    ) -> Result<DeltaPageBuf, A::Error>
     where
         A: PageAlloc,
         I: RewindableIter,
@@ -64,7 +68,7 @@ impl DataPageBuilder {
         }
         let ptr = self.base.build(alloc, self.size());
         ptr.map(|ptr| unsafe {
-            let mut buf = DataPageBuf::new(ptr, self);
+            let mut buf = DeltaPageBuf::new(ptr, self);
             iter.rewind();
             while let Some((key, value)) = iter.next() {
                 buf.add(key, value);
@@ -74,15 +78,15 @@ impl DataPageBuilder {
     }
 }
 
-pub struct DataPageBuf {
+pub struct DeltaPageBuf {
     ptr: PagePtr,
     offsets: *mut u32,
     content: BufWriter,
     current: usize,
 }
 
-impl DataPageBuf {
-    unsafe fn new(mut ptr: PagePtr, builder: DataPageBuilder) -> Self {
+impl DeltaPageBuf {
+    unsafe fn new(mut ptr: PagePtr, builder: DeltaPageBuilder) -> Self {
         let offsets = ptr.content_mut() as *mut u32;
         let mut content = BufWriter::new(ptr.content_mut());
         content.skip(builder.offsets_size);
@@ -110,16 +114,16 @@ impl DataPageBuf {
         self.ptr
     }
 
-    pub fn as_ref<'a, K, V>(&self) -> DataPageRef<'a, K, V>
+    pub fn as_ref<'a, K, V>(&self) -> DeltaPageRef<'a, K, V>
     where
         K: Decodable + Ord,
         V: Decodable,
     {
-        DataPageRef::new(self.ptr)
+        DeltaPageRef::new(self.ptr)
     }
 }
 
-impl Deref for DataPageBuf {
+impl Deref for DeltaPageBuf {
     type Target = PagePtr;
 
     fn deref(&self) -> &Self::Target {
@@ -127,26 +131,26 @@ impl Deref for DataPageBuf {
     }
 }
 
-impl DerefMut for DataPageBuf {
+impl DerefMut for DeltaPageBuf {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.ptr
     }
 }
 
 /// An immutable reference to a data page.
-pub struct DataPageRef<'a, K, V> {
+pub struct DeltaPageRef<'a, K, V> {
     base: PagePtr,
     offsets: &'a [u32],
     _mark: PhantomData<(K, V)>,
 }
 
-impl<'a, K, V> DataPageRef<'a, K, V>
+impl<'a, K, V> DeltaPageRef<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
 {
     pub fn new(base: PagePtr) -> Self {
-        assert_eq!(base.kind(), PageKind::Data);
+        assert_eq!(base.kind(), PageKind::Delta);
         unsafe {
             let offsets_ptr = base.content() as *const u32;
             let offsets_len = if base.content_size() == 0 {
@@ -202,8 +206,8 @@ where
     }
 
     /// Returns an iterator over the entries in the page.
-    pub fn iter(&self) -> DataPageIter<'a, K, V> {
-        DataPageIter::new(self.clone())
+    pub fn iter(&self) -> DeltaPageIter<'a, K, V> {
+        DeltaPageIter::new(self.clone())
     }
 
     fn rank(&self, target: &K) -> usize {
@@ -231,7 +235,7 @@ where
     }
 }
 
-impl<'a, K, V> Clone for DataPageRef<'a, K, V> {
+impl<'a, K, V> Clone for DeltaPageRef<'a, K, V> {
     fn clone(&self) -> Self {
         Self {
             base: self.base,
@@ -241,7 +245,7 @@ impl<'a, K, V> Clone for DataPageRef<'a, K, V> {
     }
 }
 
-impl<'a, K, V> Deref for DataPageRef<'a, K, V> {
+impl<'a, K, V> Deref for DeltaPageRef<'a, K, V> {
     type Target = PagePtr;
 
     fn deref(&self) -> &Self::Target {
@@ -249,7 +253,7 @@ impl<'a, K, V> Deref for DataPageRef<'a, K, V> {
     }
 }
 
-impl<'a, K, V> From<PagePtr> for DataPageRef<'a, K, V>
+impl<'a, K, V> From<PagePtr> for DeltaPageRef<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
@@ -259,18 +263,18 @@ where
     }
 }
 
-pub struct DataPageIter<'a, K, V> {
-    page: DataPageRef<'a, K, V>,
+pub struct DeltaPageIter<'a, K, V> {
+    page: DeltaPageRef<'a, K, V>,
     next: usize,
     last: Option<(K, V)>,
 }
 
-impl<'a, K, V> DataPageIter<'a, K, V>
+impl<'a, K, V> DeltaPageIter<'a, K, V>
 where
     K: Decodable,
     V: Decodable,
 {
-    pub fn new(page: DataPageRef<'a, K, V>) -> Self {
+    pub fn new(page: DeltaPageRef<'a, K, V>) -> Self {
         Self {
             page,
             next: 0,
@@ -279,27 +283,27 @@ where
     }
 }
 
-impl<'a, K, V> From<PagePtr> for DataPageIter<'a, K, V>
+impl<'a, K, V> From<PagePtr> for DeltaPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
 {
     fn from(ptr: PagePtr) -> Self {
-        Self::new(DataPageRef::new(ptr))
+        Self::new(DeltaPageRef::new(ptr))
     }
 }
 
-impl<'a, K, V> From<DataPageRef<'a, K, V>> for DataPageIter<'a, K, V>
+impl<'a, K, V> From<DeltaPageRef<'a, K, V>> for DeltaPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
 {
-    fn from(page: DataPageRef<'a, K, V>) -> Self {
+    fn from(page: DeltaPageRef<'a, K, V>) -> Self {
         Self::new(page)
     }
 }
 
-impl<'a, K, V> ForwardIter for DataPageIter<'a, K, V>
+impl<'a, K, V> ForwardIter for DeltaPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
@@ -320,7 +324,7 @@ where
     }
 }
 
-impl<'a, K, V> SeekableIter for DataPageIter<'a, K, V>
+impl<'a, K, V> SeekableIter for DeltaPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
@@ -331,7 +335,7 @@ where
     }
 }
 
-impl<'a, K, V> RewindableIter for DataPageIter<'a, K, V>
+impl<'a, K, V> RewindableIter for DeltaPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
@@ -350,12 +354,12 @@ mod test {
     fn data_page() {
         let data = [(1, 0), (2, 0), (4, 0), (7, 0), (8, 0)];
         let mut iter = SliceIter::from(&data);
-        let page = DataPageBuilder::default()
+        let page = DeltaPageBuilder::default()
             .build_from_iter(&ALLOC, &mut iter)
             .unwrap();
 
         let page = page.as_ref::<u64, u64>();
-        assert_eq!(page.kind(), PageKind::Data);
+        assert_eq!(page.kind(), PageKind::Delta);
         assert_eq!(page.is_index(), false);
 
         assert_eq!(page.seek(&0), Some((1, 0)));

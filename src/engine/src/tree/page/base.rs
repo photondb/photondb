@@ -103,8 +103,8 @@ impl PagePtr {
         self.set_tag(self.tag().with_kind(kind));
     }
 
-    /// Returns true if this is a leaf page.
-    pub fn is_leaf(&self) -> bool {
+    /// Returns true if this is a data page.
+    pub fn is_data(&self) -> bool {
         !self.is_index()
     }
 
@@ -223,14 +223,16 @@ impl From<PageTag> for u8 {
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PageKind {
-    Data = 0,
+    /// Pages with delta entries.
+    Delta = 0,
+    /// Pages with split information.
     Split = 1,
 }
 
 impl PageKind {
     const fn new(kind: u8) -> Self {
         match kind {
-            0 => Self::Data,
+            0 => Self::Delta,
             1 => Self::Split,
             _ => panic!("invalid page kind"),
         }
@@ -332,14 +334,14 @@ pub mod test {
         ptr.set_next(3);
         assert_eq!(ptr.next(), 3);
 
-        assert_eq!(ptr.kind(), PageKind::Data);
+        assert_eq!(ptr.kind(), PageKind::Delta);
         ptr.set_kind(PageKind::Split);
         assert_eq!(ptr.kind(), PageKind::Split);
 
-        assert_eq!(ptr.is_leaf(), true);
+        assert_eq!(ptr.is_data(), true);
         assert_eq!(ptr.is_index(), false);
         ptr.set_index(true);
-        assert_eq!(ptr.is_leaf(), false);
+        assert_eq!(ptr.is_data(), false);
         assert_eq!(ptr.is_index(), true);
 
         assert_eq!(ptr.content_size(), 0);
