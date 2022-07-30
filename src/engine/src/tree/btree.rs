@@ -168,23 +168,23 @@ impl BTree {
         });
     }
 
-    async fn load_page_with_view(&self, id: u64, view: &PageView) -> Result<PagePtr> {
+    async fn load_page_with_view(&self, _: u64, view: &PageView) -> Result<PagePtr> {
         match *view {
             PageView::Mem(page) => Ok(page),
-            PageView::Disk(_, addr) => {
+            PageView::Disk(_, _) => {
                 // self.swapin_page(id, addr).await,
                 todo!()
             }
         }
     }
 
-    async fn load_page_with_addr(&self, id: u64, addr: PageAddr) -> Result<Option<PagePtr>> {
+    async fn load_page_with_addr(&self, _: u64, addr: PageAddr) -> Result<Option<PagePtr>> {
         match addr {
             PageAddr::Mem(addr) => {
                 let page = unsafe { PagePtr::new(addr as *mut u8) };
                 Ok(page)
             }
-            PageAddr::Disk(addr) => {
+            PageAddr::Disk(_) => {
                 // self.swapin_page(id, addr).await,
                 todo!()
             }

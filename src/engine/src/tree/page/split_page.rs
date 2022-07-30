@@ -35,7 +35,7 @@ impl SplitPageBuilder {
         self.add(range.clone(), index);
         let ptr = self.base.build(alloc, self.size);
         ptr.map(|ptr| unsafe {
-            let mut buf = SplitPageBuf::new(ptr, self);
+            let mut buf = SplitPageBuf::new(ptr);
             buf.add(range, index);
             buf
         })
@@ -48,7 +48,7 @@ pub struct SplitPageBuf {
 }
 
 impl SplitPageBuf {
-    unsafe fn new(mut ptr: PagePtr, builder: SplitPageBuilder) -> Self {
+    unsafe fn new(mut ptr: PagePtr) -> Self {
         Self {
             ptr,
             content: BufWriter::new(ptr.content_mut()),
@@ -65,7 +65,7 @@ impl SplitPageBuf {
     }
 
     pub fn as_ref<'a>(self) -> SplitPageRef<'a> {
-        unsafe { SplitPageRef::new(self.ptr) }
+        SplitPageRef::new(self.ptr)
     }
 }
 

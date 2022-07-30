@@ -115,7 +115,7 @@ impl DataPageBuf {
         K: Decodable + Ord,
         V: Decodable,
     {
-        unsafe { DataPageRef::new(self.ptr) }
+        DataPageRef::new(self.ptr)
     }
 }
 
