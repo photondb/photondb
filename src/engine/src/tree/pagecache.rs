@@ -8,11 +8,7 @@ use std::{
 
 use jemallocator::{usable_size, Jemalloc};
 
-use super::{
-    page::{PageAlloc, PagePtr, PageVer},
-    pagestore::PageInfo,
-    Error, Result,
-};
+use super::{page::*, pagestore::PageInfo, Error, Result};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum PageAddr {
@@ -59,6 +55,10 @@ impl PageView {
             Self::Mem(page) => page.len(),
             Self::Disk(info, _) => info.len,
         }
+    }
+
+    pub fn is_leaf(&self) -> bool {
+        !self.is_index()
     }
 
     pub fn is_index(&self) -> bool {

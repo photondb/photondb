@@ -145,19 +145,21 @@ where
     K: Decodable + Ord,
     V: Decodable,
 {
-    pub unsafe fn new(base: PagePtr) -> Self {
-        let offsets_ptr = base.content() as *const u32;
-        let offsets_len = if base.content_size() == 0 {
-            0
-        } else {
-            let offset = offsets_ptr.read();
-            offset as usize / size_of::<u32>()
-        };
-        let offsets = slice::from_raw_parts(offsets_ptr, offsets_len);
-        Self {
-            base,
-            offsets,
-            _mark: PhantomData,
+    pub fn new(base: PagePtr) -> Self {
+        assert_eq!(base.kind(), PageKind::Data);
+        unsafe {
+            let offsets_ptr = base.content() as *const u32;
+            let offsets_len = if base.content_size() == 0 {
+                0
+            } else {
+                offsets_ptr.read() as usize / size_of::<u32>()
+            };
+            let offsets = slice::from_raw_parts(offsets_ptr, offsets_len);
+            Self {
+                base,
+                offsets,
+                _mark: PhantomData,
+            }
         }
     }
 
@@ -247,6 +249,16 @@ impl<'a, K, V> Deref for DataPageRef<'a, K, V> {
     }
 }
 
+impl<'a, K, V> From<PagePtr> for DataPageRef<'a, K, V>
+where
+    K: Decodable + Ord,
+    V: Decodable,
+{
+    fn from(ptr: PagePtr) -> Self {
+        Self::new(ptr)
+    }
+}
+
 pub struct DataPageIter<'a, K, V> {
     page: DataPageRef<'a, K, V>,
     next: usize,
@@ -264,6 +276,26 @@ where
             next: 0,
             last: None,
         }
+    }
+}
+
+impl<'a, K, V> From<PagePtr> for DataPageIter<'a, K, V>
+where
+    K: Decodable + Ord,
+    V: Decodable,
+{
+    fn from(ptr: PagePtr) -> Self {
+        Self::new(DataPageRef::new(ptr))
+    }
+}
+
+impl<'a, K, V> From<DataPageRef<'a, K, V>> for DataPageIter<'a, K, V>
+where
+    K: Decodable + Ord,
+    V: Decodable,
+{
+    fn from(page: DataPageRef<'a, K, V>) -> Self {
+        Self::new(page)
     }
 }
 

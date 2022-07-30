@@ -7,7 +7,7 @@ use std::{
 };
 
 pub trait ForwardIter {
-    type Key;
+    type Key: Ord;
     type Value;
 
     /// Returns the last entry.
@@ -61,7 +61,10 @@ impl<'a, K, V> SliceIter<'a, K, V> {
     }
 }
 
-impl<'a, K, V> ForwardIter for SliceIter<'a, K, V> {
+impl<'a, K, V> ForwardIter for SliceIter<'a, K, V>
+where
+    K: Ord,
+{
     type Key = K;
     type Value = V;
 
@@ -89,7 +92,10 @@ where
     }
 }
 
-impl<'a, K, V> RewindableIter for SliceIter<'a, K, V> {
+impl<'a, K, V> RewindableIter for SliceIter<'a, K, V>
+where
+    K: Ord,
+{
     fn rewind(&mut self) {
         self.iter = self.data.iter();
         self.last = None;
@@ -120,7 +126,10 @@ impl<K, V> OptionIter<K, V> {
     }
 }
 
-impl<K, V> ForwardIter for OptionIter<K, V> {
+impl<K, V> ForwardIter for OptionIter<K, V>
+where
+    K: Ord,
+{
     type Key = K;
     type Value = V;
 
@@ -138,7 +147,10 @@ impl<K, V> ForwardIter for OptionIter<K, V> {
     }
 }
 
-impl<K, V> RewindableIter for OptionIter<K, V> {
+impl<K, V> RewindableIter for OptionIter<K, V>
+where
+    K: Ord,
+{
     fn rewind(&mut self) {
         if let Some(last) = self.last.take() {
             self.next = Some(last);
@@ -175,17 +187,11 @@ impl<I> DerefMut for ReverseIter<I> {
     }
 }
 
-impl<I> Eq for ReverseIter<I>
-where
-    I: ForwardIter,
-    I::Key: Ord,
-{
-}
+impl<I> Eq for ReverseIter<I> where I: ForwardIter {}
 
 impl<I> PartialEq for ReverseIter<I>
 where
     I: ForwardIter,
-    I::Key: Ord,
 {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
@@ -195,7 +201,6 @@ where
 impl<I> Ord for ReverseIter<I>
 where
     I: ForwardIter,
-    I::Key: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self.last(), other.last()) {
@@ -210,7 +215,6 @@ where
 impl<I> PartialOrd for ReverseIter<I>
 where
     I: ForwardIter,
-    I::Key: Ord,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -221,7 +225,6 @@ where
 pub struct MergingIter<I>
 where
     I: ForwardIter,
-    I::Key: Ord,
 {
     heap: BinaryHeap<ReverseIter<I>>,
     children: Vec<ReverseIter<I>>,
@@ -230,7 +233,6 @@ where
 impl<I> MergingIter<I>
 where
     I: ForwardIter,
-    I::Key: Ord,
 {
     fn new(children: Vec<ReverseIter<I>>) -> Self {
         Self {
@@ -271,7 +273,6 @@ where
 impl<I> ForwardIter for MergingIter<I>
 where
     I: ForwardIter,
-    I::Key: Ord,
 {
     type Key = I::Key;
     type Value = I::Value;
@@ -294,7 +295,6 @@ where
 impl<I> SeekableIter for MergingIter<I>
 where
     I: SeekableIter,
-    I::Key: Ord,
 {
     fn seek(&mut self, target: &Self::Key) {
         self.reset(|iter| iter.seek(target));
@@ -304,7 +304,6 @@ where
 impl<I> RewindableIter for MergingIter<I>
 where
     I: RewindableIter,
-    I::Key: Ord,
 {
     fn rewind(&mut self) {
         self.reset(|iter| iter.rewind());
@@ -327,7 +326,6 @@ impl<I> Default for MergingIterBuilder<I> {
 impl<I> MergingIterBuilder<I>
 where
     I: ForwardIter,
-    I::Key: Ord,
 {
     pub fn add(&mut self, child: I) {
         self.children.push(ReverseIter(child));

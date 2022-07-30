@@ -103,6 +103,11 @@ impl PagePtr {
         self.set_tag(self.tag().with_kind(kind));
     }
 
+    /// Returns true if this is a leaf page.
+    pub fn is_leaf(&self) -> bool {
+        !self.is_index()
+    }
+
     /// Returns true if this is an index page.
     pub fn is_index(&self) -> bool {
         self.tag().is_index()
@@ -314,21 +319,29 @@ pub mod test {
         let mut buf = [1u8; PAGE_HEADER_SIZE];
         let mut ptr = unsafe { PagePtr::new(buf.as_mut_ptr()).unwrap() };
         ptr.set_default();
+
         assert_eq!(ptr.ver(), PageVer(0));
         ptr.set_ver(ptr.ver().next());
         assert_eq!(ptr.ver(), PageVer(1));
+
         assert_eq!(ptr.len(), 0);
         ptr.set_len(2);
         assert_eq!(ptr.len(), 2);
+
         assert_eq!(ptr.next(), 0);
         ptr.set_next(3);
         assert_eq!(ptr.next(), 3);
+
         assert_eq!(ptr.kind(), PageKind::Data);
         ptr.set_kind(PageKind::Split);
         assert_eq!(ptr.kind(), PageKind::Split);
+
+        assert_eq!(ptr.is_leaf(), true);
         assert_eq!(ptr.is_index(), false);
         ptr.set_index(true);
+        assert_eq!(ptr.is_leaf(), false);
         assert_eq!(ptr.is_index(), true);
+
         assert_eq!(ptr.content_size(), 0);
         ptr.set_content_size(4);
         assert_eq!(ptr.content_size(), 4);

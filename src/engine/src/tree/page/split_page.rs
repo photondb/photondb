@@ -91,11 +91,14 @@ pub struct SplitPageRef<'a> {
 }
 
 impl<'a> SplitPageRef<'a> {
-    pub unsafe fn new(base: PagePtr) -> Self {
-        let mut content = BufReader::new(base.content());
-        let range = Range::decode_from(&mut content);
-        let index = Index::decode_from(&mut content);
-        Self { base, range, index }
+    pub fn new(base: PagePtr) -> Self {
+        assert_eq!(base.kind(), PageKind::Split);
+        unsafe {
+            let mut content = BufReader::new(base.content());
+            let range = Range::decode_from(&mut content);
+            let index = Index::decode_from(&mut content);
+            Self { base, range, index }
+        }
     }
 
     pub fn range(&self) -> Range<&'a [u8]> {
@@ -112,5 +115,11 @@ impl<'a> Deref for SplitPageRef<'a> {
 
     fn deref(&self) -> &Self::Target {
         &self.base
+    }
+}
+
+impl<'a> From<PagePtr> for SplitPageRef<'a> {
+    fn from(ptr: PagePtr) -> Self {
+        Self::new(ptr)
     }
 }
