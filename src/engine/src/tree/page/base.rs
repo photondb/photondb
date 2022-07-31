@@ -3,6 +3,7 @@ use std::{alloc::Layout, ptr::NonNull};
 // Page header: ver (6B) | len (1B) | tag (1B) | next (8B) | content_size (4B) |
 const PAGE_ALIGNMENT: usize = 8;
 const PAGE_HEADER_SIZE: usize = 20;
+const PAGE_VERSION_MAX: u64 = (1 << 48) - 1;
 const PAGE_VERSION_SIZE: usize = 6;
 
 /// A non-null pointer to a page.
@@ -45,18 +46,19 @@ impl PagePtr {
     }
 
     /// Returns the page version.
-    pub fn ver(&self) -> PageVer {
+    pub fn ver(&self) -> u64 {
         unsafe {
             let mut ver = 0u64;
             let ver_ptr = &mut ver as *mut u64 as *mut u8;
             ver_ptr.copy_from_nonoverlapping(self.ver_ptr(), PAGE_VERSION_SIZE);
-            PageVer(u64::from_le(ver))
+            u64::from_le(ver)
         }
     }
 
-    pub fn set_ver(&mut self, ver: PageVer) {
+    pub fn set_ver(&mut self, ver: u64) {
+        assert!(ver <= PAGE_VERSION_MAX);
         unsafe {
-            let ver = ver.0.to_le();
+            let ver = ver.to_le();
             let ver_ptr = &ver as *const u64 as *const u8;
             ver_ptr.copy_to_nonoverlapping(self.ver_ptr(), PAGE_VERSION_SIZE);
         }
@@ -75,7 +77,8 @@ impl PagePtr {
 
     /// Returns the address of the next page in the chain.
     pub fn next(&self) -> u64 {
-        unsafe { self.next_ptr().read().to_le() }
+        let next = unsafe { self.next_ptr().read() };
+        u64::from_le(next)
     }
 
     pub fn set_next(&mut self, next: u64) {
@@ -138,13 +141,15 @@ impl PagePtr {
     }
 
     /// Returns the page content size.
-    pub fn content_size(&self) -> u32 {
-        unsafe { self.content_size_ptr().read().to_le() }
+    pub fn content_size(&self) -> usize {
+        let size = unsafe { self.content_size_ptr().read() };
+        u32::from_le(size) as usize
     }
 
-    fn set_content_size(&mut self, size: u32) {
+    fn set_content_size(&mut self, size: usize) {
+        assert!(size <= u32::MAX as usize);
         unsafe {
-            self.content_size_ptr().write(size.to_le());
+            self.content_size_ptr().write((size as u32).to_le());
         }
     }
 }
@@ -152,28 +157,6 @@ impl PagePtr {
 impl From<PagePtr> for u64 {
     fn from(ptr: PagePtr) -> Self {
         ptr.as_raw() as u64
-    }
-}
-
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub struct PageVer(u64);
-
-const PAGE_VERSION_MAX: u64 = (1 << 48) - 1;
-
-impl PageVer {
-    pub const fn new(ver: u64) -> Self {
-        assert!(ver <= PAGE_VERSION_MAX);
-        Self(ver)
-    }
-
-    pub const fn next(self) -> Self {
-        Self::new(self.0 + 1)
-    }
-}
-
-impl From<PageVer> for u64 {
-    fn from(ver: PageVer) -> Self {
-        ver.0
     }
 }
 
@@ -277,13 +260,12 @@ impl PageBuilder {
     where
         A: PageAlloc,
     {
-        assert!(content_size <= u32::MAX as usize);
         let ptr = alloc.alloc(PAGE_HEADER_SIZE + content_size);
         ptr.map(|mut ptr| {
             ptr.set_default();
             ptr.set_kind(self.kind);
             ptr.set_index(self.is_index);
-            ptr.set_content_size(content_size as u32);
+            ptr.set_content_size(content_size);
             ptr
         })
     }
@@ -324,9 +306,9 @@ pub mod test {
         let mut ptr = unsafe { PagePtr::new(buf.as_mut_ptr()).unwrap() };
         ptr.set_default();
 
-        assert_eq!(ptr.ver(), PageVer(0));
-        ptr.set_ver(ptr.ver().next());
-        assert_eq!(ptr.ver(), PageVer(1));
+        assert_eq!(ptr.ver(), 0);
+        ptr.set_ver(1);
+        assert_eq!(ptr.ver(), 1);
 
         assert_eq!(ptr.len(), 0);
         ptr.set_len(2);

@@ -1,5 +1,5 @@
 mod base;
-pub use base::{PageAlloc, PageBuilder, PageKind, PagePtr, PageVer};
+pub use base::{PageAlloc, PageBuilder, PageKind, PagePtr};
 
 mod iter;
 pub use iter::{

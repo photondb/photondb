@@ -43,7 +43,7 @@ pub enum PageView {
 }
 
 impl PageView {
-    pub fn ver(&self) -> PageVer {
+    pub fn ver(&self) -> u64 {
         match self {
             Self::Mem(page) => page.ver(),
             Self::Disk(info, _) => info.ver,

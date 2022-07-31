@@ -1,10 +1,7 @@
-use crate::tree::{
-    page::{PagePtr, PageVer},
-    Options, Result,
-};
+use crate::tree::{page::PagePtr, Options, Result};
 
 pub struct PageInfo {
-    pub ver: PageVer,
+    pub ver: u64,
     pub len: u8,
     pub is_index: bool,
 }
