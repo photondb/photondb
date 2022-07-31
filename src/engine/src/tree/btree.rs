@@ -31,9 +31,9 @@ impl BTree {
         tree.init()
     }
 
-    pub async fn get<'k, 'g>(
+    pub async fn get<'g>(
         &self,
-        key: &'k [u8],
+        key: &[u8],
         lsn: u64,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
@@ -46,9 +46,9 @@ impl BTree {
         }
     }
 
-    async fn try_get<'k, 'g>(&self, key: Key<'k>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
+    async fn try_get<'g>(&self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_node(key.raw, ghost).await?;
-        self.lookup_value(&node, &key).await
+        self.lookup_value(&node, key).await
     }
 
     pub async fn put<'g>(
@@ -181,16 +181,6 @@ impl BTree {
         });
     }
 
-    async fn load_page_with_view(&self, _: u64, view: &PageView) -> Result<PagePtr> {
-        match *view {
-            PageView::Mem(page) => Ok(page),
-            PageView::Disk(_, _) => {
-                // self.swapin_page(id, addr).await,
-                todo!()
-            }
-        }
-    }
-
     async fn load_page_with_addr(&self, _: u64, addr: PageAddr) -> Result<Option<PagePtr>> {
         match addr {
             PageAddr::Mem(addr) => {
@@ -198,6 +188,16 @@ impl BTree {
                 Ok(page)
             }
             PageAddr::Disk(_) => {
+                // self.swapin_page(id, addr).await,
+                todo!()
+            }
+        }
+    }
+
+    async fn load_page_with_view(&self, _: u64, view: &PageView) -> Result<PagePtr> {
+        match *view {
+            PageView::Mem(page) => Ok(page),
+            PageView::Disk(_, _) => {
                 // self.swapin_page(id, addr).await,
                 todo!()
             }
@@ -237,11 +237,7 @@ impl BTree {
         Ok(merger.build().into())
     }
 
-    async fn lookup_value<'k, 'g>(
-        &self,
-        node: &Node<'g>,
-        key: &Key<'k>,
-    ) -> Result<Option<&'g [u8]>> {
+    async fn lookup_value<'g>(&self, node: &Node<'g>, key: Key<'_>) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.walk_node(node, |page| {
             if page.kind() == PageKind::Delta {
@@ -263,7 +259,7 @@ impl BTree {
             if page.kind() == PageKind::Delta {
                 let page = IndexPageRef::from(page);
                 if let Some((_, v)) = page.find(key) {
-                    value = Some(v);
+                    value = v.into();
                     return true;
                 }
             }
@@ -273,7 +269,7 @@ impl BTree {
         Ok(value)
     }
 
-    async fn try_find_node<'k, 'g>(&self, key: &'k [u8], ghost: &'g Ghost) -> Result<Node<'g>> {
+    async fn try_find_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
         let mut cursor = ROOT_INDEX;
         let mut parent = None;
         loop {

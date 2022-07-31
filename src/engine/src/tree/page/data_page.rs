@@ -67,8 +67,8 @@ impl<'a> DataPageRef<'a> {
         Self(unsafe { SortedPageRef::new(ptr) })
     }
 
-    pub fn find(&self, target: &Key<'_>) -> Option<(Key<'a>, Value<'a>)> {
-        if let Some((k, v)) = self.0.seek(target) {
+    pub fn find(&self, target: Key<'_>) -> Option<(Key<'a>, Value<'a>)> {
+        if let Some((k, v)) = self.0.seek(&target) {
             if k.raw == target.raw {
                 return Some((k, v));
             }

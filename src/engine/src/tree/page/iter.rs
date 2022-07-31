@@ -127,7 +127,7 @@ where
     {
         let index = match self
             .data
-            .binary_search_by(|(key, _)| target.compare(key).reverse())
+            .binary_search_by(|(k, _)| target.compare(k).reverse())
         {
             Ok(i) => i,
             Err(i) => i,
