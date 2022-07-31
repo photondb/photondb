@@ -89,19 +89,19 @@ impl DerefMut for SplitPageBuf {
 
 /// An immutable reference to a split page.
 pub struct SplitPageRef<'a> {
-    base: PagePtr,
+    ptr: PagePtr,
     range: Range<&'a [u8]>,
     index: Index,
 }
 
 impl<'a> SplitPageRef<'a> {
-    pub fn new(base: PagePtr) -> Self {
-        assert_eq!(base.kind(), PageKind::Split);
+    pub fn new(ptr: PagePtr) -> Self {
+        assert_eq!(ptr.kind(), PageKind::Split);
         unsafe {
-            let mut content = BufReader::new(base.content());
+            let mut content = BufReader::new(ptr.content());
             let range = Range::decode_from(&mut content);
             let index = Index::decode_from(&mut content);
-            Self { base, range, index }
+            Self { ptr, range, index }
         }
     }
 
@@ -118,7 +118,7 @@ impl<'a> Deref for SplitPageRef<'a> {
     type Target = PagePtr;
 
     fn deref(&self) -> &Self::Target {
-        &self.base
+        &self.ptr
     }
 }
 

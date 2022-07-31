@@ -182,9 +182,13 @@ where
         }
     }
 
-    pub fn rank<T>(&self, target: &T) -> usize
+    /// Returns the rank of `target` in the page.
+    ///
+    /// If `target` is found, returns `Result::Ok` with its index. Otherwise, returns `Result::Err`
+    /// with the index where `target` could be inserted while maintaining the sorted order.
+    pub fn rank<T>(&self, target: &T) -> Result<usize, usize>
     where
-        T: Comparable<K> + ?Sized,
+        T: Comparable<K>,
     {
         let mut left = 0;
         let mut right = self.len();
@@ -196,36 +200,41 @@ where
                 K::decode_from(&mut buf)
             };
             match target.compare(&key) {
-                Ordering::Greater => left = mid + 1,
                 Ordering::Less => right = mid,
-                Ordering::Equal => return mid,
+                Ordering::Greater => left = mid + 1,
+                Ordering::Equal => return Ok(mid),
             }
         }
-        left
+        Err(left)
     }
 
     /// Returns the first entry that is no less than `target`.
     pub fn seek<T>(&self, target: &T) -> Option<(K, V)>
     where
-        T: Comparable<K> + ?Sized,
+        T: Comparable<K>,
     {
-        self.get(self.rank(target))
+        let index = match self.rank(target) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+        self.get(index)
     }
 
     /// Returns the first entry that is no greater than `target`.
     pub fn seek_back<T>(&self, target: &T) -> Option<(K, V)>
     where
-        T: Comparable<K> + ?Sized,
+        T: Comparable<K>,
     {
-        let index = self.rank(target);
-        for i in (0..=index).rev() {
-            if let Some((key, value)) = self.get(i) {
-                if target.ge(&key) {
-                    return Some((key, value));
+        match self.rank(target) {
+            Ok(i) => self.get(i),
+            Err(i) => {
+                if i > 0 {
+                    self.get(i - 1)
+                } else {
+                    None
                 }
             }
         }
-        None
     }
 
     /// Returns an iterator over the entries in the page.
@@ -317,7 +326,10 @@ where
     where
         T: Comparable<K>,
     {
-        self.next = self.page.rank(target);
+        self.next = match self.page.rank(target) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
         self.last = None;
     }
 }
