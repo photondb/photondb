@@ -184,7 +184,7 @@ where
 
     pub fn rank<T>(&self, target: &T) -> usize
     where
-        T: Comparable<K>,
+        T: Comparable<K> + ?Sized,
     {
         let mut left = 0;
         let mut right = self.len();
@@ -207,7 +207,7 @@ where
     /// Returns the first entry that is no less than `target`.
     pub fn seek<T>(&self, target: &T) -> Option<(K, V)>
     where
-        T: Comparable<K>,
+        T: Comparable<K> + ?Sized,
     {
         self.get(self.rank(target))
     }
@@ -215,7 +215,7 @@ where
     /// Returns the first entry that is no greater than `target`.
     pub fn seek_back<T>(&self, target: &T) -> Option<(K, V)>
     where
-        T: Comparable<K>,
+        T: Comparable<K> + ?Sized,
     {
         let index = self.rank(target);
         for i in (0..=index).rev() {

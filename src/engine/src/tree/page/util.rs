@@ -11,7 +11,7 @@ macro_rules! get_int {
         pub unsafe fn $name(&mut self) -> $t {
             let ptr = self.ptr.add(self.pos) as *const $t;
             self.pos += size_of::<$t>();
-            ptr.read().to_le()
+            <$t>::from_le(ptr.read())
         }
     };
 }

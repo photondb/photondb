@@ -30,6 +30,18 @@ pub trait Comparable<T> {
     }
 }
 
+impl Comparable<u64> for u64 {
+    fn compare(&self, other: &u64) -> Ordering {
+        self.cmp(other)
+    }
+}
+
+impl Comparable<&[u8]> for &[u8] {
+    fn compare(&self, other: &&[u8]) -> Ordering {
+        self.cmp(other)
+    }
+}
+
 pub trait ForwardIter {
     type Key: Ord;
     type Value;
@@ -53,6 +65,7 @@ pub trait RewindableIter: ForwardIter {
     fn rewind(&mut self);
 }
 
+/// Extends `ForwardIter` with a method to print entries.
 pub trait PrintableIter: ForwardIter {
     fn print(&mut self);
 }
@@ -253,7 +266,7 @@ where
     }
 }
 
-/// A iterator that merges entries from multiple iterators in ascending order.
+/// An iterator that merges entries from multiple iterators in ascending order.
 pub struct MergingIter<I>
 where
     I: ForwardIter,
