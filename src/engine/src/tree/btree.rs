@@ -31,9 +31,9 @@ impl BTree {
         tree.init()
     }
 
-    pub async fn get<'g>(
+    pub async fn get<'k, 'g>(
         &self,
-        key: &[u8],
+        key: &'k [u8],
         lsn: u64,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
@@ -46,7 +46,7 @@ impl BTree {
         }
     }
 
-    async fn try_get<'g>(&self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
+    async fn try_get<'k, 'g>(&self, key: Key<'k>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
         let node = self.try_find_node(key.raw, ghost).await?;
         self.lookup_value(&node, &key).await
     }
@@ -237,7 +237,11 @@ impl BTree {
         Ok(merger.build().into())
     }
 
-    async fn lookup_value<'g>(&self, node: &Node<'g>, key: &Key<'_>) -> Result<Option<&'g [u8]>> {
+    async fn lookup_value<'k, 'g>(
+        &self,
+        node: &Node<'g>,
+        key: &Key<'k>,
+    ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.walk_node(node, |page| {
             if page.kind() == PageKind::Delta {
@@ -269,7 +273,7 @@ impl BTree {
         Ok(value)
     }
 
-    async fn try_find_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
+    async fn try_find_node<'k, 'g>(&self, key: &'k [u8], ghost: &'g Ghost) -> Result<Node<'g>> {
         let mut cursor = ROOT_INDEX;
         let mut parent = None;
         loop {

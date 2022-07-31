@@ -16,9 +16,6 @@ pub use data_page::{DataPageBuf, DataPageBuilder, DataPageIter, DataPageRef};
 mod index_page;
 pub use index_page::{IndexPageBuf, IndexPageBuilder, IndexPageIter, IndexPageRef};
 
-mod delta_page;
-pub use delta_page::{DeltaPageIter, DeltaPageRef};
-
 mod sorted_page;
 pub use sorted_page::{SortedPageBuf, SortedPageBuilder, SortedPageIter, SortedPageRef};
 
@@ -49,4 +46,19 @@ impl<'a> PageRef<'a> {
             PageKind::Split => Self::Split(SplitPageRef::new(ptr)),
         }
     }
+}
+
+pub trait PageIter: SeekableIter + RewindableIter
+where
+    Self::Key: Encodable + Decodable + Ord,
+    Self::Value: Encodable + Decodable,
+{
+}
+
+impl<T> PageIter for T
+where
+    T: SeekableIter + RewindableIter,
+    T::Key: Encodable + Decodable + Ord,
+    T::Value: Encodable + Decodable,
+{
 }

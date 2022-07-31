@@ -74,21 +74,15 @@ impl<'a> IndexPageRef<'a> {
     pub fn find(&self, target: &[u8]) -> Option<(&'a [u8], Index)> {
         self.0.seek_back(&target)
     }
+
+    pub fn iter(&self) -> IndexPageIter<'a> {
+        IndexPageIter::new(self.clone())
+    }
 }
 
 impl<'a> From<PagePtr> for IndexPageRef<'a> {
     fn from(ptr: PagePtr) -> Self {
         Self::new(ptr)
-    }
-}
-
-impl<'a> DeltaPageRef for IndexPageRef<'a> {
-    type Key = &'a [u8];
-    type Value = Index;
-    type PageIter = IndexPageIter<'a>;
-
-    fn iter(&self) -> Self::PageIter {
-        IndexPageIter::new(self.clone())
     }
 }
 

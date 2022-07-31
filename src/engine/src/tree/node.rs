@@ -21,8 +21,7 @@ impl Node<'_> {
 pub trait NodeKind {
     type Key: Encodable + Decodable + Ord;
     type Value: Encodable + Decodable;
-    type PageRef: DeltaPageRef<Key = Self::Key, Value = Self::Value>;
-    type PageIter: DeltaPageIter<Key = Self::Key, Value = Self::Value>;
+    type PageIter: From<PagePtr> + PageIter<Key = Self::Key, Value = Self::Value>;
     type NodeIter: From<MergingIter<Self::PageIter>>;
 }
 
@@ -31,7 +30,6 @@ pub struct DataNode<'a>(PhantomData<&'a ()>);
 impl<'a> NodeKind for DataNode<'a> {
     type Key = Key<'a>;
     type Value = Value<'a>;
-    type PageRef = DataPageRef<'a>;
     type PageIter = DataPageIter<'a>;
     type NodeIter = MergingIter<Self::PageIter>;
 }
@@ -41,7 +39,6 @@ pub struct IndexNode<'a>(PhantomData<&'a ()>);
 impl<'a> NodeKind for IndexNode<'a> {
     type Key = &'a [u8];
     type Value = Index;
-    type PageRef = IndexPageRef<'a>;
     type PageIter = IndexPageIter<'a>;
     type NodeIter = MergingIter<Self::PageIter>;
 }

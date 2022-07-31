@@ -21,11 +21,7 @@ impl DataPageBuilder {
     }
 
     /// Builds a data page with entries from the given iterator.
-    pub fn build_from_iter<'a, A, I>(
-        mut self,
-        alloc: &A,
-        iter: &mut I,
-    ) -> Result<DataPageBuf, A::Error>
+    pub fn build_from_iter<'a, A, I>(self, alloc: &A, iter: &mut I) -> Result<DataPageBuf, A::Error>
     where
         A: PageAlloc,
         I: RewindableIter<Key = Key<'a>, Value = Value<'a>>,
@@ -79,21 +75,15 @@ impl<'a> DataPageRef<'a> {
         }
         None
     }
+
+    fn iter(&self) -> DataPageIter<'a> {
+        DataPageIter::new(self.clone())
+    }
 }
 
 impl<'a> From<PagePtr> for DataPageRef<'a> {
     fn from(ptr: PagePtr) -> Self {
         Self::new(ptr)
-    }
-}
-
-impl<'a> DeltaPageRef for DataPageRef<'a> {
-    type Key = Key<'a>;
-    type Value = Value<'a>;
-    type PageIter = DataPageIter<'a>;
-
-    fn iter(&self) -> Self::PageIter {
-        DataPageIter::new(self.clone())
     }
 }
 
