@@ -10,14 +10,18 @@ pub struct SplitPageBuilder {
 
 impl Default for SplitPageBuilder {
     fn default() -> Self {
-        Self {
-            base: PageBuilder::new(PageKind::Split),
-            size: 0,
-        }
+        Self::with_index(false)
     }
 }
 
 impl SplitPageBuilder {
+    pub fn with_index(is_index: bool) -> Self {
+        Self {
+            base: PageBuilder::new(PageKind::Split, is_index),
+            size: 0,
+        }
+    }
+
     fn add(&mut self, range: Range<&[u8]>, index: Index) {
         self.size += range.encode_size() + index.encode_size();
     }

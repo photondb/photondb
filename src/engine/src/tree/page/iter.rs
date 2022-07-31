@@ -6,6 +6,30 @@ use std::{
     slice,
 };
 
+pub trait Comparable<T> {
+    fn compare(&self, other: &T) -> Ordering;
+
+    fn eq(&self, other: &T) -> bool {
+        self.compare(other) == Ordering::Equal
+    }
+
+    fn lt(&self, other: &T) -> bool {
+        self.compare(other) == Ordering::Less
+    }
+
+    fn le(&self, other: &T) -> bool {
+        self.compare(other) != Ordering::Greater
+    }
+
+    fn gt(&self, other: &T) -> bool {
+        self.compare(other) == Ordering::Greater
+    }
+
+    fn ge(&self, other: &T) -> bool {
+        self.compare(other) != Ordering::Less
+    }
+}
+
 pub trait ForwardIter {
     type Key: Ord;
     type Value;
@@ -19,7 +43,9 @@ pub trait ForwardIter {
 
 pub trait SeekableIter: ForwardIter {
     /// Positions the next entry at or after the target.
-    fn seek(&mut self, target: &Self::Key);
+    fn seek<T>(&mut self, target: &T)
+    where
+        T: Comparable<Self::Key>;
 }
 
 pub trait RewindableIter: ForwardIter {
@@ -82,8 +108,14 @@ impl<'a, K, V> SeekableIter for SliceIter<'a, K, V>
 where
     K: Ord,
 {
-    fn seek(&mut self, target: &K) {
-        let index = match self.data.binary_search_by(|(key, _)| key.cmp(target)) {
+    fn seek<T>(&mut self, target: &T)
+    where
+        T: Comparable<K>,
+    {
+        let index = match self
+            .data
+            .binary_search_by(|(key, _)| target.compare(key).reverse())
+        {
             Ok(i) => i,
             Err(i) => i,
         };
@@ -296,7 +328,10 @@ impl<I> SeekableIter for MergingIter<I>
 where
     I: SeekableIter,
 {
-    fn seek(&mut self, target: &Self::Key) {
+    fn seek<T>(&mut self, target: &T)
+    where
+        T: Comparable<I::Key>,
+    {
         self.reset(|iter| iter.seek(target));
     }
 }

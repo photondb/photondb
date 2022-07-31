@@ -31,8 +31,8 @@ impl BTree {
         tree.init()
     }
 
-    pub async fn get<'a, 'g>(
-        &'a self,
+    pub async fn get<'g>(
+        &self,
         key: &[u8],
         lsn: u64,
         ghost: &'g Ghost,
@@ -46,9 +46,9 @@ impl BTree {
         }
     }
 
-    async fn try_get<'a, 'g>(&'a self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
-        let node = self.try_find_leaf(key.raw, ghost).await?;
-        self.lookup_value(key, &node).await
+    async fn try_get<'g>(&self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
+        let node = self.try_find_node(key.raw, ghost).await?;
+        self.lookup_value(&node, &key).await
     }
 
     pub async fn put<'g>(
@@ -71,7 +71,7 @@ impl BTree {
 
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
-        let mut page = DeltaPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
+        let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         loop {
             match self.try_update(key.raw, page.as_ptr(), ghost).await {
                 Ok(_) => return Ok(()),
@@ -87,7 +87,7 @@ impl BTree {
     }
 
     async fn try_update<'g>(&self, key: &[u8], mut delta: PagePtr, ghost: &'g Ghost) -> Result<()> {
-        let mut node = self.try_find_leaf(key, ghost).await?;
+        let mut node = self.try_find_node(key, ghost).await?;
         loop {
             delta.set_ver(node.view.ver());
             delta.set_len(node.view.len() + 1);
@@ -96,7 +96,7 @@ impl BTree {
                 Ok(_) => {
                     if delta.len() >= self.opts.data_delta_length {
                         node.view = delta.into();
-                        let _ = self.try_consolidate_node::<DataNode>(&node, ghost).await;
+                        let _ = self.try_consolidate_data_node(&node, ghost).await;
                     }
                     return Ok(());
                 }
@@ -120,12 +120,11 @@ impl BTree {
         // Initializes the tree as root -> leaf.
         let root_id = self.table.alloc(ghost.guard()).unwrap();
         let leaf_id = self.table.alloc(ghost.guard()).unwrap();
-        let mut leaf_page = DeltaPageBuilder::default().build(&self.cache)?;
+        let mut leaf_page = DataPageBuilder::default().build(&self.cache)?;
         self.table.set(leaf_id, leaf_page.as_ptr().into());
         let mut root_iter = OptionIter::from(([].as_slice(), Index::with_id(leaf_id)));
         let mut root_page =
-            DeltaPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
-        root_page.set_index(true);
+            IndexPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
         self.table.set(root_id, root_page.as_ptr().into());
         Ok(self)
     }
@@ -154,7 +153,21 @@ impl BTree {
         }
     }
 
-    fn dealloc_page_chain<'g>(&self, mut addr: PageAddr, ghost: &'g Ghost) {
+    fn replace_node<'g>(&self, node: &Node<'g>, page: PagePtr, ghost: &'g Ghost) -> Result<()> {
+        let addr = node.view.as_addr();
+        match self.table.cas(node.id, addr.into(), page.into()) {
+            Ok(_) => {
+                self.dealloc_chain(addr, ghost);
+                Ok(())
+            }
+            Err(_) => {
+                unsafe { self.cache.dealloc(page) };
+                Err(Error::Again)
+            }
+        }
+    }
+
+    fn dealloc_chain<'g>(&self, mut addr: PageAddr, ghost: &'g Ghost) {
         let cache = self.cache.clone();
         ghost.guard().defer(move || unsafe {
             while let PageAddr::Mem(ptr) = addr {
@@ -224,15 +237,14 @@ impl BTree {
         Ok(merger.build().into())
     }
 
-    async fn lookup_value<'g>(&self, key: Key<'_>, node: &Node<'g>) -> Result<Option<&'g [u8]>> {
+    async fn lookup_value<'g>(&self, node: &Node<'g>, key: &Key<'_>) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.walk_node(node, |page| {
-            if let PageRef::Data(page) = PageRef::cast(page) {
-                if let Some((k, v)) = page.seek(&key) {
-                    if k.raw == key.raw {
-                        value = v.into();
-                        return true;
-                    }
+            if page.kind() == PageKind::Delta {
+                let page = DataPageRef::from(page);
+                if let Some((_, v)) = page.find(key) {
+                    value = v.into();
+                    return true;
                 }
             }
             false
@@ -241,22 +253,23 @@ impl BTree {
         Ok(value)
     }
 
-    async fn lookup_index<'g>(&self, key: &[u8], node: &Node<'g>) -> Result<Option<Index>> {
-        let mut index = None;
+    async fn lookup_index<'g>(&self, node: &Node<'g>, key: &[u8]) -> Result<Option<Index>> {
+        let mut value = None;
         self.walk_node(node, |page| {
-            if let PageRef::Index(page) = PageRef::cast(page) {
-                if let Some((_, v)) = page.seek_back(&key) {
-                    index = v.into();
+            if page.kind() == PageKind::Delta {
+                let page = IndexPageRef::from(page);
+                if let Some((_, v)) = page.find(key) {
+                    value = Some(v);
                     return true;
                 }
             }
             false
         })
         .await?;
-        Ok(index)
+        Ok(value)
     }
 
-    async fn try_find_leaf<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
+    async fn try_find_node<'g>(&self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
         let mut cursor = ROOT_INDEX;
         let mut parent = None;
         loop {
@@ -268,20 +281,9 @@ impl BTree {
             if node.view.is_data() {
                 return Ok(node);
             }
-            cursor = self.lookup_index(key, &node).await?.unwrap();
+            cursor = self.lookup_index(&node, key).await?.unwrap();
             parent = Some(node);
         }
-    }
-
-    fn try_split_node<'g, K, V>(&self, id: u64, page: DeltaPageRef<'g, K, V>, ghost: &'g Ghost)
-    where
-        K: Encodable + Decodable + Ord,
-        V: Encodable + Decodable,
-    {
-        if page.size() < self.opts.node_size(page.is_index()) {
-            return;
-        }
-        let pivot = page.get(page.len() / 2);
     }
 
     fn try_reconcile_node<'g>(
@@ -293,29 +295,21 @@ impl BTree {
         todo!()
     }
 
-    async fn try_consolidate_node<'g, N>(
+    async fn try_consolidate_data_node<'g>(&self, node: &Node<'g>, ghost: &'g Ghost) -> Result<()> {
+        let mut iter = self.iter_node::<DataNode>(node).await?;
+        let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
+        page.set_ver(node.view.ver());
+        self.replace_node(node, page.as_ptr(), ghost)
+    }
+
+    async fn try_consolidate_index_node<'g>(
         &self,
         node: &Node<'g>,
         ghost: &'g Ghost,
-    ) -> Result<N::PageRef>
-    where
-        N: NodeKind,
-    {
-        let mut iter = self.iter_node::<N>(node).await?;
-        let mut page = DeltaPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
+    ) -> Result<()> {
+        let mut iter = self.iter_node::<IndexNode>(node).await?;
+        let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
-        page.set_index(node.view.is_index());
-
-        let new_ptr = page.as_ptr();
-        let old_addr = node.view.as_addr();
-        self.table
-            .cas(node.id, old_addr.into(), new_ptr.into())
-            .map_err(|_| {
-                unsafe { self.cache.dealloc(new_ptr) };
-                Error::Again
-            })?;
-
-        self.dealloc_page_chain(old_addr, ghost);
-        Ok(new_ptr.into())
+        self.replace_node(node, page.as_ptr(), ghost)
     }
 }

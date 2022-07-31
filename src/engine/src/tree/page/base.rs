@@ -19,7 +19,7 @@ impl PagePtr {
         NonNull::new(ptr).map(Self)
     }
 
-    /// Returns the underlying raw pointer.
+    /// Returns the raw pointer.
     pub const fn as_raw(self) -> *mut u8 {
         self.0.as_ptr()
     }
@@ -132,12 +132,12 @@ impl PagePtr {
         unsafe { self.as_raw().add(PAGE_HEADER_SIZE) }
     }
 
-    /// Returns the page size in bytes.
+    /// Returns the page size.
     pub fn size(&self) -> usize {
         PAGE_HEADER_SIZE + self.content_size() as usize
     }
 
-    /// Returns the page content size in bytes.
+    /// Returns the page content size.
     pub fn content_size(&self) -> u32 {
         unsafe { self.content_size_ptr().read().to_le() }
     }
@@ -265,11 +265,12 @@ pub unsafe trait PageAlloc {
 /// A builder to create base pages.
 pub struct PageBuilder {
     kind: PageKind,
+    is_index: bool,
 }
 
 impl PageBuilder {
-    pub fn new(kind: PageKind) -> Self {
-        Self { kind }
+    pub fn new(kind: PageKind, is_index: bool) -> Self {
+        Self { kind, is_index }
     }
 
     pub fn build<A>(&self, alloc: &A, content_size: usize) -> Result<PagePtr, A::Error>
@@ -281,6 +282,7 @@ impl PageBuilder {
         ptr.map(|mut ptr| {
             ptr.set_default();
             ptr.set_kind(self.kind);
+            ptr.set_index(self.is_index);
             ptr.set_content_size(content_size as u32);
             ptr
         })
