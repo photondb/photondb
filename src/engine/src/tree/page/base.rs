@@ -1,4 +1,4 @@
-use std::{alloc::Layout, ptr::NonNull};
+use std::{alloc::Layout, marker::PhantomData, ops::Deref, ptr::NonNull};
 
 // Page header: ver (6B) | rank (1B) | tags (1B) | next (8B) | content_size (4B) |
 const PAGE_ALIGNMENT: usize = 8;
@@ -152,6 +152,36 @@ impl PagePtr {
 impl From<PagePtr> for u64 {
     fn from(ptr: PagePtr) -> Self {
         ptr.as_raw() as u64
+    }
+}
+
+/// An immutable reference to a page.
+#[derive(Copy, Clone)]
+pub struct PageRef<'a> {
+    ptr: PagePtr,
+    _mark: PhantomData<&'a ()>,
+}
+
+impl Deref for PageRef<'_> {
+    type Target = PagePtr;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ptr
+    }
+}
+
+impl From<PagePtr> for PageRef<'_> {
+    fn from(ptr: PagePtr) -> Self {
+        PageRef {
+            ptr,
+            _mark: PhantomData,
+        }
+    }
+}
+
+impl From<PageRef<'_>> for u64 {
+    fn from(page: PageRef<'_>) -> Self {
+        page.ptr.into()
     }
 }
 

@@ -104,7 +104,7 @@ impl SortedPageBuf {
 
 /// An immutable reference to a sorted page.
 pub struct SortedPageRef<'a, K, V> {
-    ptr: PagePtr,
+    base: PageRef<'a>,
     offsets: &'a [u32],
     _mark: PhantomData<(K, V)>,
 }
@@ -114,16 +114,16 @@ where
     K: Decodable + Ord,
     V: Decodable,
 {
-    pub unsafe fn new(ptr: PagePtr) -> Self {
-        let offsets_ptr = ptr.content() as *const u32;
-        let offsets_len = if ptr.content_size() == 0 {
+    pub unsafe fn new(base: PageRef<'a>) -> Self {
+        let offsets_ptr = base.content() as *const u32;
+        let offsets_len = if base.content_size() == 0 {
             0
         } else {
             offsets_ptr.read() as usize / size_of::<u32>()
         };
         let offsets = slice::from_raw_parts(offsets_ptr, offsets_len);
         Self {
-            ptr,
+            base,
             offsets,
             _mark: PhantomData,
         }
@@ -211,14 +211,14 @@ where
 
     fn content_at(&self, offset: u32) -> *const u8 {
         let offset = offset.to_le() as usize;
-        unsafe { self.ptr.content().add(offset) }
+        unsafe { self.base.content().add(offset) }
     }
 }
 
 impl<'a, K, V> Clone for SortedPageRef<'a, K, V> {
     fn clone(&self) -> Self {
         Self {
-            ptr: self.ptr,
+            base: self.base,
             offsets: self.offsets,
             _mark: PhantomData,
         }
@@ -226,10 +226,10 @@ impl<'a, K, V> Clone for SortedPageRef<'a, K, V> {
 }
 
 impl<'a, K, V> Deref for SortedPageRef<'a, K, V> {
-    type Target = PagePtr;
+    type Target = PageRef<'a>;
 
     fn deref(&self) -> &Self::Target {
-        &self.ptr
+        &self.base
     }
 }
 
@@ -254,16 +254,6 @@ where
 
     pub fn skip(&mut self, n: usize) {
         self.next = (self.next + n).max(self.page.len());
-    }
-}
-
-impl<'a, K, V> From<SortedPageRef<'a, K, V>> for SortedPageIter<'a, K, V>
-where
-    K: Decodable + Ord,
-    V: Decodable,
-{
-    fn from(page: SortedPageRef<'a, K, V>) -> Self {
-        Self::new(page)
     }
 }
 
@@ -330,7 +320,7 @@ mod test {
         assert_eq!(page.kind(), PageKind::Data);
         assert_eq!(page.is_leaf(), true);
 
-        let page = unsafe { SortedPageRef::new(page) };
+        let page = unsafe { SortedPageRef::new(page.into()) };
         assert_eq!(page.seek(&0), Some((1, 0)));
         assert_eq!(page.seek_back(&0), None);
         assert_eq!(page.seek(&3), Some((4, 0)));

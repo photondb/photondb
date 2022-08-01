@@ -1,5 +1,5 @@
 mod base;
-pub use base::{PageAlloc, PageBuilder, PageKind, PagePtr};
+pub use base::{PageAlloc, PageBuilder, PageKind, PagePtr, PageRef};
 
 mod iter;
 pub use iter::{
@@ -24,24 +24,6 @@ pub use split_page::{SplitPageBuilder, SplitPageRef};
 
 mod util;
 use util::{BufReader, BufWriter};
-
-/// An aggregated type with all kinds of page references.
-pub enum PageRef<'a> {
-    Data(DataPageRef<'a>),
-    Index(IndexPageRef<'a>),
-    Split(SplitPageRef<'a>),
-}
-
-impl<'a> PageRef<'a> {
-    /// Creates a `PageRef` from a `PagePtr`.
-    pub fn cast(ptr: PagePtr) -> Self {
-        match ptr.kind() {
-            PageKind::Data => Self::Data(DataPageRef::new(ptr)),
-            PageKind::Index => Self::Index(IndexPageRef::new(ptr)),
-            PageKind::Split => Self::Split(SplitPageRef::new(ptr)),
-        }
-    }
-}
 
 pub trait PageIter: SeekableIter + RewindableIter
 where

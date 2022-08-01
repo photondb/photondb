@@ -37,12 +37,13 @@ impl From<PageAddr> for u64 {
     }
 }
 
-pub enum PageView {
-    Mem(PagePtr),
+#[derive(Copy, Clone)]
+pub enum PageView<'a> {
+    Mem(PageRef<'a>),
     Disk(PageInfo, u64),
 }
 
-impl PageView {
+impl PageView<'_> {
     pub fn ver(&self) -> u64 {
         match self {
             Self::Mem(page) => page.ver(),
@@ -72,9 +73,12 @@ impl PageView {
     }
 }
 
-impl From<PagePtr> for PageView {
-    fn from(page: PagePtr) -> Self {
-        PageView::Mem(page)
+impl<'a, T> From<T> for PageView<'a>
+where
+    T: Into<PageRef<'a>>,
+{
+    fn from(page: T) -> Self {
+        PageView::Mem(page.into())
     }
 }
 

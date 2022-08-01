@@ -29,9 +29,9 @@ impl SplitPageBuilder {
 pub struct SplitPageRef<'a>(SortedPageRef<'a, &'a [u8], Index>);
 
 impl<'a> SplitPageRef<'a> {
-    pub fn new(ptr: PagePtr) -> Self {
-        assert_eq!(ptr.kind(), PageKind::Split);
-        Self(unsafe { SortedPageRef::new(ptr) })
+    pub fn new(base: PageRef<'a>) -> Self {
+        assert_eq!(base.kind(), PageKind::Split);
+        Self(unsafe { SortedPageRef::new(base) })
     }
 
     pub fn get(&self) -> (&'a [u8], Index) {
@@ -47,8 +47,11 @@ impl<'a> Deref for SplitPageRef<'a> {
     }
 }
 
-impl<'a> From<PagePtr> for SplitPageRef<'a> {
-    fn from(ptr: PagePtr) -> Self {
-        Self::new(ptr)
+impl<'a, T> From<T> for SplitPageRef<'a>
+where
+    T: Into<PageRef<'a>>,
+{
+    fn from(base: T) -> Self {
+        Self::new(base.into())
     }
 }

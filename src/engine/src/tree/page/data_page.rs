@@ -35,9 +35,10 @@ impl DataPageBuilder {
 pub struct DataPageRef<'a>(SortedPageRef<'a, Key<'a>, Value<'a>>);
 
 impl<'a> DataPageRef<'a> {
-    pub fn new(ptr: PagePtr) -> Self {
-        assert_eq!(ptr.kind(), PageKind::Data);
-        Self(unsafe { SortedPageRef::new(ptr) })
+    pub fn new(base: PageRef<'a>) -> Self {
+        assert_eq!(base.kind(), PageKind::Data);
+        assert_eq!(base.is_leaf(), true);
+        Self(unsafe { SortedPageRef::new(base) })
     }
 
     pub fn find(&self, target: Key<'_>) -> Option<(Key<'a>, Value<'a>)> {
@@ -70,16 +71,19 @@ impl<'a> DataPageRef<'a> {
 }
 
 impl<'a> Deref for DataPageRef<'a> {
-    type Target = PagePtr;
+    type Target = PageRef<'a>;
 
     fn deref(&self) -> &Self::Target {
         self.0.deref()
     }
 }
 
-impl<'a> From<PagePtr> for DataPageRef<'a> {
-    fn from(ptr: PagePtr) -> Self {
-        Self::new(ptr)
+impl<'a, T> From<T> for DataPageRef<'a>
+where
+    T: Into<PageRef<'a>>,
+{
+    fn from(base: T) -> Self {
+        Self::new(base.into())
     }
 }
 
@@ -96,15 +100,12 @@ impl<'a> DataPageIter<'a> {
     }
 }
 
-impl<'a> From<PagePtr> for DataPageIter<'a> {
-    fn from(ptr: PagePtr) -> Self {
-        Self::new(ptr.into())
-    }
-}
-
-impl<'a> From<DataPageRef<'a>> for DataPageIter<'a> {
-    fn from(page: DataPageRef<'a>) -> Self {
-        Self::new(page)
+impl<'a, T> From<T> for DataPageIter<'a>
+where
+    T: Into<DataPageRef<'a>>,
+{
+    fn from(page: T) -> Self {
+        Self::new(page.into())
     }
 }
 

@@ -27,10 +27,10 @@ impl IndexPageBuilder {
 pub struct IndexPageRef<'a>(SortedPageRef<'a, &'a [u8], Index>);
 
 impl<'a> IndexPageRef<'a> {
-    pub fn new(ptr: PagePtr) -> Self {
-        assert_eq!(ptr.kind(), PageKind::Index);
-        assert_eq!(ptr.is_leaf(), false);
-        Self(unsafe { SortedPageRef::new(ptr) })
+    pub fn new(base: PageRef<'a>) -> Self {
+        assert_eq!(base.kind(), PageKind::Index);
+        assert_eq!(base.is_leaf(), false);
+        Self(unsafe { SortedPageRef::new(base) })
     }
 
     pub fn find(&self, target: &[u8]) -> Option<(&'a [u8], Index)> {
@@ -43,16 +43,19 @@ impl<'a> IndexPageRef<'a> {
 }
 
 impl<'a> Deref for IndexPageRef<'a> {
-    type Target = PagePtr;
+    type Target = PageRef<'a>;
 
     fn deref(&self) -> &Self::Target {
         self.0.deref()
     }
 }
 
-impl<'a> From<PagePtr> for IndexPageRef<'a> {
-    fn from(ptr: PagePtr) -> Self {
-        Self::new(ptr)
+impl<'a, T> From<T> for IndexPageRef<'a>
+where
+    T: Into<PageRef<'a>>,
+{
+    fn from(base: T) -> Self {
+        Self::new(base.into())
     }
 }
 
@@ -65,15 +68,12 @@ impl<'a> IndexPageIter<'a> {
     }
 }
 
-impl<'a> From<PagePtr> for IndexPageIter<'a> {
-    fn from(ptr: PagePtr) -> Self {
-        Self::new(ptr.into())
-    }
-}
-
-impl<'a> From<IndexPageRef<'a>> for IndexPageIter<'a> {
-    fn from(page: IndexPageRef<'a>) -> Self {
-        Self::new(page)
+impl<'a, T> From<T> for IndexPageIter<'a>
+where
+    T: Into<IndexPageRef<'a>>,
+{
+    fn from(page: T) -> Self {
+        Self::new(page.into())
     }
 }
 
