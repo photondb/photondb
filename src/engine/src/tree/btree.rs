@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 use super::{
     page::*,
     pagecache::{PageAddr, PageCache, PageView},
@@ -96,16 +94,16 @@ impl BTree {
         }
     }
 
-    async fn try_update<'g>(&self, key: &[u8], mut delta: PagePtr, ghost: &'g Ghost) -> Result<()> {
+    async fn try_update<'g>(&self, key: &[u8], mut page: PagePtr, ghost: &'g Ghost) -> Result<()> {
         let mut node = self.find_leaf_node(key, ghost).await?;
         loop {
-            delta.set_ver(node.view.ver());
-            delta.set_rank(node.view.rank() + 1);
-            delta.set_next(node.view.as_addr().into());
-            match self.table.cas(node.id, delta.next(), delta.into()) {
+            page.set_ver(node.view.ver());
+            page.set_rank(node.view.rank() + 1);
+            page.set_next(node.view.as_addr().into());
+            match self.table.cas(node.id, page.next(), page.into()) {
                 Ok(_) => {
-                    if delta.rank() as usize >= self.opts.data_delta_length {
-                        node.view = delta.into();
+                    if page.rank() as usize >= self.opts.data_delta_length {
+                        node.view = PageView::Mem(page.into());
                         let _ = self.consolidate_data_node(node, ghost).await;
                     }
                     return Ok(());
@@ -141,8 +139,8 @@ impl BTree {
     fn page_view<'g>(&self, addr: PageAddr, _: &'g Ghost) -> Option<PageView<'g>> {
         match addr {
             PageAddr::Mem(addr) => {
-                let ptr = unsafe { PagePtr::new(addr as *mut u8) };
-                ptr.map(PageView::from)
+                let page = unsafe { PageRef::new(addr as *mut u8) };
+                page.map(|page| PageView::Mem(page))
             }
             PageAddr::Disk(addr) => self
                 .store
@@ -153,10 +151,7 @@ impl BTree {
 
     async fn load_page_with_addr<'g>(&self, _: u64, addr: PageAddr) -> Result<Option<PageRef<'g>>> {
         match addr {
-            PageAddr::Mem(addr) => {
-                let ptr = unsafe { PagePtr::new(addr as *mut u8) };
-                Ok(ptr.map(PageRef::from))
-            }
+            PageAddr::Mem(addr) => Ok(unsafe { PageRef::new(addr as *mut u8) }),
             PageAddr::Disk(_) => {
                 // self.swapin_page(id, addr).await,
                 todo!()
@@ -179,10 +174,10 @@ impl BTree {
         self.page_view(addr, ghost).map(|view| Node { id, view })
     }
 
-    fn update_node<'g>(&self, id: u64, old: impl Into<u64>, new: PagePtr) -> Result<()> {
+    fn update_node<'g>(&self, id: u64, old: impl Into<u64>, new: PagePtr) -> Result<PageRef<'g>> {
         self.table
             .cas(id, old.into(), new.into())
-            .map(|_| ())
+            .map(|_| new.into())
             .map_err(|_| unsafe {
                 self.cache.dealloc(new);
                 Error::Again
@@ -195,13 +190,15 @@ impl BTree {
         old: PageAddr,
         new: PagePtr,
         ghost: &'g Ghost,
-    ) -> Result<()> {
+    ) -> Result<PageRef<'g>> {
         self.update_node(id, old, new)?;
+
+        // Deallocates the old page chain.
         let cache = self.cache.clone();
         ghost.guard().defer(move || unsafe {
             let mut next = old;
-            while let PageAddr::Mem(ptr) = next {
-                if let Some(page) = PagePtr::new(ptr as *mut u8) {
+            while let PageAddr::Mem(addr) = next {
+                if let Some(page) = PagePtr::new(addr as *mut u8) {
                     next = page.next().into();
                     cache.dealloc(page);
                 } else {
@@ -209,7 +206,8 @@ impl BTree {
                 }
             }
         });
-        Ok(())
+
+        Ok(new.into())
     }
 
     fn install_node<'g>(&self, new: impl Into<u64>, ghost: &'g Ghost) -> Result<u64> {
@@ -337,7 +335,7 @@ impl BTree {
         &self,
         node: Node<'g>,
         split: SplitPageRef<'g>,
-    ) -> Result<()> {
+    ) -> Result<PageRef<'g>> {
         let split_index = split.get();
         let mut index_iter = self.iter_index_node(node).await?;
         // TODO
@@ -363,7 +361,7 @@ impl BTree {
         node: Node<'g>,
         split: SplitPageRef<'g>,
         ghost: &'g Ghost,
-    ) -> Result<()> {
+    ) -> Result<PageRef<'g>> {
         assert_eq!(node.id, ROOT_INDEX.id);
         let root_addr = node.view.as_addr();
 
@@ -386,13 +384,13 @@ impl BTree {
     fn install_split<'g>(
         &self,
         left_id: u64,
-        left_page: PagePtr,
+        left_page: PageRef<'g>,
         split_key: &[u8],
-        right_page: PagePtr,
+        right_page: PageRef<'_>,
         ghost: &'g Ghost,
-    ) -> Result<()> {
+    ) -> Result<PageRef<'g>> {
         let right_id = self.install_node(right_page, ghost)?;
-        let split = || -> Result<()> {
+        let split = || {
             let mut split_page = SplitPageBuilder::new(left_page.is_leaf()).build_with_index(
                 &self.cache,
                 split_key,
@@ -409,11 +407,11 @@ impl BTree {
         })
     }
 
-    fn split_data_node<'g>(&self, id: u64, page: PagePtr, ghost: &'g Ghost) -> Result<()> {
+    fn split_data_node<'g>(&self, id: u64, page: PageRef<'g>, ghost: &'g Ghost) -> Result<()> {
         let data_page = DataPageRef::from(page);
         if let Some((sep, mut iter)) = data_page.split() {
             let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-            self.install_split(id, page, sep.raw, right_page, ghost)
+            self.install_split(id, page, sep.raw, right_page.into(), ghost)
                 .map_err(|err| unsafe {
                     self.cache.dealloc(right_page);
                     err
@@ -426,7 +424,7 @@ impl BTree {
         let mut iter = self.iter_data_node(node).await?;
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
-        self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
+        let page = self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
         // let _ = self.split_data_node(node.id, page, ghost);
         Ok(())
     }
@@ -435,7 +433,7 @@ impl BTree {
         let mut iter = self.iter_index_node(node).await?;
         let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
-        self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
+        let page = self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
         Ok(())
     }
 }

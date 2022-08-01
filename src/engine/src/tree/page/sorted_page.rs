@@ -70,19 +70,19 @@ impl SortedPageBuilder {
 }
 
 struct SortedPageBuf {
-    ptr: PagePtr,
+    base: PagePtr,
     offsets: *mut u32,
     content: BufWriter,
     current: usize,
 }
 
 impl SortedPageBuf {
-    unsafe fn new(mut ptr: PagePtr, builder: SortedPageBuilder) -> Self {
-        let offsets = ptr.content_mut() as *mut u32;
-        let mut content = BufWriter::new(ptr.content_mut());
+    unsafe fn new(mut base: PagePtr, builder: SortedPageBuilder) -> Self {
+        let offsets = base.content_mut() as *mut u32;
+        let mut content = BufWriter::new(base.content_mut());
         content.skip(builder.offsets_size);
         Self {
-            ptr,
+            base,
             offsets,
             content,
             current: 0,

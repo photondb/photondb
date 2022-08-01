@@ -40,7 +40,7 @@ impl<'a> SplitPageRef<'a> {
 }
 
 impl<'a> Deref for SplitPageRef<'a> {
-    type Target = PagePtr;
+    type Target = PageRef<'a>;
 
     fn deref(&self) -> &Self::Target {
         self.0.deref()

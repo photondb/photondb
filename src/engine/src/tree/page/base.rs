@@ -6,8 +6,8 @@ const PAGE_HEADER_SIZE: usize = 20;
 const PAGE_VERSION_MAX: u64 = (1 << 48) - 1;
 const PAGE_VERSION_SIZE: usize = 6;
 
-/// A non-null pointer to a page.
-#[derive(Copy, Clone, Debug)]
+/// A non-null page pointer.
+#[derive(Copy, Clone)]
 pub struct PagePtr(NonNull<u8>);
 
 impl PagePtr {
@@ -155,11 +155,22 @@ impl From<PagePtr> for u64 {
     }
 }
 
-/// An immutable reference to a page.
+/// An immutable page reference.
 #[derive(Copy, Clone)]
 pub struct PageRef<'a> {
     ptr: PagePtr,
     _mark: PhantomData<&'a ()>,
+}
+
+impl PageRef<'_> {
+    /// Creates a new `PageRef` if `ptr` is non-null.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because it does not check if `ptr` points to a valid page.
+    pub unsafe fn new(ptr: *mut u8) -> Option<Self> {
+        PagePtr::new(ptr).map(Self::from)
+    }
 }
 
 impl Deref for PageRef<'_> {
@@ -172,7 +183,7 @@ impl Deref for PageRef<'_> {
 
 impl From<PagePtr> for PageRef<'_> {
     fn from(ptr: PagePtr) -> Self {
-        PageRef {
+        Self {
             ptr,
             _mark: PhantomData,
         }
@@ -329,7 +340,7 @@ pub mod test {
     }
 
     #[test]
-    fn page_ptr() {
+    fn page() {
         let mut buf = [1u8; PAGE_HEADER_SIZE];
         let mut ptr = unsafe { PagePtr::new(buf.as_mut_ptr()).unwrap() };
         ptr.set_default();
