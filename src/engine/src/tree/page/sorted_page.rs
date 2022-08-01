@@ -108,7 +108,7 @@ impl SortedPageBuf {
         value.encode_to(&mut self.content);
     }
 
-    pub fn as_ptr(&mut self) -> PagePtr {
+    pub fn as_ptr(&self) -> PagePtr {
         self.ptr
     }
 
@@ -182,11 +182,11 @@ where
         }
     }
 
-    /// Returns the rank of `target` in the page.
+    /// Searches `target` in the page.
     ///
     /// If `target` is found, returns `Result::Ok` with its index. Otherwise, returns `Result::Err`
     /// with the index where `target` could be inserted while maintaining the sorted order.
-    pub fn rank<T>(&self, target: &T) -> Result<usize, usize>
+    pub fn search<T>(&self, target: &T) -> Result<usize, usize>
     where
         T: Comparable<K>,
     {
@@ -213,11 +213,11 @@ where
     where
         T: Comparable<K>,
     {
-        let index = match self.rank(target) {
+        let rank = match self.search(target) {
             Ok(i) => i,
             Err(i) => i,
         };
-        self.get(index)
+        self.get(rank)
     }
 
     /// Returns the first entry that is no greater than `target`.
@@ -225,7 +225,7 @@ where
     where
         T: Comparable<K>,
     {
-        match self.rank(target) {
+        match self.search(target) {
             Ok(i) => self.get(i),
             Err(i) => {
                 if i > 0 {
@@ -240,6 +240,10 @@ where
     /// Returns an iterator over the entries in the page.
     pub fn iter(&self) -> SortedPageIter<'a, K, V> {
         SortedPageIter::new(self.clone())
+    }
+
+    pub fn as_ptr(&self) -> PagePtr {
+        self.ptr
     }
 
     fn content_at(&self, offset: u32) -> *const u8 {
@@ -274,7 +278,7 @@ pub struct SortedPageIter<'a, K, V> {
 
 impl<'a, K, V> SortedPageIter<'a, K, V>
 where
-    K: Decodable,
+    K: Decodable + Ord,
     V: Decodable,
 {
     pub fn new(page: SortedPageRef<'a, K, V>) -> Self {
@@ -283,6 +287,10 @@ where
             next: 0,
             last: None,
         }
+    }
+
+    pub fn skip(&mut self, n: usize) {
+        self.next = (self.next + n).max(self.page.len());
     }
 }
 
@@ -326,7 +334,7 @@ where
     where
         T: Comparable<K>,
     {
-        self.next = match self.page.rank(target) {
+        self.next = match self.page.search(target) {
             Ok(i) => i,
             Err(i) => i,
         };

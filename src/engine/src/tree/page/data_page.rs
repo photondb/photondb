@@ -33,7 +33,7 @@ impl DataPageBuilder {
 pub struct DataPageBuf(SortedPageBuf);
 
 impl DataPageBuf {
-    pub fn as_ptr(&mut self) -> PagePtr {
+    pub fn as_ptr(&self) -> PagePtr {
         self.0.as_ptr()
     }
 
@@ -76,8 +76,35 @@ impl<'a> DataPageRef<'a> {
         None
     }
 
-    fn iter(&self) -> DataPageIter<'a> {
+    pub fn iter(&self) -> DataPageIter<'a> {
         DataPageIter::new(self.clone())
+    }
+
+    pub fn split(&self) -> Option<(Key<'a>, DataPageSplitIter<'a>)> {
+        if let Some((k, _)) = self.0.get(self.0.len() / 2) {
+            let sep = Key::new(k.raw, 0);
+            let rank = match self.0.search(&sep) {
+                Ok(i) => i,
+                Err(i) => i,
+            };
+            if rank > 0 {
+                let iter = DataPageSplitIter::new(self.iter(), rank);
+                return Some((sep, iter));
+            }
+        }
+        None
+    }
+
+    pub fn as_ptr(&self) -> PagePtr {
+        self.0.as_ptr()
+    }
+}
+
+impl<'a> Deref for DataPageRef<'a> {
+    type Target = PagePtr;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
     }
 }
 
@@ -93,6 +120,10 @@ pub struct DataPageIter<'a>(SortedPageIter<'a, Key<'a>, Value<'a>>);
 impl<'a> DataPageIter<'a> {
     pub fn new(page: DataPageRef<'a>) -> Self {
         Self(SortedPageIter::new(page.0))
+    }
+
+    pub fn skip(&mut self, n: usize) {
+        self.0.skip(n)
     }
 }
 
@@ -133,5 +164,36 @@ impl<'a> SeekableIter for DataPageIter<'a> {
 impl<'a> RewindableIter for DataPageIter<'a> {
     fn rewind(&mut self) {
         self.0.rewind();
+    }
+}
+
+pub struct DataPageSplitIter<'a> {
+    base: DataPageIter<'a>,
+    skip: usize,
+}
+
+impl<'a> DataPageSplitIter<'a> {
+    fn new(base: DataPageIter<'a>, skip: usize) -> Self {
+        Self { base, skip }
+    }
+}
+
+impl<'a> ForwardIter for DataPageSplitIter<'a> {
+    type Key = Key<'a>;
+    type Value = Value<'a>;
+
+    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
+        self.base.last()
+    }
+
+    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
+        self.base.next()
+    }
+}
+
+impl<'a> RewindableIter for DataPageSplitIter<'a> {
+    fn rewind(&mut self) {
+        self.base.rewind();
+        self.base.skip(self.skip);
     }
 }

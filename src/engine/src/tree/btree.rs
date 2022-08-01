@@ -295,11 +295,64 @@ impl BTree {
         todo!()
     }
 
+    fn try_install_split<'g>(
+        &self,
+        left_id: u64,
+        left_ptr: PagePtr,
+        split_key: &[u8],
+        right_ptr: PagePtr,
+        ghost: &'g Ghost,
+    ) -> Result<()> {
+        let right_id = self.table.alloc(ghost.guard()).ok_or(Error::Alloc)?;
+        self.table.set(right_id, right_ptr.into());
+        let split = || -> Result<()> {
+            let mut split_iter = OptionIter::from((split_key, Index::with_id(right_id)));
+            let mut split_page = IndexPageBuilder::new(PageKind::Split, left_ptr.is_data())
+                .build_from_iter(&self.cache, &mut split_iter)
+                .map_err(|err| {
+                    unsafe { self.cache.dealloc(right_ptr) };
+                    err
+                })?;
+            split_page.set_ver(left_ptr.ver() + 1);
+            split_page.set_rank(left_ptr.rank());
+            split_page.set_next(left_ptr.into());
+            self.table
+                .cas(left_id, left_ptr.into(), split_page.as_ptr().into())
+                .map(|_| ())
+                .map_err(|_| {
+                    unsafe {
+                        self.cache.dealloc(right_ptr);
+                        self.cache.dealloc(split_page.as_ptr());
+                    }
+                    Error::Again
+                })
+        };
+        split().map_err(|err| {
+            self.table.dealloc(right_id, ghost.guard());
+            err
+        })
+    }
+
+    fn try_split_data_node<'g>(
+        &self,
+        id: u64,
+        page: DataPageRef<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<()> {
+        if let Some((sep, mut iter)) = page.split() {
+            let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
+            self.try_install_split(id, page.as_ptr(), sep.raw, right_page.as_ptr(), ghost)?;
+        }
+        Ok(())
+    }
+
     async fn try_consolidate_data_node<'g>(&self, node: &Node<'g>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = self.iter_node::<DataNode>(node).await?;
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
-        self.try_replace_node(node, page.as_ptr(), ghost)
+        self.try_replace_node(node, page.as_ptr(), ghost)?;
+        // let _ = self.try_split_data_node(node.id, page.as_ref(), ghost);
+        Ok(())
     }
 
     async fn try_consolidate_index_node<'g>(
@@ -310,6 +363,7 @@ impl BTree {
         let mut iter = self.iter_node::<IndexNode>(node).await?;
         let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
-        self.try_replace_node(node, page.as_ptr(), ghost)
+        self.try_replace_node(node, page.as_ptr(), ghost)?;
+        Ok(())
     }
 }

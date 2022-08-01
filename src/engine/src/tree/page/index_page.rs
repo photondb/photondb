@@ -7,11 +7,15 @@ pub struct IndexPageBuilder(SortedPageBuilder);
 
 impl Default for IndexPageBuilder {
     fn default() -> Self {
-        Self(SortedPageBuilder::new(PageKind::Delta, false))
+        Self::new(PageKind::Delta, false)
     }
 }
 
 impl IndexPageBuilder {
+    pub fn new(kind: PageKind, is_data: bool) -> Self {
+        Self(SortedPageBuilder::new(kind, is_data))
+    }
+
     /// Builds an empty data page.
     pub fn build<A>(self, alloc: &A) -> Result<IndexPageBuf, A::Error>
     where
@@ -37,7 +41,7 @@ impl IndexPageBuilder {
 pub struct IndexPageBuf(SortedPageBuf);
 
 impl IndexPageBuf {
-    pub fn as_ptr(&mut self) -> PagePtr {
+    pub fn as_ptr(&self) -> PagePtr {
         self.0.as_ptr()
     }
 
@@ -77,6 +81,18 @@ impl<'a> IndexPageRef<'a> {
 
     pub fn iter(&self) -> IndexPageIter<'a> {
         IndexPageIter::new(self.clone())
+    }
+
+    pub fn as_ptr(&self) -> PagePtr {
+        self.0.as_ptr()
+    }
+}
+
+impl<'a> Deref for IndexPageRef<'a> {
+    type Target = PagePtr;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
     }
 }
 
