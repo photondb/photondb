@@ -71,7 +71,7 @@ impl BTree {
 
     async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
-        let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
+        let page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         loop {
             match self.try_update(key.raw, page.as_ptr(), ghost).await {
                 Ok(_) => return Ok(()),
@@ -223,7 +223,11 @@ impl BTree {
         Ok(merger.build().into())
     }
 
-    async fn lookup_value<'g>(&self, node: &Node<'g>, key: Key<'_>) -> Result<Option<&'g [u8]>> {
+    async fn lookup_value<'k, 'g>(
+        &self,
+        node: &Node<'g>,
+        key: Key<'k>,
+    ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.walk_node(node, |page| {
             if page.kind() == PageKind::Delta {
@@ -261,7 +265,8 @@ impl BTree {
         loop {
             let node = self.node(cursor.id, ghost);
             if node.view.ver() != cursor.ver {
-                self.try_reconcile_node(&node, parent.as_ref(), ghost)?;
+                self.try_reconcile_node(&node, parent.as_ref(), ghost)
+                    .await?;
                 return Err(Error::Again);
             }
             if node.view.is_data() {
@@ -286,10 +291,45 @@ impl BTree {
         }
     }
 
-    fn try_reconcile_node<'g>(
+    async fn try_reconcile_node<'n, 'g>(
         &self,
-        node: &Node<'g>,
-        parent: Option<&Node<'g>>,
+        node: &'n Node<'g>,
+        parent: Option<&'n Node<'g>>,
+        ghost: &'g Ghost,
+    ) -> Result<()> {
+        let page = self.load_page_with_view(node.id, &node.view).await?;
+        if page.kind() == PageKind::Split {
+            let split = IndexPageRef::from(page);
+            if let Some(parent) = parent {
+                self.try_reconcile_split_node(split, parent)?;
+            } else {
+                self.try_reconcile_split_root(node.id, split, ghost)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn try_reconcile_split_node<'g>(
+        &self,
+        split: IndexPageRef<'g>,
+        parent: &Node<'g>,
+    ) -> Result<()> {
+        let mut delta = split.clone_with(&self.cache, PageKind::Delta, false)?;
+        delta.set_kind(PageKind::Delta);
+        delta.set_data(false);
+        self.table
+            .cas(parent.id, parent.view.as_addr().into(), delta.into())
+            .map_err(|_| {
+                unsafe { self.cache.dealloc(delta) };
+                Error::Again
+            })?;
+        Ok(())
+    }
+
+    fn try_reconcile_split_root<'g>(
+        &self,
+        id: u64,
+        page: IndexPageRef<'g>,
         ghost: &'g Ghost,
     ) -> Result<()> {
         todo!()

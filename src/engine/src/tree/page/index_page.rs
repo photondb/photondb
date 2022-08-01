@@ -70,8 +70,9 @@ pub struct IndexPageRef<'a>(SortedPageRef<'a, &'a [u8], Index>);
 
 impl<'a> IndexPageRef<'a> {
     pub fn new(ptr: PagePtr) -> Self {
-        assert_eq!(ptr.kind(), PageKind::Delta);
-        assert_eq!(ptr.is_data(), false);
+        // FIXME
+        // assert_eq!(ptr.kind(), PageKind::Delta);
+        // assert_eq!(ptr.is_data(), false);
         Self(unsafe { SortedPageRef::new(ptr) })
     }
 
@@ -85,6 +86,21 @@ impl<'a> IndexPageRef<'a> {
 
     pub fn as_ptr(&self) -> PagePtr {
         self.0.as_ptr()
+    }
+
+    pub fn clone_with<A>(
+        &self,
+        alloc: &A,
+        kind: PageKind,
+        is_data: bool,
+    ) -> Result<PagePtr, A::Error>
+    where
+        A: PageAlloc,
+    {
+        let mut ptr = self.0.clone_in(alloc)?;
+        ptr.set_kind(kind);
+        ptr.set_data(is_data);
+        Ok(ptr)
     }
 }
 

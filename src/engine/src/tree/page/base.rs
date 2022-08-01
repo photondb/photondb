@@ -147,6 +147,13 @@ impl PagePtr {
             self.content_size_ptr().write((size as u32).to_le());
         }
     }
+
+    pub fn copy_from(&mut self, other: PagePtr) {
+        unsafe {
+            self.as_raw()
+                .copy_from_nonoverlapping(other.as_raw(), other.size());
+        }
+    }
 }
 
 impl From<PagePtr> for u64 {

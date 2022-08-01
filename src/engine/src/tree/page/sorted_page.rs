@@ -246,6 +246,15 @@ where
         self.ptr
     }
 
+    pub fn clone_in<A>(&self, alloc: &A) -> Result<PagePtr, A::Error>
+    where
+        A: PageAlloc,
+    {
+        let mut ptr = alloc.alloc(self.ptr.size())?;
+        ptr.copy_from(self.ptr);
+        Ok(ptr)
+    }
+
     fn content_at(&self, offset: u32) -> *const u8 {
         let offset = offset.to_le() as usize;
         unsafe { self.ptr.content().add(offset) }
