@@ -106,13 +106,13 @@ impl PagePtr {
         self.set_tags(self.tags().with_kind(kind));
     }
 
-    /// Returns true if this is a data page.
-    pub fn is_data(&self) -> bool {
-        self.tags().is_data()
+    /// Returns true if this is a leaf page.
+    pub fn is_leaf(&self) -> bool {
+        self.tags().is_leaf()
     }
 
-    pub fn set_data(&mut self, is_data: bool) {
-        self.set_tags(self.tags().with_data(is_data));
+    pub fn set_leaf(&mut self, is_leaf: bool) {
+        self.set_tags(self.tags().with_leaf(is_leaf));
     }
 
     /// Sets the page header as default.
@@ -147,13 +147,6 @@ impl PagePtr {
             self.content_size_ptr().write((size as u32).to_le());
         }
     }
-
-    pub fn copy_from(&mut self, other: PagePtr) {
-        unsafe {
-            self.as_raw()
-                .copy_from_nonoverlapping(other.as_raw(), other.size());
-        }
-    }
 }
 
 impl From<PagePtr> for u64 {
@@ -173,19 +166,19 @@ impl PageTags {
     }
 
     const fn with_kind(self, kind: PageKind) -> Self {
-        Self(self.data() | kind as u8)
+        Self(self.leaf() | kind as u8)
     }
 
-    const fn data(self) -> u8 {
+    const fn leaf(self) -> u8 {
         self.0 & !PAGE_KIND_MASK
     }
 
-    const fn is_data(self) -> bool {
-        self.data() == 0
+    const fn is_leaf(self) -> bool {
+        self.leaf() == 0
     }
 
-    const fn with_data(self, is_data: bool) -> Self {
-        if is_data {
+    const fn with_leaf(self, is_leaf: bool) -> Self {
+        if is_leaf {
             Self(self.0 & PAGE_KIND_MASK)
         } else {
             Self(self.0 | !PAGE_KIND_MASK)
@@ -208,8 +201,8 @@ impl From<PageTags> for u8 {
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PageKind {
-    /// Pages with delta entries.
-    Delta = 0,
+    /// Pages with data entries.
+    Data = 0,
     /// Pages with split information.
     Split = 1,
 }
@@ -217,7 +210,7 @@ pub enum PageKind {
 impl PageKind {
     const fn new(kind: u8) -> Self {
         match kind {
-            0 => Self::Delta,
+            0 => Self::Data,
             1 => Self::Split,
             _ => panic!("invalid page kind"),
         }
@@ -250,12 +243,12 @@ pub unsafe trait PageAlloc {
 /// A builder to create base pages.
 pub struct PageBuilder {
     kind: PageKind,
-    is_data: bool,
+    is_leaf: bool,
 }
 
 impl PageBuilder {
-    pub fn new(kind: PageKind, is_data: bool) -> Self {
-        Self { kind, is_data }
+    pub fn new(kind: PageKind, is_leaf: bool) -> Self {
+        Self { kind, is_leaf }
     }
 
     pub fn build<A>(&self, alloc: &A, content_size: usize) -> Result<PagePtr, A::Error>
@@ -266,7 +259,7 @@ impl PageBuilder {
         ptr.map(|mut ptr| {
             ptr.set_default();
             ptr.set_kind(self.kind);
-            ptr.set_data(self.is_data);
+            ptr.set_leaf(self.is_leaf);
             ptr.set_content_size(content_size);
             ptr
         })
@@ -320,13 +313,13 @@ pub mod test {
         ptr.set_next(3);
         assert_eq!(ptr.next(), 3);
 
-        assert_eq!(ptr.kind(), PageKind::Delta);
+        assert_eq!(ptr.kind(), PageKind::Data);
         ptr.set_kind(PageKind::Split);
         assert_eq!(ptr.kind(), PageKind::Split);
 
-        assert_eq!(ptr.is_data(), true);
-        ptr.set_data(false);
-        assert_eq!(ptr.is_data(), false);
+        assert_eq!(ptr.is_leaf(), true);
+        ptr.set_leaf(false);
+        assert_eq!(ptr.is_leaf(), false);
 
         assert_eq!(ptr.content_size(), 0);
         ptr.set_content_size(4);

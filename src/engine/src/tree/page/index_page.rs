@@ -7,13 +7,13 @@ pub struct IndexPageBuilder(SortedPageBuilder);
 
 impl Default for IndexPageBuilder {
     fn default() -> Self {
-        Self::new(PageKind::Delta, false)
+        Self::new(PageKind::Data, false)
     }
 }
 
 impl IndexPageBuilder {
-    pub fn new(kind: PageKind, is_data: bool) -> Self {
-        Self(SortedPageBuilder::new(kind, is_data))
+    pub fn new(kind: PageKind, is_leaf: bool) -> Self {
+        Self(SortedPageBuilder::new(kind, is_leaf))
     }
 
     /// Builds an empty data page.
@@ -92,15 +92,12 @@ impl<'a> IndexPageRef<'a> {
         &self,
         alloc: &A,
         kind: PageKind,
-        is_data: bool,
+        is_leaf: bool,
     ) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
     {
-        let mut ptr = self.0.clone_in(alloc)?;
-        ptr.set_kind(kind);
-        ptr.set_data(is_data);
-        Ok(ptr)
+        todo!()
     }
 }
 

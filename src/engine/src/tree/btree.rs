@@ -212,7 +212,7 @@ impl BTree {
     {
         let mut merger = MergingIterBuilder::default();
         self.walk_node(node, |page| {
-            if page.kind() == PageKind::Delta {
+            if page.kind() == PageKind::Data {
                 merger.add(N::PageIter::from(page));
             }
             false
@@ -228,7 +228,7 @@ impl BTree {
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.walk_node(node, |page| {
-            if page.kind() == PageKind::Delta {
+            if page.kind() == PageKind::Data {
                 let page = DataPageRef::from(page);
                 if let Some((_, v)) = page.find(key) {
                     value = v.into();
@@ -244,7 +244,7 @@ impl BTree {
     async fn lookup_index<'g>(&self, node: &Node<'g>, key: &[u8]) -> Result<Option<Index>> {
         let mut value = None;
         self.walk_node(node, |page| {
-            if page.kind() == PageKind::Delta {
+            if page.kind() == PageKind::Data {
                 let page = IndexPageRef::from(page);
                 if let Some((_, v)) = page.find(key) {
                     value = v.into();
@@ -267,7 +267,7 @@ impl BTree {
                     .await?;
                 return Err(Error::Again);
             }
-            if node.view.is_data() {
+            if node.view.is_leaf() {
                 return Ok(node);
             }
             cursor = self.lookup_index(&node, key).await?.unwrap();
@@ -312,9 +312,9 @@ impl BTree {
         split: IndexPageRef<'g>,
         parent: &Node<'g>,
     ) -> Result<()> {
-        let mut delta = split.clone_with(&self.cache, PageKind::Delta, false)?;
-        delta.set_kind(PageKind::Delta);
-        delta.set_data(false);
+        let mut delta = split.clone_with(&self.cache, PageKind::Data, false)?;
+        delta.set_kind(PageKind::Data);
+        delta.set_leaf(false);
         self.table
             .cas(parent.id, parent.view.as_addr().into(), delta.into())
             .map_err(|_| {
@@ -345,7 +345,7 @@ impl BTree {
         self.table.set(right_id, right_ptr.into());
         let split = || -> Result<()> {
             let mut split_iter = OptionIter::from((split_key, Index::with_id(right_id)));
-            let mut split_page = IndexPageBuilder::new(PageKind::Split, left_ptr.is_data())
+            let mut split_page = IndexPageBuilder::new(PageKind::Split, left_ptr.is_leaf())
                 .build_from_iter(&self.cache, &mut split_iter)
                 .map_err(|err| {
                     unsafe { self.cache.dealloc(right_ptr) };

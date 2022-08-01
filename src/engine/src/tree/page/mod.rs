@@ -36,8 +36,8 @@ impl<'a> PageRef<'a> {
     /// Creates a `PageRef` from a `PagePtr`.
     pub fn cast(ptr: PagePtr) -> Self {
         match ptr.kind() {
-            PageKind::Delta => {
-                if ptr.is_data() {
+            PageKind::Data => {
+                if ptr.is_leaf() {
                     Self::Data(DataPageRef::new(ptr))
                 } else {
                     Self::Index(IndexPageRef::new(ptr))

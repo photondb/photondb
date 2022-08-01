@@ -7,7 +7,7 @@ pub struct DataPageBuilder(SortedPageBuilder);
 
 impl Default for DataPageBuilder {
     fn default() -> Self {
-        Self(SortedPageBuilder::new(PageKind::Delta, true))
+        Self(SortedPageBuilder::new(PageKind::Data, true))
     }
 }
 
@@ -62,9 +62,13 @@ pub struct DataPageRef<'a>(SortedPageRef<'a, Key<'a>, Value<'a>>);
 
 impl<'a> DataPageRef<'a> {
     pub fn new(ptr: PagePtr) -> Self {
-        assert_eq!(ptr.kind(), PageKind::Delta);
-        assert_eq!(ptr.is_data(), true);
+        assert_eq!(ptr.kind(), PageKind::Data);
+        assert_eq!(ptr.is_leaf(), true);
         Self(unsafe { SortedPageRef::new(ptr) })
+    }
+
+    pub fn as_ptr(&self) -> PagePtr {
+        self.0.as_ptr()
     }
 
     pub fn find(&self, target: Key<'_>) -> Option<(Key<'a>, Value<'a>)> {
@@ -93,10 +97,6 @@ impl<'a> DataPageRef<'a> {
             }
         }
         None
-    }
-
-    pub fn as_ptr(&self) -> PagePtr {
-        self.0.as_ptr()
     }
 }
 

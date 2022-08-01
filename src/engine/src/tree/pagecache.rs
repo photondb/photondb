@@ -57,10 +57,10 @@ impl PageView {
         }
     }
 
-    pub fn is_data(&self) -> bool {
+    pub fn is_leaf(&self) -> bool {
         match self {
-            Self::Mem(page) => page.is_data(),
-            Self::Disk(info, _) => info.is_data,
+            Self::Mem(page) => page.is_leaf(),
+            Self::Disk(info, _) => info.is_leaf,
         }
     }
 

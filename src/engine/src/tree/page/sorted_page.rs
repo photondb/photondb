@@ -18,9 +18,9 @@ pub struct SortedPageBuilder {
 // TODO: Optimizes the page layout with
 // https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
 impl SortedPageBuilder {
-    pub fn new(kind: PageKind, is_data: bool) -> Self {
+    pub fn new(kind: PageKind, is_leaf: bool) -> Self {
         Self {
-            base: PageBuilder::new(kind, is_data),
+            base: PageBuilder::new(kind, is_leaf),
             offsets_size: 0,
             payload_size: 0,
         }
@@ -246,15 +246,6 @@ where
         self.ptr
     }
 
-    pub fn clone_in<A>(&self, alloc: &A) -> Result<PagePtr, A::Error>
-    where
-        A: PageAlloc,
-    {
-        let mut ptr = alloc.alloc(self.ptr.size())?;
-        ptr.copy_from(self.ptr);
-        Ok(ptr)
-    }
-
     fn content_at(&self, offset: u32) -> *const u8 {
         let offset = offset.to_le() as usize;
         unsafe { self.ptr.content().add(offset) }
@@ -370,13 +361,13 @@ mod test {
     fn data_page() {
         let data = [(1, 0), (2, 0), (4, 0), (7, 0), (8, 0)];
         let mut iter = SliceIter::from(&data);
-        let page = SortedPageBuilder::new(PageKind::Delta, true)
+        let page = SortedPageBuilder::new(PageKind::Data, true)
             .build_from_iter(&ALLOC, &mut iter)
             .unwrap();
 
         let page = page.as_ref::<u64, u64>();
-        assert_eq!(page.kind(), PageKind::Delta);
-        assert_eq!(page.is_data(), true);
+        assert_eq!(page.kind(), PageKind::Data);
+        assert_eq!(page.is_leaf(), true);
 
         assert_eq!(page.seek(&0), Some((1, 0)));
         assert_eq!(page.seek_back(&0), None);
