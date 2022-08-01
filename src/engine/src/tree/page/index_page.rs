@@ -7,7 +7,7 @@ pub struct IndexPageBuilder(SortedPageBuilder);
 
 impl Default for IndexPageBuilder {
     fn default() -> Self {
-        Self(SortedPageBuilder::new(PageKind::Delta, true))
+        Self(SortedPageBuilder::new(PageKind::Delta, false))
     }
 }
 
@@ -67,7 +67,7 @@ pub struct IndexPageRef<'a>(SortedPageRef<'a, &'a [u8], Index>);
 impl<'a> IndexPageRef<'a> {
     pub fn new(ptr: PagePtr) -> Self {
         assert_eq!(ptr.kind(), PageKind::Delta);
-        assert_eq!(ptr.is_index(), true);
+        assert_eq!(ptr.is_data(), false);
         Self(unsafe { SortedPageRef::new(ptr) })
     }
 

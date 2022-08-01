@@ -90,11 +90,11 @@ impl BTree {
         let mut node = self.try_find_node(key, ghost).await?;
         loop {
             delta.set_ver(node.view.ver());
-            delta.set_len(node.view.len() + 1);
+            delta.set_rank(node.view.rank() + 1);
             delta.set_next(node.view.as_addr().into());
             match self.table.cas(node.id, delta.next(), delta.into()) {
                 Ok(_) => {
-                    if delta.len() >= self.opts.data_delta_length {
+                    if delta.rank() >= self.opts.data_delta_length {
                         node.view = delta.into();
                         let _ = self.try_consolidate_data_node(&node, ghost).await;
                     }
@@ -150,20 +150,6 @@ impl BTree {
                 .store
                 .page_info(addr)
                 .map(|info| PageView::Disk(info, addr)),
-        }
-    }
-
-    fn replace_node<'g>(&self, node: &Node<'g>, page: PagePtr, ghost: &'g Ghost) -> Result<()> {
-        let addr = node.view.as_addr();
-        match self.table.cas(node.id, addr.into(), page.into()) {
-            Ok(_) => {
-                self.dealloc_chain(addr, ghost);
-                Ok(())
-            }
-            Err(_) => {
-                unsafe { self.cache.dealloc(page) };
-                Err(Error::Again)
-            }
         }
     }
 
@@ -286,6 +272,20 @@ impl BTree {
         }
     }
 
+    fn try_replace_node<'g>(&self, node: &Node<'g>, page: PagePtr, ghost: &'g Ghost) -> Result<()> {
+        let addr = node.view.as_addr();
+        match self.table.cas(node.id, addr.into(), page.into()) {
+            Ok(_) => {
+                self.dealloc_chain(addr, ghost);
+                Ok(())
+            }
+            Err(_) => {
+                unsafe { self.cache.dealloc(page) };
+                Err(Error::Again)
+            }
+        }
+    }
+
     fn try_reconcile_node<'g>(
         &self,
         node: &Node<'g>,
@@ -299,7 +299,7 @@ impl BTree {
         let mut iter = self.iter_node::<DataNode>(node).await?;
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
-        self.replace_node(node, page.as_ptr(), ghost)
+        self.try_replace_node(node, page.as_ptr(), ghost)
     }
 
     async fn try_consolidate_index_node<'g>(
@@ -310,6 +310,6 @@ impl BTree {
         let mut iter = self.iter_node::<IndexNode>(node).await?;
         let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
-        self.replace_node(node, page.as_ptr(), ghost)
+        self.try_replace_node(node, page.as_ptr(), ghost)
     }
 }

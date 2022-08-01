@@ -50,21 +50,17 @@ impl PageView {
         }
     }
 
-    pub fn len(&self) -> u8 {
+    pub fn rank(&self) -> u8 {
         match self {
-            Self::Mem(page) => page.len(),
-            Self::Disk(info, _) => info.len,
+            Self::Mem(page) => page.rank(),
+            Self::Disk(info, _) => info.rank,
         }
     }
 
     pub fn is_data(&self) -> bool {
-        !self.is_index()
-    }
-
-    pub fn is_index(&self) -> bool {
         match self {
-            Self::Mem(page) => page.is_index(),
-            Self::Disk(info, _) => info.is_index,
+            Self::Mem(page) => page.is_data(),
+            Self::Disk(info, _) => info.is_data,
         }
     }
 

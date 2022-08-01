@@ -1,6 +1,6 @@
 use std::{alloc::Layout, ptr::NonNull};
 
-// Page header: ver (6B) | len (1B) | tag (1B) | next (8B) | content_size (4B) |
+// Page header: ver (6B) | rank (1B) | tags (1B) | next (8B) | content_size (4B) |
 const PAGE_ALIGNMENT: usize = 8;
 const PAGE_HEADER_SIZE: usize = 20;
 const PAGE_VERSION_MAX: u64 = (1 << 48) - 1;
@@ -29,11 +29,11 @@ impl PagePtr {
         self.as_raw()
     }
 
-    unsafe fn len_ptr(self) -> *mut u8 {
+    unsafe fn rank_ptr(self) -> *mut u8 {
         self.as_raw().add(PAGE_VERSION_SIZE)
     }
 
-    unsafe fn tag_ptr(self) -> *mut u8 {
+    unsafe fn tags_ptr(self) -> *mut u8 {
         self.as_raw().add(PAGE_VERSION_SIZE + 1)
     }
 
@@ -64,14 +64,14 @@ impl PagePtr {
         }
     }
 
-    /// Returns the length of the chain.
-    pub fn len(&self) -> u8 {
-        unsafe { self.len_ptr().read() }
+    /// Returns the rank of the page in the chain.
+    pub fn rank(&self) -> u8 {
+        unsafe { self.rank_ptr().read() }
     }
 
-    pub fn set_len(&mut self, len: u8) {
+    pub fn set_rank(&mut self, rank: u8) {
         unsafe {
-            self.len_ptr().write(len);
+            self.rank_ptr().write(rank);
         }
     }
 
@@ -87,37 +87,32 @@ impl PagePtr {
         }
     }
 
-    fn tag(&self) -> PageTag {
-        unsafe { self.tag_ptr().read().into() }
+    fn tags(&self) -> PageTags {
+        unsafe { self.tags_ptr().read().into() }
     }
 
-    fn set_tag(&mut self, tag: PageTag) {
+    fn set_tags(&mut self, tags: PageTags) {
         unsafe {
-            self.tag_ptr().write(tag.into());
+            self.tags_ptr().write(tags.into());
         }
     }
 
     /// Returns the page kind.
     pub fn kind(&self) -> PageKind {
-        self.tag().kind()
+        self.tags().kind()
     }
 
     pub fn set_kind(&mut self, kind: PageKind) {
-        self.set_tag(self.tag().with_kind(kind));
+        self.set_tags(self.tags().with_kind(kind));
     }
 
     /// Returns true if this is a data page.
     pub fn is_data(&self) -> bool {
-        !self.is_index()
+        self.tags().is_data()
     }
 
-    /// Returns true if this is an index page.
-    pub fn is_index(&self) -> bool {
-        self.tag().is_index()
-    }
-
-    pub fn set_index(&mut self, is_index: bool) {
-        self.set_tag(self.tag().with_index(is_index));
+    pub fn set_data(&mut self, is_data: bool) {
+        self.set_tags(self.tags().with_data(is_data));
     }
 
     /// Sets the page header as default.
@@ -161,45 +156,45 @@ impl From<PagePtr> for u64 {
 }
 
 #[derive(Copy, Clone, Debug, Default)]
-struct PageTag(u8);
+struct PageTags(u8);
 
 const PAGE_KIND_MASK: u8 = 0x7F;
 
-impl PageTag {
+impl PageTags {
     const fn kind(self) -> PageKind {
         PageKind::new(self.0 & PAGE_KIND_MASK)
     }
 
     const fn with_kind(self, kind: PageKind) -> Self {
-        Self(self.index() | kind as u8)
+        Self(self.data() | kind as u8)
     }
 
-    const fn index(self) -> u8 {
+    const fn data(self) -> u8 {
         self.0 & !PAGE_KIND_MASK
     }
 
-    const fn is_index(self) -> bool {
-        self.index() != 0
+    const fn is_data(self) -> bool {
+        self.data() == 0
     }
 
-    const fn with_index(self, is_index: bool) -> Self {
-        if is_index {
-            Self(self.0 | !PAGE_KIND_MASK)
-        } else {
+    const fn with_data(self, is_data: bool) -> Self {
+        if is_data {
             Self(self.0 & PAGE_KIND_MASK)
+        } else {
+            Self(self.0 | !PAGE_KIND_MASK)
         }
     }
 }
 
-impl From<u8> for PageTag {
-    fn from(tag: u8) -> Self {
-        Self(tag)
+impl From<u8> for PageTags {
+    fn from(v: u8) -> Self {
+        Self(v)
     }
 }
 
-impl From<PageTag> for u8 {
-    fn from(tag: PageTag) -> Self {
-        tag.0
+impl From<PageTags> for u8 {
+    fn from(tags: PageTags) -> Self {
+        tags.0
     }
 }
 
@@ -248,12 +243,12 @@ pub unsafe trait PageAlloc {
 /// A builder to create base pages.
 pub struct PageBuilder {
     kind: PageKind,
-    is_index: bool,
+    is_data: bool,
 }
 
 impl PageBuilder {
-    pub fn new(kind: PageKind, is_index: bool) -> Self {
-        Self { kind, is_index }
+    pub fn new(kind: PageKind, is_data: bool) -> Self {
+        Self { kind, is_data }
     }
 
     pub fn build<A>(&self, alloc: &A, content_size: usize) -> Result<PagePtr, A::Error>
@@ -264,7 +259,7 @@ impl PageBuilder {
         ptr.map(|mut ptr| {
             ptr.set_default();
             ptr.set_kind(self.kind);
-            ptr.set_index(self.is_index);
+            ptr.set_data(self.is_data);
             ptr.set_content_size(content_size);
             ptr
         })
@@ -310,9 +305,9 @@ pub mod test {
         ptr.set_ver(1);
         assert_eq!(ptr.ver(), 1);
 
-        assert_eq!(ptr.len(), 0);
-        ptr.set_len(2);
-        assert_eq!(ptr.len(), 2);
+        assert_eq!(ptr.rank(), 0);
+        ptr.set_rank(2);
+        assert_eq!(ptr.rank(), 2);
 
         assert_eq!(ptr.next(), 0);
         ptr.set_next(3);
@@ -323,10 +318,8 @@ pub mod test {
         assert_eq!(ptr.kind(), PageKind::Split);
 
         assert_eq!(ptr.is_data(), true);
-        assert_eq!(ptr.is_index(), false);
-        ptr.set_index(true);
+        ptr.set_data(false);
         assert_eq!(ptr.is_data(), false);
-        assert_eq!(ptr.is_index(), true);
 
         assert_eq!(ptr.content_size(), 0);
         ptr.set_content_size(4);

@@ -2,8 +2,8 @@ use crate::tree::{page::PagePtr, Options, Result};
 
 pub struct PageInfo {
     pub ver: u64,
-    pub len: u8,
-    pub is_index: bool,
+    pub rank: u8,
+    pub is_data: bool,
 }
 
 pub struct PageStore {}

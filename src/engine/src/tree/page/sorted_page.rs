@@ -18,9 +18,9 @@ pub struct SortedPageBuilder {
 // TODO: Optimizes the page layout with
 // https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
 impl SortedPageBuilder {
-    pub fn new(kind: PageKind, is_index: bool) -> Self {
+    pub fn new(kind: PageKind, is_data: bool) -> Self {
         Self {
-            base: PageBuilder::new(kind, is_index),
+            base: PageBuilder::new(kind, is_data),
             offsets_size: 0,
             payload_size: 0,
         }
@@ -359,7 +359,7 @@ mod test {
 
         let page = page.as_ref::<u64, u64>();
         assert_eq!(page.kind(), PageKind::Delta);
-        assert_eq!(page.is_index(), true);
+        assert_eq!(page.is_data(), true);
 
         assert_eq!(page.seek(&0), Some((1, 0)));
         assert_eq!(page.seek_back(&0), None);
