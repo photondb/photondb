@@ -1,4 +1,4 @@
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use super::*;
 
@@ -13,46 +13,20 @@ impl Default for DataPageBuilder {
 
 impl DataPageBuilder {
     /// Builds an empty data page.
-    pub fn build<A>(self, alloc: &A) -> Result<DataPageBuf, A::Error>
+    pub fn build<A>(self, alloc: &A) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
     {
-        self.0.build(alloc).map(DataPageBuf)
+        self.0.build(alloc)
     }
 
     /// Builds a data page with entries from the given iterator.
-    pub fn build_from_iter<'a, A, I>(self, alloc: &A, iter: &mut I) -> Result<DataPageBuf, A::Error>
+    pub fn build_from_iter<'a, A, I>(self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
         I: RewindableIter<Key = Key<'a>, Value = Value<'a>>,
     {
-        self.0.build_from_iter(alloc, iter).map(DataPageBuf)
-    }
-}
-
-pub struct DataPageBuf(SortedPageBuf);
-
-impl DataPageBuf {
-    pub fn as_ptr(&self) -> PagePtr {
-        self.0.as_ptr()
-    }
-
-    pub fn as_ref<'a>(&self) -> DataPageRef<'a> {
-        DataPageRef(self.0.as_ref())
-    }
-}
-
-impl Deref for DataPageBuf {
-    type Target = PagePtr;
-
-    fn deref(&self) -> &Self::Target {
-        self.0.deref()
-    }
-}
-
-impl DerefMut for DataPageBuf {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.deref_mut()
+        self.0.build_from_iter(alloc, iter)
     }
 }
 
@@ -63,12 +37,7 @@ pub struct DataPageRef<'a>(SortedPageRef<'a, Key<'a>, Value<'a>>);
 impl<'a> DataPageRef<'a> {
     pub fn new(ptr: PagePtr) -> Self {
         assert_eq!(ptr.kind(), PageKind::Data);
-        assert_eq!(ptr.is_leaf(), true);
         Self(unsafe { SortedPageRef::new(ptr) })
-    }
-
-    pub fn as_ptr(&self) -> PagePtr {
-        self.0.as_ptr()
     }
 
     pub fn find(&self, target: Key<'_>) -> Option<(Key<'a>, Value<'a>)> {

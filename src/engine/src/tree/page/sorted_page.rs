@@ -1,10 +1,4 @@
-use std::{
-    cmp::Ordering,
-    marker::PhantomData,
-    mem::size_of,
-    ops::{Deref, DerefMut},
-    slice,
-};
+use std::{cmp::Ordering, marker::PhantomData, mem::size_of, ops::Deref, slice};
 
 use super::*;
 
@@ -40,20 +34,19 @@ impl SortedPageBuilder {
     }
 
     /// Builds an empty page.
-    pub fn build<A>(self, alloc: &A) -> Result<SortedPageBuf, A::Error>
+    pub fn build<A>(self, alloc: &A) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
     {
         let ptr = self.base.build(alloc, self.size());
-        ptr.map(|ptr| unsafe { SortedPageBuf::new(ptr, self) })
+        ptr.map(|ptr| unsafe {
+            SortedPageBuf::new(ptr, self);
+            ptr
+        })
     }
 
     /// Builds a page with entries from the given iterator.
-    pub fn build_from_iter<A, I>(
-        mut self,
-        alloc: &A,
-        iter: &mut I,
-    ) -> Result<SortedPageBuf, A::Error>
+    pub fn build_from_iter<A, I>(mut self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
         I: RewindableIter,
@@ -71,12 +64,12 @@ impl SortedPageBuilder {
             while let Some((key, value)) = iter.next() {
                 buf.add(key, value);
             }
-            buf
+            ptr
         })
     }
 }
 
-pub struct SortedPageBuf {
+struct SortedPageBuf {
     ptr: PagePtr,
     offsets: *mut u32,
     content: BufWriter,
@@ -106,32 +99,6 @@ impl SortedPageBuf {
         self.current += 1;
         key.encode_to(&mut self.content);
         value.encode_to(&mut self.content);
-    }
-
-    pub fn as_ptr(&self) -> PagePtr {
-        self.ptr
-    }
-
-    pub fn as_ref<'a, K, V>(&self) -> SortedPageRef<'a, K, V>
-    where
-        K: Decodable + Ord,
-        V: Decodable,
-    {
-        unsafe { SortedPageRef::new(self.ptr) }
-    }
-}
-
-impl Deref for SortedPageBuf {
-    type Target = PagePtr;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ptr
-    }
-}
-
-impl DerefMut for SortedPageBuf {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.ptr
     }
 }
 
@@ -240,10 +207,6 @@ where
     /// Returns an iterator over the entries in the page.
     pub fn iter(&self) -> SortedPageIter<'a, K, V> {
         SortedPageIter::new(self.clone())
-    }
-
-    pub fn as_ptr(&self) -> PagePtr {
-        self.ptr
     }
 
     fn content_at(&self, offset: u32) -> *const u8 {
@@ -364,11 +327,10 @@ mod test {
         let page = SortedPageBuilder::new(PageKind::Data, true)
             .build_from_iter(&ALLOC, &mut iter)
             .unwrap();
-
-        let page = page.as_ref::<u64, u64>();
         assert_eq!(page.kind(), PageKind::Data);
         assert_eq!(page.is_leaf(), true);
 
+        let page = unsafe { SortedPageRef::new(page) };
         assert_eq!(page.seek(&0), Some((1, 0)));
         assert_eq!(page.seek_back(&0), None);
         assert_eq!(page.seek(&3), Some((4, 0)));

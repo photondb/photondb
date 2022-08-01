@@ -203,15 +203,18 @@ impl From<PageTags> for u8 {
 pub enum PageKind {
     /// Pages with data entries.
     Data = 0,
+    /// Pages with index entries.
+    Index = 1,
     /// Pages with split information.
-    Split = 1,
+    Split = 2,
 }
 
 impl PageKind {
     const fn new(kind: u8) -> Self {
         match kind {
             0 => Self::Data,
-            1 => Self::Split,
+            1 => Self::Index,
+            2 => Self::Split,
             _ => panic!("invalid page kind"),
         }
     }

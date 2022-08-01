@@ -1,13 +1,13 @@
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 use super::*;
 
-/// A builder to create data pages.
+/// A builder to create index pages.
 pub struct IndexPageBuilder(SortedPageBuilder);
 
 impl Default for IndexPageBuilder {
     fn default() -> Self {
-        Self::new(PageKind::Data, false)
+        Self::new(PageKind::Index, false)
     }
 }
 
@@ -16,51 +16,21 @@ impl IndexPageBuilder {
         Self(SortedPageBuilder::new(kind, is_leaf))
     }
 
-    /// Builds an empty data page.
-    pub fn build<A>(self, alloc: &A) -> Result<IndexPageBuf, A::Error>
+    /// Builds an empty index page.
+    pub fn build<A>(self, alloc: &A) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
     {
-        self.0.build(alloc).map(IndexPageBuf)
+        self.0.build(alloc)
     }
 
-    /// Builds a data page with entries from the given iterator.
-    pub fn build_from_iter<'a, A, I>(
-        mut self,
-        alloc: &A,
-        iter: &mut I,
-    ) -> Result<IndexPageBuf, A::Error>
+    /// Builds an index page with entries from the given iterator.
+    pub fn build_from_iter<'a, A, I>(self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
         I: RewindableIter<Key = &'a [u8], Value = Index>,
     {
-        self.0.build_from_iter(alloc, iter).map(IndexPageBuf)
-    }
-}
-
-pub struct IndexPageBuf(SortedPageBuf);
-
-impl IndexPageBuf {
-    pub fn as_ptr(&self) -> PagePtr {
-        self.0.as_ptr()
-    }
-
-    pub fn as_ref<'a>(&self) -> IndexPageRef<'a> {
-        IndexPageRef(self.0.as_ref())
-    }
-}
-
-impl Deref for IndexPageBuf {
-    type Target = PagePtr;
-
-    fn deref(&self) -> &Self::Target {
-        self.0.deref()
-    }
-}
-
-impl DerefMut for IndexPageBuf {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.deref_mut()
+        self.0.build_from_iter(alloc, iter)
     }
 }
 
@@ -70,9 +40,8 @@ pub struct IndexPageRef<'a>(SortedPageRef<'a, &'a [u8], Index>);
 
 impl<'a> IndexPageRef<'a> {
     pub fn new(ptr: PagePtr) -> Self {
-        // FIXME
-        // assert_eq!(ptr.kind(), PageKind::Delta);
-        // assert_eq!(ptr.is_data(), false);
+        assert_eq!(ptr.kind(), PageKind::Index);
+        assert_eq!(ptr.is_leaf(), false);
         Self(unsafe { SortedPageRef::new(ptr) })
     }
 
@@ -82,22 +51,6 @@ impl<'a> IndexPageRef<'a> {
 
     pub fn iter(&self) -> IndexPageIter<'a> {
         IndexPageIter::new(self.clone())
-    }
-
-    pub fn as_ptr(&self) -> PagePtr {
-        self.0.as_ptr()
-    }
-
-    pub fn clone_with<A>(
-        &self,
-        alloc: &A,
-        kind: PageKind,
-        is_leaf: bool,
-    ) -> Result<PagePtr, A::Error>
-    where
-        A: PageAlloc,
-    {
-        todo!()
     }
 }
 

@@ -11,13 +11,13 @@ mod data;
 pub use data::{Decodable, Encodable, Index, Key, Value};
 
 mod data_page;
-pub use data_page::{DataPageBuf, DataPageBuilder, DataPageIter, DataPageRef};
+pub use data_page::{DataPageBuilder, DataPageIter, DataPageRef};
 
 mod index_page;
-pub use index_page::{IndexPageBuf, IndexPageBuilder, IndexPageIter, IndexPageRef};
+pub use index_page::{IndexPageBuilder, IndexPageIter, IndexPageRef};
 
 mod sorted_page;
-pub use sorted_page::{SortedPageBuf, SortedPageBuilder, SortedPageIter, SortedPageRef};
+pub use sorted_page::{SortedPageBuilder, SortedPageIter, SortedPageRef};
 
 mod split_page;
 pub use split_page::{SplitPageBuilder, SplitPageRef};
@@ -36,13 +36,8 @@ impl<'a> PageRef<'a> {
     /// Creates a `PageRef` from a `PagePtr`.
     pub fn cast(ptr: PagePtr) -> Self {
         match ptr.kind() {
-            PageKind::Data => {
-                if ptr.is_leaf() {
-                    Self::Data(DataPageRef::new(ptr))
-                } else {
-                    Self::Index(IndexPageRef::new(ptr))
-                }
-            }
+            PageKind::Data => Self::Data(DataPageRef::new(ptr)),
+            PageKind::Index => Self::Index(IndexPageRef::new(ptr)),
             PageKind::Split => Self::Split(SplitPageRef::new(ptr)),
         }
     }
