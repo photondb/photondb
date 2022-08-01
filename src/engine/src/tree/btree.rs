@@ -7,8 +7,7 @@ use super::{
     Error, Ghost, Options, Result,
 };
 
-const ROOT_ID: u64 = 0;
-const ROOT_INDEX: Index = Index::with_id(ROOT_ID);
+const ROOT_INDEX: Index = Index::with_id(PageTable::MIN);
 
 pub struct BTree {
     opts: Options,
@@ -123,8 +122,7 @@ impl BTree {
         let mut leaf_page = DataPageBuilder::default().build(&self.cache)?;
         self.table.set(leaf_id, leaf_page.as_ptr().into());
         let mut root_iter = OptionIter::from(([].as_slice(), Index::with_id(leaf_id)));
-        let mut root_page =
-            IndexPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
+        let root_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
         self.table.set(root_id, root_page.as_ptr().into());
         Ok(self)
     }

@@ -9,12 +9,19 @@ use std::{
 
 use super::Guard;
 
+const NAN: u64 = 0;
+const MIN: u64 = 1;
+const MAX: u64 = L2_FANOUT - 1;
+
 #[derive(Clone, Default)]
 pub struct PageTable {
     inner: Arc<Inner>,
 }
 
 impl PageTable {
+    pub const NAN: u64 = NAN;
+    pub const MIN: u64 = MIN;
+
     pub fn get(&self, id: u64) -> u64 {
         self.inner.index(id).load(Ordering::Acquire)
     }
@@ -42,11 +49,11 @@ impl PageTable {
 }
 
 struct Inner {
-    // Level 0: [0, L0_MAX)
+    // Level 0: [0, L0_FANOUT)
     l0: Box<L0<L0_LEN>>,
-    // Level 1: [L0_MAX, L1_MAX)
+    // Level 1: [L0_FANOUT, L1_FANOUT)
     l1: Box<L1<L1_LEN>>,
-    // Level 2: [L1_MAX, L2_MAX)
+    // Level 2: [L1_FANOUT, L2_FANOUT)
     l2: Box<L2<L2_LEN>>,
     // The next id to allocate.
     next: AtomicU64,
@@ -61,20 +68,20 @@ impl Default for Inner {
             l0: Box::default(),
             l1: Box::default(),
             l2: Box::default(),
-            next: AtomicU64::new(0),
-            free: AtomicU64::new(L2_MAX),
+            next: AtomicU64::new(MIN),
+            free: AtomicU64::new(NAN),
         }
     }
 }
 
 impl Inner {
     fn index(&self, index: u64) -> &AtomicU64 {
-        if index < L0_MAX {
+        if index < L0_FANOUT {
             self.l0.index(index)
-        } else if index < L1_MAX {
-            self.l1.index(index - L0_MAX)
-        } else if index < L2_MAX {
-            self.l2.index(index - L1_MAX)
+        } else if index < L1_FANOUT {
+            self.l1.index(index - L0_FANOUT)
+        } else if index < L2_FANOUT {
+            self.l2.index(index - L1_FANOUT)
         } else {
             unreachable!()
         }
@@ -82,7 +89,7 @@ impl Inner {
 
     fn alloc(&self) -> Option<u64> {
         let mut id = self.free.load(Ordering::Acquire);
-        while id != L2_MAX {
+        while id != NAN {
             let next = self.index(id).load(Ordering::Acquire);
             match self
                 .free
@@ -92,13 +99,13 @@ impl Inner {
                 Err(actual) => id = actual,
             }
         }
-        if id == L2_MAX {
+        if id == NAN {
             id = self.next.load(Ordering::Relaxed);
-            if id < L2_MAX {
+            if id < MAX {
                 id = self.next.fetch_add(1, Ordering::Relaxed);
             }
         }
-        if id < L2_MAX {
+        if id < MAX {
             Some(id)
         } else {
             None
@@ -193,12 +200,12 @@ const FANOUT: usize = 1 << 16;
 const L0_LEN: usize = FANOUT;
 const L1_LEN: usize = FANOUT - 1;
 const L2_LEN: usize = FANOUT - 1;
-const L0_MAX: u64 = FANOUT as u64;
-const L1_MAX: u64 = L0_MAX * L0_MAX;
-const L2_MAX: u64 = L1_MAX * L0_MAX;
+const L0_FANOUT: u64 = FANOUT as u64;
+const L1_FANOUT: u64 = L0_FANOUT * FANOUT as u64;
+const L2_FANOUT: u64 = L1_FANOUT * FANOUT as u64;
 
-define_level!(L1, L0<FANOUT>, L0_MAX);
-define_level!(L2, L1<FANOUT>, L1_MAX);
+define_level!(L1, L0<FANOUT>, L0_FANOUT);
+define_level!(L2, L1<FANOUT>, L1_FANOUT);
 
 #[cfg(test)]
 mod test {
@@ -210,18 +217,25 @@ mod test {
     fn alloc() {
         let guard = unsafe { unprotected() };
         let table = PageTable::default();
-        assert_eq!(table.alloc(guard), Some(0));
         assert_eq!(table.alloc(guard), Some(1));
-        table.dealloc(0, guard);
+        assert_eq!(table.alloc(guard), Some(2));
         table.dealloc(1, guard);
+        table.dealloc(2, guard);
+        assert_eq!(table.alloc(guard), Some(2));
         assert_eq!(table.alloc(guard), Some(1));
-        assert_eq!(table.alloc(guard), Some(0));
     }
 
     #[test]
     fn index() {
         let table = PageTable::default();
-        for i in [0, L0_MAX - 1, L0_MAX, L1_MAX - 1, L1_MAX, L2_MAX - 1] {
+        for i in [
+            0,
+            L0_FANOUT - 1,
+            L0_FANOUT,
+            L1_FANOUT - 1,
+            L1_FANOUT,
+            L2_FANOUT - 1,
+        ] {
             table.set(i, i);
             assert_eq!(table.get(i), i);
         }
