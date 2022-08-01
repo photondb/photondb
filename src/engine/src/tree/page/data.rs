@@ -1,7 +1,6 @@
 use std::{
     cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd},
     mem::size_of,
-    ops::Range,
 };
 
 use super::{BufReader, BufWriter, Comparable};
@@ -216,24 +215,5 @@ impl Decodable for Index {
         let id = r.get_u64();
         let ver = r.get_u64();
         Self::new(id, ver)
-    }
-}
-
-impl<T: Encodable> Encodable for Range<T> {
-    fn encode_size(&self) -> usize {
-        self.start.encode_size() + self.end.encode_size()
-    }
-
-    unsafe fn encode_to(&self, w: &mut BufWriter) {
-        self.start.encode_to(w);
-        self.end.encode_to(w);
-    }
-}
-
-impl<T: Decodable> Decodable for Range<T> {
-    unsafe fn decode_from(r: &mut BufReader) -> Self {
-        let start = T::decode_from(r);
-        let end = T::decode_from(r);
-        start..end
     }
 }

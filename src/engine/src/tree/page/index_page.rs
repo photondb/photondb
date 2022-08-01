@@ -7,23 +7,11 @@ pub struct IndexPageBuilder(SortedPageBuilder);
 
 impl Default for IndexPageBuilder {
     fn default() -> Self {
-        Self::new(PageKind::Index, false)
+        Self(SortedPageBuilder::new(PageKind::Index, false))
     }
 }
 
 impl IndexPageBuilder {
-    pub fn new(kind: PageKind, is_leaf: bool) -> Self {
-        Self(SortedPageBuilder::new(kind, is_leaf))
-    }
-
-    /// Builds an empty index page.
-    pub fn build<A>(self, alloc: &A) -> Result<PagePtr, A::Error>
-    where
-        A: PageAlloc,
-    {
-        self.0.build(alloc)
-    }
-
     /// Builds an index page with entries from the given iterator.
     pub fn build_from_iter<'a, A, I>(self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
     where

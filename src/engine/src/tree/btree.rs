@@ -377,9 +377,8 @@ impl BTree {
         let right_id = self.table.alloc(ghost.guard()).ok_or(Error::Alloc)?;
         self.table.set(right_id, right_page.into());
         let split = || -> Result<()> {
-            let mut split_iter = OptionIter::from((split_key, Index::with_id(right_id)));
-            let mut split_page = IndexPageBuilder::new(PageKind::Split, left_page.is_leaf())
-                .build_from_iter(&self.cache, &mut split_iter)
+            let mut split_page = SplitPageBuilder::new(left_page.is_leaf())
+                .build_with_index(&self.cache, split_key, Index::with_id(right_id))
                 .map_err(|err| {
                     unsafe { self.cache.dealloc(right_page) };
                     err
