@@ -149,7 +149,11 @@ impl BTree {
         }
     }
 
-    async fn load_page_with_addr<'g>(&self, _: u64, addr: PageAddr) -> Result<Option<PageRef<'g>>> {
+    async fn load_page_with_addr<'a, 'g>(
+        &'a self,
+        _: u64,
+        addr: PageAddr,
+    ) -> Result<Option<PageRef<'g>>> {
         match addr {
             PageAddr::Mem(addr) => Ok(unsafe { PageRef::new(addr as *mut u8) }),
             PageAddr::Disk(_) => {
@@ -159,7 +163,11 @@ impl BTree {
         }
     }
 
-    async fn load_page_with_view<'g>(&self, _: u64, view: PageView<'g>) -> Result<PageRef<'g>> {
+    async fn load_page_with_view<'a, 'g>(
+        &'a self,
+        _: u64,
+        view: PageView<'g>,
+    ) -> Result<PageRef<'g>> {
         match view {
             PageView::Mem(page) => Ok(page),
             PageView::Disk(_, _) => {
@@ -258,10 +266,10 @@ impl BTree {
         Ok(merger.build().into())
     }
 
-    async fn search_data_node<'g>(
+    async fn search_data_node<'k, 'g>(
         &self,
         node: Node<'g>,
-        target: Key<'_>,
+        target: Key<'k>,
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.traverse_node(node, |page| {
@@ -284,8 +292,10 @@ impl BTree {
             if page.kind() == PageKind::Index {
                 let page = IndexPageRef::from(page);
                 if let Some((_, v)) = page.find(target) {
-                    value = v.into();
-                    return true;
+                    if v != NULL_INDEX {
+                        value = v.into();
+                        return true;
+                    }
                 }
             }
             false
@@ -338,17 +348,18 @@ impl BTree {
     ) -> Result<PageRef<'g>> {
         let split_index = split.get();
         let mut index_iter = self.iter_index_node(node).await?;
-        // TODO
-        // index_iter.seek_back(index.0);
+        index_iter.seek_back(&split_index.0);
         let mut left_index = index_iter.next().unwrap().clone();
-        left_index.1.ver = split_index.1.ver;
+        left_index.1.ver = split.ver();
 
         let delta_page = if let Some((k, _)) = index_iter.next() {
             let delta_data = [left_index, split_index, (k, NULL_INDEX)];
+            //println!("reconcile split node {} {:?}", node.id, delta_data);
             let mut delta_iter = SliceIter::from(&delta_data);
             IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
         } else {
             let delta_data = [left_index, split_index];
+            //println!("reconcile split node {} {:?}", node.id, delta_data);
             let mut delta_iter = SliceIter::from(&delta_data);
             IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
         };
@@ -391,14 +402,15 @@ impl BTree {
     ) -> Result<PageRef<'g>> {
         let right_id = self.install_node(right_page, ghost)?;
         let split = || {
-            let mut split_page = SplitPageBuilder::new(left_page.is_leaf()).build_with_index(
+            let mut split_page = SplitPageBuilder::default().build_with_index(
                 &self.cache,
                 split_key,
                 Index::with_id(right_id),
             )?;
             split_page.set_ver(left_page.ver() + 1);
-            split_page.set_rank(left_page.rank());
+            split_page.set_rank(left_page.rank() + 1);
             split_page.set_next(left_page.into());
+            split_page.set_leaf(left_page.is_leaf());
             self.update_node(left_id, left_page, split_page)
         };
         split().map_err(|err| {
@@ -410,6 +422,7 @@ impl BTree {
     fn split_data_node<'g>(&self, id: u64, page: PageRef<'g>, ghost: &'g Ghost) -> Result<()> {
         let data_page = DataPageRef::from(page);
         if let Some((sep, mut iter)) = data_page.split() {
+            println!("split at {:?}", sep);
             let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
             self.install_split(id, page, sep.raw, right_page.into(), ghost)
                 .map_err(|err| unsafe {
@@ -425,6 +438,9 @@ impl BTree {
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
         let page = self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
+        // println!("consolidate data node {}", node.id);
+        // iter.rewind();
+        // iter.print();
         // let _ = self.split_data_node(node.id, page, ghost);
         Ok(())
     }

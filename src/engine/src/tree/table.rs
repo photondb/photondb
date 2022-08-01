@@ -35,8 +35,10 @@ mod test {
 
     async fn open_table() -> Table {
         let opts = Options {
-            data_node_size: 64,
+            data_node_size: 1024,
             data_delta_length: 4,
+            index_node_size: 128,
+            index_delta_length: 4,
             ..Default::default()
         };
         Table::open(opts).await.unwrap()
@@ -57,12 +59,13 @@ mod test {
 
     #[tokio::test]
     async fn large_dataset() {
-        const N: u64 = 1024;
+        const N: u64 = 128;
         let table = open_table().await;
         for i in 0..N {
             let buf = i.to_be_bytes();
             let key = buf.as_slice();
             let value = buf.as_slice();
+            println!("put {}", i);
             table.put(key, i, value).await.unwrap();
             let got_value = table.get(key, i).await.unwrap().unwrap();
             assert_eq!(got_value, value);
@@ -71,6 +74,7 @@ mod test {
             let buf = i.to_be_bytes();
             let key = buf.as_slice();
             let value = buf.as_slice();
+            println!("get {}", i);
             let got_value = table.get(key, i).await.unwrap().unwrap();
             assert_eq!(got_value, value);
         }

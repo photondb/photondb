@@ -70,7 +70,6 @@ impl SortedPageBuilder {
 }
 
 struct SortedPageBuf {
-    base: PagePtr,
     offsets: *mut u32,
     content: BufWriter,
     current: usize,
@@ -82,7 +81,6 @@ impl SortedPageBuf {
         let mut content = BufWriter::new(base.content_mut());
         content.skip(builder.offsets_size);
         Self {
-            base,
             offsets,
             content,
             current: 0,
@@ -253,7 +251,7 @@ where
     }
 
     pub fn skip(&mut self, n: usize) {
-        self.next = (self.next + n).max(self.page.len());
+        self.next = (self.next + n).min(self.page.len());
     }
 }
 
@@ -290,6 +288,29 @@ where
         self.next = match self.page.search(target) {
             Ok(i) => i,
             Err(i) => i,
+        };
+        self.last = None;
+    }
+}
+
+impl<'a, K, V> DoubleEndedSeekableIter for SortedPageIter<'a, K, V>
+where
+    K: Decodable + Ord,
+    V: Decodable,
+{
+    fn seek_back<T>(&mut self, target: &T)
+    where
+        T: Comparable<K>,
+    {
+        self.next = match self.page.search(target) {
+            Ok(i) => i,
+            Err(i) => {
+                if i > 0 {
+                    i - 1
+                } else {
+                    self.page.len()
+                }
+            }
         };
         self.last = None;
     }

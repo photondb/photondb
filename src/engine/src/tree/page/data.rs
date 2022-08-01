@@ -199,6 +199,14 @@ impl Index {
     }
 }
 
+impl Eq for Index {}
+
+impl PartialEq for Index {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.ver == other.ver
+    }
+}
+
 impl Encodable for Index {
     fn encode_size(&self) -> usize {
         size_of::<u64>() * 2

@@ -41,6 +41,10 @@ impl<'a> DataPageRef<'a> {
         Self(unsafe { SortedPageRef::new(base) })
     }
 
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn find(&self, target: Key<'_>) -> Option<(Key<'a>, Value<'a>)> {
         if let Some((k, v)) = self.0.seek(&target) {
             if k.raw == target.raw {
@@ -56,7 +60,7 @@ impl<'a> DataPageRef<'a> {
 
     pub fn split(&self) -> Option<(Key<'a>, DataPageSplitIter<'a>)> {
         if let Some((k, _)) = self.0.get(self.0.len() / 2) {
-            let sep = Key::new(k.raw, 0);
+            let sep = Key::new(k.raw, u64::MAX);
             let rank = match self.0.search(&sep) {
                 Ok(i) => i,
                 Err(i) => i,
@@ -143,7 +147,8 @@ pub struct DataPageSplitIter<'a> {
 }
 
 impl<'a> DataPageSplitIter<'a> {
-    fn new(base: DataPageIter<'a>, skip: usize) -> Self {
+    fn new(mut base: DataPageIter<'a>, skip: usize) -> Self {
+        base.skip(skip);
         Self { base, skip }
     }
 }

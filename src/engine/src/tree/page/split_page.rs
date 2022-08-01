@@ -5,11 +5,13 @@ use super::*;
 /// A builder to create split pages.
 pub struct SplitPageBuilder(SortedPageBuilder);
 
-impl SplitPageBuilder {
-    pub fn new(is_leaf: bool) -> Self {
-        Self(SortedPageBuilder::new(PageKind::Split, is_leaf))
+impl Default for SplitPageBuilder {
+    fn default() -> Self {
+        Self(SortedPageBuilder::new(PageKind::Split, true))
     }
+}
 
+impl SplitPageBuilder {
     pub fn build_with_index<A>(
         self,
         alloc: &A,

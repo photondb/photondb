@@ -33,6 +33,10 @@ impl<'a> IndexPageRef<'a> {
         Self(unsafe { SortedPageRef::new(base) })
     }
 
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
     pub fn find(&self, target: &[u8]) -> Option<(&'a [u8], Index)> {
         self.0.seek_back(&target)
     }
@@ -96,6 +100,15 @@ impl<'a> SeekableIter for IndexPageIter<'a> {
         T: Comparable<Self::Key>,
     {
         self.0.seek(target);
+    }
+}
+
+impl<'a> DoubleEndedSeekableIter for IndexPageIter<'a> {
+    fn seek_back<T>(&mut self, target: &T)
+    where
+        T: Comparable<Self::Key>,
+    {
+        self.0.seek_back(target);
     }
 }
 
