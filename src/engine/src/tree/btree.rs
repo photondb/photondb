@@ -9,6 +9,7 @@ use super::{
 };
 
 const ROOT_INDEX: Index = Index::with_id(PageTable::MIN);
+const NULL_INDEX: Index = Index::with_id(PageTable::NAN);
 
 pub struct Node<'a> {
     pub id: u64,
@@ -247,10 +248,10 @@ impl BTree {
         Ok(merger.build().into())
     }
 
-    async fn search_data_node<'n, 'g>(
+    async fn search_data_node<'k, 'n, 'g>(
         &self,
         node: &'n Node<'g>,
-        target: Key<'_>,
+        target: Key<'k>,
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.walk_node(node, |page| {
@@ -267,10 +268,10 @@ impl BTree {
         Ok(value)
     }
 
-    async fn search_index_node<'n, 'g>(
+    async fn search_index_node<'k, 'n, 'g>(
         &self,
         node: &'n Node<'g>,
-        target: &[u8],
+        target: &'k [u8],
     ) -> Result<Option<Index>> {
         let mut value = None;
         self.walk_node(node, |page| {
@@ -305,18 +306,38 @@ impl BTree {
         }
     }
 
-    fn try_replace_node<'g>(&self, node: &Node<'g>, page: PagePtr, ghost: &'g Ghost) -> Result<()> {
-        let addr = node.view.as_addr();
-        match self.table.cas(node.id, addr.into(), page.into()) {
-            Ok(_) => {
-                self.dealloc_chain(addr, ghost);
-                Ok(())
-            }
-            Err(_) => {
-                unsafe { self.cache.dealloc(page) };
-                Err(Error::Again)
-            }
-        }
+    fn try_install_node<'g>(&self, new: impl Into<u64>, ghost: &'g Ghost) -> Result<u64> {
+        let id = self.table.alloc(ghost.guard()).ok_or(Error::Alloc)?;
+        self.table.set(id, new.into());
+        Ok(id)
+    }
+
+    fn try_update_node<'g>(
+        &self,
+        id: u64,
+        old: impl Into<u64>,
+        new: PagePtr,
+        _: &'g Ghost,
+    ) -> Result<()> {
+        self.table
+            .cas(id, old.into(), new.into())
+            .map(|_| ())
+            .map_err(|_| unsafe {
+                self.cache.dealloc(new);
+                Error::Again
+            })
+    }
+
+    fn try_replace_node<'g>(
+        &self,
+        id: u64,
+        old: PageAddr,
+        new: PagePtr,
+        ghost: &'g Ghost,
+    ) -> Result<()> {
+        self.try_update_node(id, old, new, ghost).map(|_| {
+            self.dealloc_chain(old, ghost);
+        })
     }
 
     async fn try_reconcile_node<'n, 'g>(
@@ -327,43 +348,65 @@ impl BTree {
     ) -> Result<()> {
         let page = self.load_page_with_view(node.id, &node.view).await?;
         if page.kind() == PageKind::Split {
-            let split = IndexPageRef::from(page);
+            let split = SplitPageRef::from(page);
             if let Some(parent) = parent {
-                self.try_reconcile_split_node(split, parent)?;
+                self.try_reconcile_split_node(parent, split, ghost).await?;
             } else {
-                self.try_reconcile_split_root(node.id, split, ghost)?;
+                self.try_reconcile_split_root(node, split, ghost)?;
             }
         }
         Ok(())
     }
 
-    fn try_reconcile_split_node<'g>(
+    async fn try_reconcile_split_node<'n, 'g>(
         &self,
-        split: IndexPageRef<'g>,
-        parent: &Node<'g>,
-    ) -> Result<()> {
-        /*
-        let mut delta = split.clone_with(&self.cache, PageKind::Data, false)?;
-        delta.set_kind(PageKind::Data);
-        delta.set_leaf(false);
-        self.table
-            .cas(parent.id, parent.view.as_addr().into(), delta.into())
-            .map_err(|_| {
-                unsafe { self.cache.dealloc(delta) };
-                Error::Again
-            })?;
-        Ok(())
-        */
-        todo!()
-    }
-
-    fn try_reconcile_split_root<'g>(
-        &self,
-        id: u64,
-        page: IndexPageRef<'g>,
+        node: &'n Node<'g>,
+        split: SplitPageRef<'g>,
         ghost: &'g Ghost,
     ) -> Result<()> {
-        todo!()
+        let split_index = split.get();
+        let mut index_iter = self.iter_index_node(node).await?;
+        // index_iter.seek_back(index.0);
+        let left_index = index_iter.next().unwrap().clone();
+
+        let delta_page = if let Some((k, v)) = index_iter.next() {
+            let delta_data = [left_index, split_index, (k, NULL_INDEX)];
+            let mut delta_iter = SliceIter::from(&delta_data);
+            IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
+        } else {
+            let delta_data = [left_index, split_index];
+            let mut delta_iter = SliceIter::from(&delta_data);
+            IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
+        };
+
+        self.try_update_node(node.id, node.view.as_addr(), delta_page, ghost)
+    }
+
+    fn try_reconcile_split_root<'n, 'g>(
+        &self,
+        node: &'n Node<'g>,
+        split: SplitPageRef<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<()> {
+        assert_eq!(node.id, ROOT_INDEX.id);
+
+        // Links the original root to a new place.
+        let root_addr = node.view.as_addr();
+        let left_id = self.try_install_node(root_addr, ghost)?;
+
+        // Builds a new root with the original root in the left and the split node in the right.
+        let left_index = Index::new(left_id, node.view.ver());
+        let split_index = split.get();
+        let root_data = [([].as_slice(), left_index), split_index];
+        let mut root_iter = SliceIter::from(&root_data);
+        let root_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
+
+        // Replaces the original root with the new root.
+        self.try_update_node(node.id, root_addr, root_page, ghost)
+            .map_err(|err| {
+                self.table.dealloc(left_id, ghost.guard());
+                err
+            })
     }
 
     fn try_install_split<'g>(
@@ -374,28 +417,17 @@ impl BTree {
         right_page: PagePtr,
         ghost: &'g Ghost,
     ) -> Result<()> {
-        let right_id = self.table.alloc(ghost.guard()).ok_or(Error::Alloc)?;
-        self.table.set(right_id, right_page.into());
+        let right_id = self.try_install_node(right_page, ghost)?;
         let split = || -> Result<()> {
-            let mut split_page = SplitPageBuilder::new(left_page.is_leaf())
-                .build_with_index(&self.cache, split_key, Index::with_id(right_id))
-                .map_err(|err| {
-                    unsafe { self.cache.dealloc(right_page) };
-                    err
-                })?;
+            let mut split_page = SplitPageBuilder::new(left_page.is_leaf()).build_with_index(
+                &self.cache,
+                split_key,
+                Index::with_id(right_id),
+            )?;
             split_page.set_ver(left_page.ver() + 1);
             split_page.set_rank(left_page.rank());
             split_page.set_next(left_page.into());
-            self.table
-                .cas(left_id, left_page.into(), split_page.into())
-                .map(|_| ())
-                .map_err(|_| {
-                    unsafe {
-                        self.cache.dealloc(right_page);
-                        self.cache.dealloc(split_page);
-                    }
-                    Error::Again
-                })
+            self.try_update_node(left_id, left_page, split_page, ghost)
         };
         split().map_err(|err| {
             self.table.dealloc(right_id, ghost.guard());
@@ -407,7 +439,11 @@ impl BTree {
         let data_page = DataPageRef::from(page);
         if let Some((sep, mut iter)) = data_page.split() {
             let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-            self.try_install_split(id, page, sep.raw, right_page, ghost)?;
+            self.try_install_split(id, page, sep.raw, right_page, ghost)
+                .map_err(|err| unsafe {
+                    self.cache.dealloc(right_page);
+                    err
+                })?;
         }
         Ok(())
     }
@@ -416,7 +452,7 @@ impl BTree {
         let mut iter = self.iter_data_node(node).await?;
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
-        self.try_replace_node(node, page, ghost)?;
+        self.try_replace_node(node.id, node.view.as_addr(), page, ghost)?;
         // let _ = self.try_split_data_node(node.id, page.as_ref(), ghost);
         Ok(())
     }
@@ -429,7 +465,7 @@ impl BTree {
         let mut iter = self.iter_index_node(node).await?;
         let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
-        self.try_replace_node(node, page, ghost)?;
+        self.try_replace_node(node.id, node.view.as_addr(), page, ghost)?;
         Ok(())
     }
 }
