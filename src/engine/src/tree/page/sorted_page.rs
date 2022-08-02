@@ -293,29 +293,6 @@ where
     }
 }
 
-impl<'a, K, V> DoubleEndedSeekableIter for SortedPageIter<'a, K, V>
-where
-    K: Decodable + Ord,
-    V: Decodable,
-{
-    fn seek_back<T>(&mut self, target: &T)
-    where
-        T: Comparable<K>,
-    {
-        self.next = match self.page.search(target) {
-            Ok(i) => i,
-            Err(i) => {
-                if i > 0 {
-                    i - 1
-                } else {
-                    self.page.len()
-                }
-            }
-        };
-        self.last = None;
-    }
-}
-
 impl<'a, K, V> RewindableIter for SortedPageIter<'a, K, V>
 where
     K: Decodable + Ord,

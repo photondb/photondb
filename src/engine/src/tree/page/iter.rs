@@ -60,21 +60,9 @@ pub trait SeekableIter: ForwardIter {
         T: Comparable<Self::Key>;
 }
 
-pub trait DoubleEndedSeekableIter: SeekableIter {
-    /// Positions the next entry at or before `target`.
-    fn seek_back<T>(&mut self, target: &T)
-    where
-        T: Comparable<Self::Key>;
-}
-
 pub trait RewindableIter: ForwardIter {
     /// Positions the next entry at the front.
     fn rewind(&mut self);
-}
-
-pub trait DoubleEndedRewindableIter: RewindableIter {
-    /// Positions the next entry at the back.
-    fn rewind_back(&mut self);
 }
 
 /// Extends `ForwardIter` with a method to print entries.
@@ -361,33 +349,12 @@ where
     }
 }
 
-impl<I> DoubleEndedSeekableIter for MergingIter<I>
-where
-    I: DoubleEndedSeekableIter,
-{
-    fn seek_back<T>(&mut self, target: &T)
-    where
-        T: Comparable<I::Key>,
-    {
-        self.reset(|iter| iter.seek_back(target));
-    }
-}
-
 impl<I> RewindableIter for MergingIter<I>
 where
     I: RewindableIter,
 {
     fn rewind(&mut self) {
         self.reset(|iter| iter.rewind());
-    }
-}
-
-impl<I> DoubleEndedRewindableIter for MergingIter<I>
-where
-    I: DoubleEndedRewindableIter,
-{
-    fn rewind_back(&mut self) {
-        self.reset(|iter| iter.rewind_back());
     }
 }
 

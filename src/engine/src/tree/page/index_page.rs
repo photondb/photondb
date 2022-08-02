@@ -33,8 +33,26 @@ impl<'a> IndexPageRef<'a> {
         Self(unsafe { SortedPageRef::new(base) })
     }
 
+    /// Returns the entry that covers `target`.
     pub fn find(&self, target: &[u8]) -> Option<(&'a [u8], Index)> {
         self.0.seek_back(&target)
+    }
+
+    /// Returns the two entries that enclose `target`.
+    pub fn find_range(
+        &self,
+        target: &[u8],
+    ) -> (Option<(&'a [u8], Index)>, Option<(&'a [u8], Index)>) {
+        match self.0.search(&target) {
+            Ok(i) => (self.0.get(i), self.0.get(i + 1)),
+            Err(i) => {
+                if i > 0 {
+                    (self.0.get(i - 1), self.0.get(i))
+                } else {
+                    (None, self.0.get(i))
+                }
+            }
+        }
     }
 
     pub fn iter(&self) -> IndexPageIter<'a> {
@@ -96,15 +114,6 @@ impl<'a> SeekableIter for IndexPageIter<'a> {
         T: Comparable<Self::Key>,
     {
         self.0.seek(target);
-    }
-}
-
-impl<'a> DoubleEndedSeekableIter for IndexPageIter<'a> {
-    fn seek_back<T>(&mut self, target: &T)
-    where
-        T: Comparable<Self::Key>,
-    {
-        self.0.seek_back(target);
     }
 }
 
