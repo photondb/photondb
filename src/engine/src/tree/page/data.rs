@@ -58,7 +58,7 @@ impl Decodable for &[u8] {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Key<'a> {
     pub raw: &'a [u8],
     pub lsn: u64,
@@ -67,14 +67,6 @@ pub struct Key<'a> {
 impl<'a> Key<'a> {
     pub const fn new(raw: &'a [u8], lsn: u64) -> Self {
         Self { raw, lsn }
-    }
-}
-
-impl Eq for Key<'_> {}
-
-impl PartialEq for Key<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.raw == other.raw && self.lsn == other.lsn
     }
 }
 
@@ -119,7 +111,7 @@ impl Decodable for Key<'_> {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ValueKind {
     Put = 0,
     Delete = 1,
@@ -135,7 +127,7 @@ impl From<u8> for ValueKind {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Value<'a> {
     Put(&'a [u8]),
     Delete,
@@ -182,7 +174,7 @@ impl<'a> From<Value<'a>> for Option<&'a [u8]> {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Index {
     pub id: u64,
     pub ver: u64,
@@ -196,14 +188,6 @@ impl Index {
     /// Creates an index with the given id and a default version.
     pub const fn with_id(id: u64) -> Self {
         Self::new(id, 0)
-    }
-}
-
-impl Eq for Index {}
-
-impl PartialEq for Index {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.ver == other.ver
     }
 }
 

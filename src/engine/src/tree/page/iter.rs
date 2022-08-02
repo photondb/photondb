@@ -382,6 +382,15 @@ where
     }
 }
 
+impl<I> DoubleEndedRewindableIter for MergingIter<I>
+where
+    I: DoubleEndedRewindableIter,
+{
+    fn rewind_back(&mut self) {
+        self.reset(|iter| iter.rewind_back());
+    }
+}
+
 /// A builder to create `MergingIter`.
 pub struct MergingIterBuilder<I> {
     children: Vec<ReverseIter<I>>,

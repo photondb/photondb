@@ -41,10 +41,6 @@ impl<'a> DataPageRef<'a> {
         Self(unsafe { SortedPageRef::new(base) })
     }
 
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
     pub fn find(&self, target: Key<'_>) -> Option<(Key<'a>, Value<'a>)> {
         if let Some((k, v)) = self.0.seek(&target) {
             if k.raw == target.raw {

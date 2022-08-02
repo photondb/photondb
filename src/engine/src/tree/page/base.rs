@@ -6,7 +6,7 @@ const PAGE_HEADER_SIZE: usize = 20;
 const PAGE_VERSION_MAX: u64 = (1 << 48) - 1;
 const PAGE_VERSION_SIZE: usize = 6;
 
-/// A non-null page pointer.
+/// A non-null pointer to a page.
 #[derive(Copy, Clone)]
 pub struct PagePtr(NonNull<u8>);
 
@@ -155,7 +155,7 @@ impl From<PagePtr> for u64 {
     }
 }
 
-/// An immutable page reference.
+/// An immutable reference to a page.
 #[derive(Copy, Clone)]
 pub struct PageRef<'a> {
     ptr: PagePtr,

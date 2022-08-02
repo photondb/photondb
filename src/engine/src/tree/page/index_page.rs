@@ -33,10 +33,6 @@ impl<'a> IndexPageRef<'a> {
         Self(unsafe { SortedPageRef::new(base) })
     }
 
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
     pub fn find(&self, target: &[u8]) -> Option<(&'a [u8], Index)> {
         self.0.seek_back(&target)
     }
