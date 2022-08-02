@@ -4,7 +4,7 @@ use crate::tree::{page::PagePtr, Options, Result};
 pub struct PageInfo {
     pub ver: u64,
     pub rank: u8,
-    pub is_leaf: bool,
+    pub is_data: bool,
 }
 
 pub struct PageStore {}

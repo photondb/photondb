@@ -37,10 +37,11 @@ pub struct DataPageRef<'a>(SortedPageRef<'a, Key<'a>, Value<'a>>);
 impl<'a> DataPageRef<'a> {
     pub fn new(base: PageRef<'a>) -> Self {
         assert_eq!(base.kind(), PageKind::Data);
-        assert_eq!(base.is_leaf(), true);
+        assert_eq!(base.is_data(), true);
         Self(unsafe { SortedPageRef::new(base) })
     }
 
+    /// Returns the entry that matches `target`.
     pub fn find(&self, target: Key<'_>) -> Option<(Key<'a>, Value<'a>)> {
         if let Some((k, v)) = self.0.seek(&target) {
             if k.raw == target.raw {
@@ -54,16 +55,17 @@ impl<'a> DataPageRef<'a> {
         DataPageIter::new(self.clone())
     }
 
-    pub fn split(&self) -> Option<(Key<'a>, DataPageSplitIter<'a>)> {
-        if let Some((k, _)) = self.0.get(self.0.len() / 2) {
-            let sep = Key::new(k.raw, u64::MAX);
+    pub fn split(&self) -> Option<(&'a [u8], DataPageSplitIter<'a>)> {
+        if let Some((mut sep, _)) = self.0.get(self.0.len() / 2) {
+            // Avoids splitting entries of the same raw key.
+            sep.lsn = u64::MAX;
             let rank = match self.0.search(&sep) {
                 Ok(i) => i,
                 Err(i) => i,
             };
             if rank > 0 {
                 let iter = DataPageSplitIter::new(self.iter(), rank);
-                return Some((sep, iter));
+                return Some((sep.raw, iter));
             }
         }
         None
@@ -94,10 +96,6 @@ impl<'a> DataPageIter<'a> {
     pub fn new(page: DataPageRef<'a>) -> Self {
         Self(SortedPageIter::new(page.0))
     }
-
-    pub fn skip(&mut self, n: usize) {
-        self.0.skip(n)
-    }
 }
 
 impl<'a, T> From<T> for DataPageIter<'a>
@@ -119,6 +117,14 @@ impl<'a> ForwardIter for DataPageIter<'a> {
 
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
         self.0.next()
+    }
+
+    fn skip(&mut self, n: usize) {
+        self.0.skip(n)
+    }
+
+    fn skip_all(&mut self) {
+        self.0.skip_all()
     }
 }
 
@@ -159,6 +165,14 @@ impl<'a> ForwardIter for DataPageSplitIter<'a> {
 
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
         self.base.next()
+    }
+
+    fn skip(&mut self, n: usize) {
+        self.base.skip(n)
+    }
+
+    fn skip_all(&mut self) {
+        self.base.skip_all()
     }
 }
 

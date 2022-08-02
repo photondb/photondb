@@ -52,9 +52,16 @@ pub trait ForwardIter {
     /// Advances to the next entry and returns it.
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)>;
 
+    /// Skips the next `n` entries.
+    fn skip(&mut self, mut n: usize) {
+        while self.next().is_some() && n > 0 {
+            n -= 1;
+        }
+    }
+
     /// Skips all entries.
     fn skip_all(&mut self) {
-        while let Some(_) = self.next() {}
+        while self.next().is_some() {}
     }
 }
 

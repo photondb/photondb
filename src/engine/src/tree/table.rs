@@ -36,7 +36,7 @@ mod tests {
     use super::*;
 
     fn init() {
-        env_logger::init();
+        let _ = env_logger::builder().try_init();
     }
 
     async fn open_table() -> Table {

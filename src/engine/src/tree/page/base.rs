@@ -1,4 +1,4 @@
-use std::{alloc::Layout, marker::PhantomData, ops::Deref, ptr::NonNull};
+use std::{alloc::Layout, fmt, marker::PhantomData, ops::Deref, ptr::NonNull};
 
 // Page header: ver (6B) | rank (1B) | tags (1B) | next (8B) | content_size (4B) |
 const PAGE_ALIGNMENT: usize = 8;
@@ -106,13 +106,13 @@ impl PagePtr {
         self.set_tags(self.tags().with_kind(kind));
     }
 
-    /// Returns true if this is a leaf page.
-    pub fn is_leaf(&self) -> bool {
-        self.tags().is_leaf()
+    /// Returns true if this is a data page.
+    pub fn is_data(&self) -> bool {
+        self.tags().is_data()
     }
 
-    pub fn set_leaf(&mut self, is_leaf: bool) {
-        self.set_tags(self.tags().with_leaf(is_leaf));
+    pub fn set_data(&mut self, is_data: bool) {
+        self.set_tags(self.tags().with_data(is_data));
     }
 
     /// Sets the page header as default.
@@ -130,12 +130,12 @@ impl PagePtr {
         unsafe { self.as_raw().add(PAGE_HEADER_SIZE) }
     }
 
-    /// Returns the page size.
+    /// Returns the size of the page.
     pub fn size(&self) -> usize {
         PAGE_HEADER_SIZE + self.content_size() as usize
     }
 
-    /// Returns the page content size.
+    /// Returns the size of the page content.
     pub fn content_size(&self) -> usize {
         let size = unsafe { self.content_size_ptr().read() };
         u32::from_le(size) as usize
@@ -152,6 +152,19 @@ impl PagePtr {
 impl From<PagePtr> for u64 {
     fn from(ptr: PagePtr) -> Self {
         ptr.as_raw() as u64
+    }
+}
+
+impl fmt::Debug for PagePtr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Page")
+            .field("ver", &self.ver())
+            .field("rank", &self.rank())
+            .field("next", &self.next())
+            .field("kind", &self.kind())
+            .field("is_data", &self.is_data())
+            .field("content_size", &self.content_size())
+            .finish()
     }
 }
 
@@ -207,19 +220,19 @@ impl PageTags {
     }
 
     const fn with_kind(self, kind: PageKind) -> Self {
-        Self(self.leaf() | kind as u8)
+        Self(self.data() | kind as u8)
     }
 
-    const fn leaf(self) -> u8 {
+    const fn data(self) -> u8 {
         self.0 & !PAGE_KIND_MASK
     }
 
-    const fn is_leaf(self) -> bool {
-        self.leaf() == 0
+    const fn is_data(self) -> bool {
+        self.data() == 0
     }
 
-    const fn with_leaf(self, is_leaf: bool) -> Self {
-        if is_leaf {
+    const fn with_data(self, is_data: bool) -> Self {
+        if is_data {
             Self(self.0 & PAGE_KIND_MASK)
         } else {
             Self(self.0 | !PAGE_KIND_MASK)
@@ -287,12 +300,12 @@ pub unsafe trait PageAlloc {
 /// A builder to create base pages.
 pub struct PageBuilder {
     kind: PageKind,
-    is_leaf: bool,
+    is_data: bool,
 }
 
 impl PageBuilder {
-    pub fn new(kind: PageKind, is_leaf: bool) -> Self {
-        Self { kind, is_leaf }
+    pub fn new(kind: PageKind, is_data: bool) -> Self {
+        Self { kind, is_data }
     }
 
     pub fn build<A>(&self, alloc: &A, content_size: usize) -> Result<PagePtr, A::Error>
@@ -303,7 +316,7 @@ impl PageBuilder {
         ptr.map(|mut ptr| {
             ptr.set_default();
             ptr.set_kind(self.kind);
-            ptr.set_leaf(self.is_leaf);
+            ptr.set_data(self.is_data);
             ptr.set_content_size(content_size);
             ptr
         })
@@ -361,9 +374,9 @@ pub mod tests {
         ptr.set_kind(PageKind::Split);
         assert_eq!(ptr.kind(), PageKind::Split);
 
-        assert_eq!(ptr.is_leaf(), true);
-        ptr.set_leaf(false);
-        assert_eq!(ptr.is_leaf(), false);
+        assert_eq!(ptr.is_data(), true);
+        ptr.set_data(false);
+        assert_eq!(ptr.is_data(), false);
 
         assert_eq!(ptr.content_size(), 0);
         ptr.set_content_size(4);

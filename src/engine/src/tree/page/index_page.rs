@@ -29,11 +29,11 @@ pub struct IndexPageRef<'a>(SortedPageRef<'a, &'a [u8], Index>);
 impl<'a> IndexPageRef<'a> {
     pub fn new(base: PageRef<'a>) -> Self {
         assert_eq!(base.kind(), PageKind::Index);
-        assert_eq!(base.is_leaf(), false);
+        assert_eq!(base.is_data(), false);
         Self(unsafe { SortedPageRef::new(base) })
     }
 
-    /// Returns the entry that covers `target`.
+    /// Returns the entry that contains `target`.
     pub fn find(&self, target: &[u8]) -> Option<(&'a [u8], Index)> {
         self.0.seek_back(&target)
     }
@@ -44,14 +44,8 @@ impl<'a> IndexPageRef<'a> {
         target: &[u8],
     ) -> (Option<(&'a [u8], Index)>, Option<(&'a [u8], Index)>) {
         match self.0.search(&target) {
-            Ok(i) => (self.0.get(i), self.0.get(i + 1)),
-            Err(i) => {
-                if i > 0 {
-                    (self.0.get(i - 1), self.0.get(i))
-                } else {
-                    (None, self.0.get(i))
-                }
-            }
+            Ok(i) => (self.0.get(i), i.checked_add(1).and_then(|i| self.0.get(i))),
+            Err(i) => (i.checked_sub(1).and_then(|i| self.0.get(i)), self.0.get(i)),
         }
     }
 
@@ -98,10 +92,6 @@ impl<'a> IndexPageIter<'a> {
     pub fn new(page: IndexPageRef<'a>) -> Self {
         Self(SortedPageIter::new(page.0))
     }
-
-    pub fn skip(&mut self, n: usize) {
-        self.0.skip(n);
-    }
 }
 
 impl<'a, T> From<T> for IndexPageIter<'a>
@@ -123,6 +113,10 @@ impl<'a> ForwardIter for IndexPageIter<'a> {
 
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
         self.0.next()
+    }
+
+    fn skip(&mut self, n: usize) {
+        self.0.skip(n);
     }
 
     fn skip_all(&mut self) {
@@ -167,6 +161,14 @@ impl<'a> ForwardIter for IndexPageSplitIter<'a> {
 
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
         self.base.next()
+    }
+
+    fn skip(&mut self, n: usize) {
+        self.base.skip(n)
+    }
+
+    fn skip_all(&mut self) {
+        self.base.skip_all()
     }
 }
 

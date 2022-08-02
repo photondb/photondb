@@ -192,19 +192,8 @@ where
     {
         match self.search(target) {
             Ok(i) => self.get(i),
-            Err(i) => {
-                if i > 0 {
-                    self.get(i - 1)
-                } else {
-                    None
-                }
-            }
+            Err(i) => i.checked_sub(1).and_then(|i| self.get(i)),
         }
-    }
-
-    /// Returns an iterator over the entries in the page.
-    pub fn iter(&self) -> SortedPageIter<'a, K, V> {
-        SortedPageIter::new(self.clone())
     }
 
     fn content_at(&self, offset: u32) -> *const u8 {
@@ -249,10 +238,6 @@ where
             last: None,
         }
     }
-
-    pub fn skip(&mut self, n: usize) {
-        self.next = (self.next + n).min(self.page.len());
-    }
 }
 
 impl<'a, K, V> ForwardIter for SortedPageIter<'a, K, V>
@@ -273,6 +258,10 @@ where
             next
         });
         self.last.as_ref()
+    }
+
+    fn skip(&mut self, n: usize) {
+        self.next = self.next.saturating_add(n).min(self.page.len());
     }
 
     fn skip_all(&mut self) {
@@ -320,9 +309,10 @@ mod tests {
             .build_from_iter(&ALLOC, &mut iter)
             .unwrap();
         assert_eq!(page.kind(), PageKind::Data);
-        assert_eq!(page.is_leaf(), true);
+        assert_eq!(page.is_data(), true);
 
         let page = unsafe { SortedPageRef::new(page.into()) };
+        assert_eq!(page.len(), data.len());
         assert_eq!(page.seek(&0), Some((1, 0)));
         assert_eq!(page.seek_back(&0), None);
         assert_eq!(page.seek(&3), Some((4, 0)));
@@ -330,7 +320,7 @@ mod tests {
         assert_eq!(page.seek(&9), None);
         assert_eq!(page.seek_back(&9), Some((8, 0)));
 
-        let mut iter = page.iter();
+        let mut iter = SortedPageIter::new(page);
         assert_eq!(iter.last(), None);
         for _ in 0..2 {
             for item in data.iter() {

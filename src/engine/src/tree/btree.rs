@@ -170,7 +170,7 @@ impl BTree {
         key: Key<'_>,
         ghost: &'g Ghost,
     ) -> Result<Option<&'g [u8]>> {
-        let node = self.find_leaf_node(key.raw, ghost).await?;
+        let node = self.find_data_node(key.raw, ghost).await?;
         self.lookup_value(key, node, ghost).await
     }
 
@@ -210,7 +210,7 @@ impl BTree {
     }
 
     async fn try_update<'g>(&self, key: &[u8], mut page: PagePtr, ghost: &'g Ghost) -> Result<()> {
-        let mut node = self.find_leaf_node(key, ghost).await?;
+        let mut node = self.find_data_node(key, ghost).await?;
         loop {
             page.set_ver(node.view.ver());
             page.set_rank(node.view.rank() + 1);
@@ -240,7 +240,7 @@ impl BTree {
         let mut queue = VecDeque::from([ROOT_INDEX]);
         while let Some(index) = queue.pop_front() {
             let node = self.node(index.id, ghost).unwrap();
-            if node.view.is_leaf() {
+            if node.view.is_data() {
                 trace!("data node {:?} view {:?}", index, node.view);
                 let mut iter = self.iter_data_node(node, ghost).await?;
                 while let Some(item) = iter.next() {
@@ -514,7 +514,7 @@ impl BTree {
         Ok((left_index, right_index))
     }
 
-    async fn find_leaf_node<'a: 'g, 'g>(
+    async fn find_data_node<'a: 'g, 'g>(
         &'a self,
         key: &[u8],
         ghost: &'g Ghost,
@@ -529,7 +529,7 @@ impl BTree {
                 self.reconcile_node(node, parent, ghost).await?;
                 return Err(Error::Again);
             }
-            if node.view.is_leaf() {
+            if node.view.is_data() {
                 return Ok(node);
             }
             // Our access pattern guarantees that the index must exists.
@@ -638,7 +638,7 @@ impl BTree {
             split_page.set_ver(left_page.ver() + 1);
             split_page.set_rank(left_page.rank() + 1);
             split_page.set_next(left_page.into());
-            split_page.set_leaf(left_page.is_leaf());
+            split_page.set_data(left_page.is_data());
             self.update_node(left_id, left_page, split_page, ghost)
         };
         split()
@@ -666,7 +666,7 @@ impl BTree {
         let data_page = DataPageRef::from(page);
         if let Some((sep, mut iter)) = data_page.split() {
             let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-            self.install_split(id, page, sep.raw, right_page.into(), ghost)
+            self.install_split(id, page, sep, right_page.into(), ghost)
                 .map_err(|err| unsafe {
                     self.cache.dealloc(right_page);
                     err
