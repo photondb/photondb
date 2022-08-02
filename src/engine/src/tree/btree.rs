@@ -109,7 +109,7 @@ impl BTree {
                     return Ok(());
                 }
                 Err(addr) => {
-                    if let Some(view) = self.page_view(addr.into(), ghost) {
+                    if let Some(view) = self.page_view(addr.into()) {
                         if view.ver() == node.view.ver() {
                             node.view = view;
                             continue;
@@ -136,7 +136,7 @@ impl BTree {
         Ok(self)
     }
 
-    fn page_view<'g>(&self, addr: PageAddr, _: &'g Ghost) -> Option<PageView<'g>> {
+    fn page_view<'g>(&self, addr: PageAddr) -> Option<PageView<'g>> {
         match addr {
             PageAddr::Mem(addr) => {
                 let page = unsafe { PageRef::new(addr as *mut u8) };
@@ -149,11 +149,7 @@ impl BTree {
         }
     }
 
-    async fn load_page_with_addr<'a, 'g>(
-        &'a self,
-        _: u64,
-        addr: PageAddr,
-    ) -> Result<Option<PageRef<'g>>> {
+    async fn load_page_with_addr<'g>(&self, _: u64, addr: PageAddr) -> Result<Option<PageRef<'g>>> {
         match addr {
             PageAddr::Mem(addr) => Ok(unsafe { PageRef::new(addr as *mut u8) }),
             PageAddr::Disk(_) => {
@@ -163,11 +159,7 @@ impl BTree {
         }
     }
 
-    async fn load_page_with_view<'a, 'g>(
-        &'a self,
-        _: u64,
-        view: PageView<'g>,
-    ) -> Result<PageRef<'g>> {
+    async fn load_page_with_view<'g>(&self, _: u64, view: PageView<'g>) -> Result<PageRef<'g>> {
         match view {
             PageView::Mem(page) => Ok(page),
             PageView::Disk(_, _) => {
@@ -177,9 +169,9 @@ impl BTree {
         }
     }
 
-    fn node<'g>(&self, id: u64, ghost: &'g Ghost) -> Option<Node<'g>> {
+    fn node<'g>(&self, id: u64) -> Option<Node<'g>> {
         let addr = self.table.get(id).into();
-        self.page_view(addr, ghost).map(|view| Node { id, view })
+        self.page_view(addr).map(|view| Node { id, view })
     }
 
     fn update_node<'g>(&self, id: u64, old: impl Into<u64>, new: PagePtr) -> Result<PageRef<'g>> {
@@ -309,7 +301,7 @@ impl BTree {
         let mut parent = None;
         loop {
             // Our access pattern guarantees that the node must exists.
-            let node = self.node(cursor.id, ghost).unwrap();
+            let node = self.node(cursor.id).unwrap();
             if node.view.ver() != cursor.ver {
                 self.reconcile_node(node, parent, ghost).await?;
                 return Err(Error::Again);
