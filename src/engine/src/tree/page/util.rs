@@ -21,14 +21,6 @@ impl BufReader {
         Self { ptr, pos: 0 }
     }
 
-    pub const fn pos(&self) -> usize {
-        self.pos
-    }
-
-    pub fn skip(&mut self, n: usize) {
-        self.pos += n;
-    }
-
     get_int!(get_u8, u8);
     get_int!(get_u32, u32);
     get_int!(get_u64, u64);

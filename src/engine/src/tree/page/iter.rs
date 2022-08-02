@@ -1,7 +1,6 @@
 use std::{
     cmp::{Ord, Ordering},
     collections::BinaryHeap,
-    fmt::Debug,
     ops::{Deref, DerefMut},
     slice,
 };
@@ -54,7 +53,7 @@ pub trait ForwardIter {
 
     /// Skips the next `n` entries.
     fn skip(&mut self, mut n: usize) {
-        while self.next().is_some() && n > 0 {
+        while n > 0 && self.next().is_some() {
             n -= 1;
         }
     }
@@ -75,24 +74,6 @@ pub trait SeekableIter: ForwardIter {
 pub trait RewindableIter: ForwardIter {
     /// Positions the next entry at the front.
     fn rewind(&mut self);
-}
-
-/// Extends `ForwardIter` with a method to print entries.
-pub trait PrintableIter: ForwardIter {
-    fn print(&mut self);
-}
-
-impl<I> PrintableIter for I
-where
-    I: ForwardIter,
-    I::Key: Debug,
-    I::Value: Debug,
-{
-    fn print(&mut self) {
-        while let Some(ent) = self.next() {
-            println!("{:?}", ent);
-        }
-    }
 }
 
 /// A wrapper that turns a slice into a `SeekableIter` and `RewindableIter`.
@@ -263,17 +244,16 @@ where
     I: ForwardIter,
 {
     fn cmp(&self, other: &Self) -> Ordering {
-        let ord = match (self.last(), other.last()) {
+        let mut ord = match (self.last(), other.last()) {
             (Some(a), Some(b)) => b.0.cmp(&a.0),
             (Some(_), None) => Ordering::Greater,
             (None, Some(_)) => Ordering::Less,
             (None, None) => Ordering::Equal,
         };
-        if ord != Ordering::Equal {
-            ord
-        } else {
-            other.rank.cmp(&self.rank)
+        if ord == Ordering::Equal {
+            ord = other.rank.cmp(&self.rank);
         }
+        ord
     }
 }
 
@@ -354,6 +334,10 @@ where
             self.init_heap();
         }
         self.last()
+    }
+
+    fn skip_all(&mut self) {
+        self.reset(|iter| iter.skip_all());
     }
 }
 
@@ -438,16 +422,16 @@ mod tests {
     #[test]
     fn merging_iter() {
         let data = [
-            [(1, 0), (3, 0)],
+            [(1, 1), (3, 1)],
             [(2, 0), (4, 0)],
             [(1, 0), (8, 0)],
             [(3, 0), (7, 0)],
         ];
         let sorted_data = [
-            (1, 0),
+            (1, 1),
             (1, 0),
             (2, 0),
-            (3, 0),
+            (3, 1),
             (3, 0),
             (4, 0),
             (7, 0),
@@ -473,14 +457,21 @@ mod tests {
 
         // Tests seek()
         iter.seek(&0);
-        assert_eq!(iter.next(), Some(&(1, 0)));
+        assert_eq!(iter.next(), Some(&(1, 1)));
         iter.seek(&9);
         assert_eq!(iter.next(), None);
         iter.seek(&1);
-        assert_eq!(iter.next(), Some(&(1, 0)));
+        assert_eq!(iter.next(), Some(&(1, 1)));
         iter.seek(&3);
-        assert_eq!(iter.next(), Some(&(3, 0)));
+        assert_eq!(iter.next(), Some(&(3, 1)));
         iter.seek(&5);
         assert_eq!(iter.next(), Some(&(7, 0)));
+
+        // Tests skip() and skip_all()
+        iter.rewind();
+        iter.skip(1);
+        assert_eq!(iter.next(), Some(&(1, 0)));
+        iter.skip_all();
+        assert_eq!(iter.next(), None);
     }
 }
