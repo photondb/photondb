@@ -311,7 +311,7 @@ impl PageBuilder {
 }
 
 #[cfg(test)]
-pub mod test {
+pub mod tests {
     use std::alloc::GlobalAlloc;
 
     use jemallocator::{usable_size, Jemalloc};

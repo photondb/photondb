@@ -305,8 +305,8 @@ where
 }
 
 #[cfg(test)]
-mod test {
-    use super::{base::test::ALLOC, *};
+mod tests {
+    use super::{base::tests::ALLOC, *};
 
     #[test]
     fn data_page() {

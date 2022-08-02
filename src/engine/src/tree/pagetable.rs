@@ -208,7 +208,7 @@ define_level!(L1, L0<FANOUT>, L0_FANOUT);
 define_level!(L2, L1<FANOUT>, L1_FANOUT);
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crossbeam_epoch::unprotected;
 
     use super::*;

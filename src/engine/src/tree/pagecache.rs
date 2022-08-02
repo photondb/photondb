@@ -73,6 +73,15 @@ impl PageView<'_> {
     }
 }
 
+impl<'a, T> From<T> for PageView<'a>
+where
+    T: Into<PageRef<'a>>,
+{
+    fn from(page: T) -> Self {
+        Self::Mem(page.into())
+    }
+}
+
 #[derive(Clone)]
 pub struct PageCache {
     size: Arc<AtomicUsize>,
