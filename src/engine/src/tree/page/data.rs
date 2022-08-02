@@ -198,7 +198,7 @@ impl Encodable for Index {
 
     unsafe fn encode_to(&self, w: &mut BufWriter) {
         w.put_u64(self.id);
-        w.put_u64(self.ver.into());
+        w.put_u64(self.ver);
     }
 }
 

@@ -31,8 +31,6 @@ impl Table {
 
 #[cfg(test)]
 mod tests {
-    use log::trace;
-
     use super::*;
 
     fn init() {
@@ -64,22 +62,40 @@ mod tests {
         assert_eq!(got_value, None);
     }
 
+    const N: u64 = 1024;
+
     #[tokio::test]
-    async fn large_dataset() {
-        const N: u64 = 128;
-        let ghost = &Ghost::pin();
+    async fn large_dataset_forward() {
         let table = open_table().await;
         for i in 0..N {
             let buf = i.to_be_bytes();
             let key = buf.as_slice();
             let value = buf.as_slice();
-            trace!("put {}", i);
             table.put(key, i, value).await.unwrap();
             let got_value = table.get(key, i).await.unwrap().unwrap();
             assert_eq!(got_value, value);
-            table.tree.trace(ghost).await.unwrap();
         }
         for i in 0..N {
+            let buf = i.to_be_bytes();
+            let key = buf.as_slice();
+            let value = buf.as_slice();
+            let got_value = table.get(key, i).await.unwrap().unwrap();
+            assert_eq!(got_value, value);
+        }
+    }
+
+    #[tokio::test]
+    async fn large_dataset_backward() {
+        let table = open_table().await;
+        for i in (0..N).rev() {
+            let buf = i.to_be_bytes();
+            let key = buf.as_slice();
+            let value = buf.as_slice();
+            table.put(key, i, value).await.unwrap();
+            let got_value = table.get(key, i).await.unwrap().unwrap();
+            assert_eq!(got_value, value);
+        }
+        for i in (0..N).rev() {
             let buf = i.to_be_bytes();
             let key = buf.as_slice();
             let value = buf.as_slice();

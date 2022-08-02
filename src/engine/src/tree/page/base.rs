@@ -209,6 +209,12 @@ impl From<PageRef<'_>> for u64 {
     }
 }
 
+impl fmt::Debug for PageRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.ptr.fmt(f)
+    }
+}
+
 #[derive(Copy, Clone, Debug, Default)]
 struct PageTags(u8);
 

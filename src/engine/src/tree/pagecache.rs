@@ -1,6 +1,5 @@
 use std::{
     alloc::GlobalAlloc,
-    fmt,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -38,7 +37,7 @@ impl From<PageAddr> for u64 {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum PageView<'a> {
     Mem(PageRef<'a>),
     Disk(PageInfo, u64),
@@ -80,22 +79,6 @@ where
 {
     fn from(page: T) -> Self {
         Self::Mem(page.into())
-    }
-}
-
-impl fmt::Debug for PageView<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Mem(page) => write!(
-                f,
-                "PageView::Mem(ver: {}, rank: {})",
-                page.ver(),
-                page.rank()
-            ),
-            Self::Disk(info, _) => {
-                write!(f, "PageView::Disk(ver: {}, rank: {})", info.ver, info.rank)
-            }
-        }
     }
 }
 

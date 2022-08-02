@@ -13,7 +13,7 @@ use super::{
 const ROOT_INDEX: Index = Index::with_id(PageTable::MIN);
 const NULL_INDEX: Index = Index::with_id(PageTable::NAN);
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Node<'a> {
     pub id: u64,
     pub view: PageView<'a>,
@@ -45,7 +45,7 @@ impl<'a> ForwardIter for DataNodeIter<'a> {
     }
 
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
-        if let Some((key, value)) = self.iter.next() {
+        if let Some((key, _)) = self.iter.next() {
             if let Some(highest) = self.highest {
                 if key.raw >= highest {
                     self.iter.skip_all();
@@ -91,13 +91,13 @@ impl<'a> ForwardIter for IndexNodeIter<'a> {
     }
 
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
-        let last_index = self.iter.last().map(|(_, i)| i.clone());
-        while let Some((lowest, index)) = self.iter.next() {
+        let last_index = self.iter.last().map(|(_, i)| *i);
+        while let Some((key, index)) = self.iter.next() {
             if index == &NULL_INDEX {
                 continue;
             }
             if let Some(highest) = self.highest {
-                if lowest >= &highest {
+                if key >= &highest {
                     self.iter.skip_all();
                     break;
                 }
@@ -225,6 +225,7 @@ impl BTree {
                 }
                 Err(addr) => {
                     if let Some(view) = self.page_view(addr.into(), ghost) {
+                        // We can keep retrying as long as the page version doesn't change.
                         if view.ver() == node.view.ver() {
                             node.view = view;
                             continue;
@@ -241,13 +242,13 @@ impl BTree {
         while let Some(index) = queue.pop_front() {
             let node = self.node(index.id, ghost).unwrap();
             if node.view.is_data() {
-                trace!("data node {:?} view {:?}", index, node.view);
+                trace!("data node {:?} {:?}", index, node.view);
                 let mut iter = self.iter_data_node(node, ghost).await?;
                 while let Some(item) = iter.next() {
                     trace!("- {:?}", item);
                 }
             } else {
-                trace!("index node {:?} view {:?}", index, node.view);
+                trace!("index node {:?} {:?}", index, node.view);
                 let mut iter = self.iter_index_node(node, ghost).await?;
                 while let Some(item) = iter.next() {
                     trace!("- {:?}", item);
@@ -277,7 +278,7 @@ impl BTree {
         match addr {
             PageAddr::Mem(addr) => {
                 let page = unsafe { PageRef::new(addr as *mut u8) };
-                page.map(|page| PageView::Mem(page))
+                page.map(PageView::Mem)
             }
             PageAddr::Disk(addr) => self
                 .store
@@ -383,8 +384,10 @@ impl BTree {
             if f(page) {
                 break;
             }
-            let next = page.next().into();
-            match self.load_page_with_addr(node.id, next, ghost).await? {
+            match self
+                .load_page_with_addr(node.id, page.next().into(), ghost)
+                .await?
+            {
                 Some(next) => page = next,
                 None => break,
             }
@@ -411,7 +414,7 @@ impl BTree {
                         highest = Some(index.0);
                     }
                 }
-                _ => {}
+                PageKind::Index => unreachable!(),
             }
             false
         })
@@ -438,7 +441,7 @@ impl BTree {
                         highest = Some(index.0);
                     }
                 }
-                _ => {}
+                PageKind::Data => unreachable!(),
             }
             false
         })
@@ -523,7 +526,6 @@ impl BTree {
         let mut parent = None;
         loop {
             // Our access pattern guarantees that the node must exists.
-            trace!("access node {:?} for {:?}", cursor, key);
             let node = self.node(cursor.id, ghost).unwrap();
             if node.view.ver() != cursor.ver {
                 self.reconcile_node(node, parent, ghost).await?;
@@ -563,29 +565,38 @@ impl BTree {
         ghost: &'g Ghost,
     ) -> Result<PageRef<'g>> {
         let split_index = split.get();
-
         let (left_index, right_index) = self.lookup_index_range(split_index.0, node, ghost).await?;
+        // The left index must exists when split.
         let mut left_index = left_index.unwrap();
         left_index.1.ver = split.ver();
 
         let mut delta_page = if let Some(right_index) = right_index {
             assert!(right_index.0 > split_index.0);
             let delta_data = [left_index, split_index, (right_index.0, NULL_INDEX)];
-            trace!("reconcile split node {} {:?}", node.id, delta_data);
+            trace!(
+                "reconcile split node {} {:?} with {:?}",
+                node.id,
+                node.view,
+                delta_data
+            );
             let mut delta_iter = SliceIter::from(&delta_data);
             IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
         } else {
             let delta_data = [left_index, split_index];
-            trace!("reconcile split node {} {:?}", node.id, delta_data);
+            trace!(
+                "reconcile split node {} {:?} with {:?}",
+                node.id,
+                node.view,
+                delta_data
+            );
             let mut delta_iter = SliceIter::from(&delta_data);
             IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
         };
 
-        let node_addr = node.view.as_addr();
         delta_page.set_ver(node.view.ver());
         delta_page.set_rank(node.view.rank() + 1);
-        delta_page.set_next(node_addr.into());
-        let mut new_page = self.update_node(node.id, node_addr, delta_page, ghost)?;
+        delta_page.set_next(node.view.as_addr().into());
+        let mut new_page = self.update_node(node.id, delta_page.next(), delta_page, ghost)?;
         if new_page.rank() as usize >= self.opts.index_delta_length {
             let new_node = Node::new(node.id, new_page.into());
             new_page = self.consolidate_index_node(new_node, ghost).await?;
@@ -608,7 +619,7 @@ impl BTree {
         let split_index = split.get();
         let root_data = [([].as_slice(), left_index), split_index];
         let mut root_iter = SliceIter::from(&root_data);
-        trace!("reconcile split root {:?}", root_data);
+        trace!("reconcile split root with {:?}", root_data);
         let root_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
 
         // Replaces the original root with the new root.
@@ -641,20 +652,19 @@ impl BTree {
             split_page.set_data(left_page.is_data());
             self.update_node(left_id, left_page, split_page, ghost)
         };
-        split()
-            .map(|page| {
-                trace!(
-                    "split node {} at {:?} to node {}",
-                    left_id,
-                    split_key,
-                    right_id
-                );
-                page
-            })
-            .map_err(|err| {
-                self.table.dealloc(right_id, ghost.guard());
-                err
-            })
+        let new_page = split().map_err(|err| {
+            self.table.dealloc(right_id, ghost.guard());
+            err
+        })?;
+        trace!(
+            "split node {} {:?} at {:?} to node {} {:?}",
+            left_id,
+            left_page,
+            split_key,
+            right_id,
+            right_page,
+        );
+        Ok(new_page)
     }
 
     fn split_data_node<'a: 'g, 'g>(
