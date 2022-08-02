@@ -100,7 +100,7 @@ impl<'a> IndexPageIter<'a> {
     }
 
     pub fn skip(&mut self, n: usize) {
-        self.0.skip(n)
+        self.0.skip(n);
     }
 }
 
@@ -123,6 +123,10 @@ impl<'a> ForwardIter for IndexPageIter<'a> {
 
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
         self.0.next()
+    }
+
+    fn skip_all(&mut self) {
+        self.0.skip_all();
     }
 }
 

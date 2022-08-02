@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use log::trace;
 
 use super::{
@@ -23,8 +25,109 @@ impl<'a> Node<'a> {
     }
 }
 
-pub type DataNodeIter<'a> = MergingIter<DataPageIter<'a>>;
-pub type IndexNodeIter<'a> = MergingIter<IndexPageIter<'a>>;
+pub struct DataNodeIter<'a> {
+    iter: MergingIter<DataPageIter<'a>>,
+    highest: Option<&'a [u8]>,
+}
+
+impl<'a> DataNodeIter<'a> {
+    pub fn new(iter: MergingIter<DataPageIter<'a>>, highest: Option<&'a [u8]>) -> Self {
+        Self { iter, highest }
+    }
+}
+
+impl<'a> ForwardIter for DataNodeIter<'a> {
+    type Key = Key<'a>;
+    type Value = Value<'a>;
+
+    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
+        self.iter.last()
+    }
+
+    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
+        if let Some((key, value)) = self.iter.next() {
+            if let Some(highest) = self.highest {
+                if key.raw >= highest {
+                    self.iter.skip_all();
+                }
+            }
+        }
+        self.iter.last()
+    }
+}
+
+impl<'a> SeekableIter for DataNodeIter<'a> {
+    fn seek<T>(&mut self, target: &T)
+    where
+        T: Comparable<Self::Key>,
+    {
+        self.iter.seek(target);
+    }
+}
+
+impl<'a> RewindableIter for DataNodeIter<'a> {
+    fn rewind(&mut self) {
+        self.iter.rewind();
+    }
+}
+
+pub struct IndexNodeIter<'a> {
+    iter: MergingIter<IndexPageIter<'a>>,
+    highest: Option<&'a [u8]>,
+}
+
+impl<'a> IndexNodeIter<'a> {
+    pub fn new(iter: MergingIter<IndexPageIter<'a>>, highest: Option<&'a [u8]>) -> Self {
+        Self { iter, highest }
+    }
+}
+
+impl<'a> ForwardIter for IndexNodeIter<'a> {
+    type Key = &'a [u8];
+    type Value = Index;
+
+    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
+        self.iter.last()
+    }
+
+    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
+        let last_index = self.iter.last().map(|(_, i)| i.clone());
+        while let Some((lowest, index)) = self.iter.next() {
+            if index == &NULL_INDEX {
+                continue;
+            }
+            if let Some(highest) = self.highest {
+                if lowest >= &highest {
+                    self.iter.skip_all();
+                    break;
+                }
+            }
+            if let Some(last_index) = last_index {
+                if index.id == last_index.id {
+                    assert!(index.ver < last_index.ver);
+                    continue;
+                }
+            }
+            break;
+        }
+        self.iter.last()
+    }
+}
+
+impl<'a> SeekableIter for IndexNodeIter<'a> {
+    fn seek<T>(&mut self, target: &T)
+    where
+        T: Comparable<Self::Key>,
+    {
+        self.iter.seek(target);
+    }
+}
+
+impl<'a> RewindableIter for IndexNodeIter<'a> {
+    fn rewind(&mut self) {
+        self.iter.rewind();
+    }
+}
 
 pub struct BTree {
     opts: Options,
@@ -131,6 +234,28 @@ impl BTree {
                 }
             }
         }
+    }
+
+    pub async fn trace<'g>(&self, ghost: &'g Ghost) -> Result<()> {
+        let mut queue = VecDeque::from([ROOT_INDEX]);
+        while let Some(index) = queue.pop_front() {
+            let node = self.node(index.id, ghost).unwrap();
+            if node.view.is_leaf() {
+                trace!("data node {:?} view {:?}", index, node.view);
+                let mut iter = self.iter_data_node(node, ghost).await?;
+                while let Some(item) = iter.next() {
+                    trace!("- {:?}", item);
+                }
+            } else {
+                trace!("index node {:?} view {:?}", index, node.view);
+                let mut iter = self.iter_index_node(node, ghost).await?;
+                while let Some(item) = iter.next() {
+                    trace!("- {:?}", item);
+                    queue.push_back(item.1);
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -273,14 +398,25 @@ impl BTree {
         ghost: &'g Ghost,
     ) -> Result<DataNodeIter<'g>> {
         let mut merger = MergingIterBuilder::default();
+        let mut highest = None;
         self.traverse_node(node, ghost, |page| {
-            if page.kind() == PageKind::Data {
-                merger.add(page.into());
+            match page.kind() {
+                PageKind::Data => {
+                    merger.add(page.into());
+                }
+                PageKind::Split => {
+                    if highest == None {
+                        let split = SplitPageRef::from(page);
+                        let index = split.get();
+                        highest = Some(index.0);
+                    }
+                }
+                _ => {}
             }
             false
         })
         .await?;
-        Ok(merger.build().into())
+        Ok(DataNodeIter::new(merger.build(), highest))
     }
 
     async fn iter_index_node<'a: 'g, 'g>(
@@ -289,14 +425,25 @@ impl BTree {
         ghost: &'g Ghost,
     ) -> Result<IndexNodeIter<'g>> {
         let mut merger = MergingIterBuilder::default();
+        let mut highest = None;
         self.traverse_node(node, ghost, |page| {
-            if page.kind() == PageKind::Index {
-                merger.add(page.into());
+            match page.kind() {
+                PageKind::Index => {
+                    merger.add(page.into());
+                }
+                PageKind::Split => {
+                    if highest == None {
+                        let split = SplitPageRef::from(page);
+                        let index = split.get();
+                        highest = Some(index.0);
+                    }
+                }
+                _ => {}
             }
             false
         })
         .await?;
-        Ok(merger.build().into())
+        Ok(IndexNodeIter::new(merger.build(), highest))
     }
 
     async fn lookup_value<'a: 'g, 'g>(
@@ -376,7 +523,7 @@ impl BTree {
         let mut parent = None;
         loop {
             // Our access pattern guarantees that the node must exists.
-            trace!("access node {:?}", cursor);
+            trace!("access node {:?} for {:?}", cursor, key);
             let node = self.node(cursor.id, ghost).unwrap();
             if node.view.ver() != cursor.ver {
                 self.reconcile_node(node, parent, ghost).await?;

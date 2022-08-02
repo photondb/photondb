@@ -1,6 +1,6 @@
 use crate::tree::{page::PagePtr, Options, Result};
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct PageInfo {
     pub ver: u64,
     pub rank: u8,

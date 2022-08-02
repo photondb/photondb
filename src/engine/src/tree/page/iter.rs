@@ -51,6 +51,11 @@ pub trait ForwardIter {
 
     /// Advances to the next entry and returns it.
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)>;
+
+    /// Skips all entries.
+    fn skip_all(&mut self) {
+        while let Some(_) = self.next() {}
+    }
 }
 
 pub trait SeekableIter: ForwardIter {
@@ -216,19 +221,22 @@ impl<K, V> From<Option<(K, V)>> for OptionIter<K, V> {
 }
 
 /// A wrapper to sorts iterators by their last entries in reverse order.
-struct ReverseIter<I>(I);
+struct ReverseIter<I> {
+    iter: I,
+    rank: usize,
+}
 
 impl<I> Deref for ReverseIter<I> {
     type Target = I;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.iter
     }
 }
 
 impl<I> DerefMut for ReverseIter<I> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        &mut self.iter
     }
 }
 
@@ -248,11 +256,16 @@ where
     I: ForwardIter,
 {
     fn cmp(&self, other: &Self) -> Ordering {
-        match (self.last(), other.last()) {
+        let ord = match (self.last(), other.last()) {
             (Some(a), Some(b)) => b.0.cmp(&a.0),
             (Some(_), None) => Ordering::Greater,
             (None, Some(_)) => Ordering::Less,
             (None, None) => Ordering::Equal,
+        };
+        if ord != Ordering::Equal {
+            ord
+        } else {
+            other.rank.cmp(&self.rank)
         }
     }
 }
@@ -375,8 +388,9 @@ impl<I> MergingIterBuilder<I>
 where
     I: ForwardIter,
 {
-    pub fn add(&mut self, child: I) {
-        self.children.push(ReverseIter(child));
+    pub fn add(&mut self, iter: I) {
+        let rank = self.children.len();
+        self.children.push(ReverseIter { iter, rank });
     }
 
     pub fn build(self) -> MergingIter<I> {

@@ -274,6 +274,10 @@ where
         });
         self.last.as_ref()
     }
+
+    fn skip_all(&mut self) {
+        self.next = self.page.len();
+    }
 }
 
 impl<'a, K, V> SeekableIter for SortedPageIter<'a, K, V>

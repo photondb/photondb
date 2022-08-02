@@ -1,5 +1,6 @@
 use std::{
     alloc::GlobalAlloc,
+    fmt,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -79,6 +80,22 @@ where
 {
     fn from(page: T) -> Self {
         Self::Mem(page.into())
+    }
+}
+
+impl fmt::Debug for PageView<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Mem(page) => write!(
+                f,
+                "PageView::Mem(ver: {}, rank: {})",
+                page.ver(),
+                page.rank()
+            ),
+            Self::Disk(info, _) => {
+                write!(f, "PageView::Disk(ver: {}, rank: {})", info.ver, info.rank)
+            }
+        }
     }
 }
 
