@@ -49,6 +49,27 @@ mod tests {
         Table::open(opts).await.unwrap()
     }
 
+    async fn table_put(table: &Table, k: u64) {
+        let buf = k.to_be_bytes();
+        let key = buf.as_slice();
+        let value = buf.as_slice();
+        table.put(key, k, value).await.unwrap();
+        let got_value = table.get(key, k).await.unwrap().unwrap();
+        assert_eq!(got_value, value);
+    }
+
+    async fn table_get(table: &Table, k: u64, exists: bool) {
+        let buf = k.to_be_bytes();
+        let key = buf.as_slice();
+        let value = buf.as_slice();
+        let got_value = table.get(key, k).await.unwrap();
+        if exists {
+            assert_eq!(got_value.unwrap(), value);
+        } else {
+            assert_eq!(got_value, None);
+        }
+    }
+
     #[tokio::test]
     async fn small_dataset() {
         let table = open_table().await;
@@ -68,19 +89,10 @@ mod tests {
     async fn large_dataset_forward() {
         let table = open_table().await;
         for i in 0..N {
-            let buf = i.to_be_bytes();
-            let key = buf.as_slice();
-            let value = buf.as_slice();
-            table.put(key, i, value).await.unwrap();
-            let got_value = table.get(key, i).await.unwrap().unwrap();
-            assert_eq!(got_value, value);
+            table_put(&table, i).await;
         }
         for i in 0..N {
-            let buf = i.to_be_bytes();
-            let key = buf.as_slice();
-            let value = buf.as_slice();
-            let got_value = table.get(key, i).await.unwrap().unwrap();
-            assert_eq!(got_value, value);
+            table_get(&table, i, true).await;
         }
     }
 
@@ -88,19 +100,10 @@ mod tests {
     async fn large_dataset_backward() {
         let table = open_table().await;
         for i in (0..N).rev() {
-            let buf = i.to_be_bytes();
-            let key = buf.as_slice();
-            let value = buf.as_slice();
-            table.put(key, i, value).await.unwrap();
-            let got_value = table.get(key, i).await.unwrap().unwrap();
-            assert_eq!(got_value, value);
+            table_put(&table, i).await;
         }
         for i in (0..N).rev() {
-            let buf = i.to_be_bytes();
-            let key = buf.as_slice();
-            let value = buf.as_slice();
-            let got_value = table.get(key, i).await.unwrap().unwrap();
-            assert_eq!(got_value, value);
+            table_get(&table, i, true).await;
         }
     }
 }

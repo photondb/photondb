@@ -10,6 +10,7 @@ use ghost::{Ghost, Guard};
 mod btree;
 use btree::BTree;
 
+mod node;
 mod page;
 mod pagecache;
 mod pagestore;

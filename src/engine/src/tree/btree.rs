@@ -3,131 +3,13 @@ use std::collections::VecDeque;
 use log::trace;
 
 use super::{
+    node::*,
     page::*,
     pagecache::{PageAddr, PageCache, PageView},
     pagestore::PageStore,
     pagetable::PageTable,
     Error, Ghost, Options, Result,
 };
-
-const ROOT_INDEX: Index = Index::with_id(PageTable::MIN);
-const NULL_INDEX: Index = Index::with_id(PageTable::NAN);
-
-#[derive(Copy, Clone, Debug)]
-pub struct Node<'a> {
-    pub id: u64,
-    pub view: PageView<'a>,
-}
-
-impl<'a> Node<'a> {
-    pub fn new(id: u64, view: PageView<'a>) -> Self {
-        Self { id, view }
-    }
-}
-
-pub struct DataNodeIter<'a> {
-    iter: MergingIter<DataPageIter<'a>>,
-    highest: Option<&'a [u8]>,
-}
-
-impl<'a> DataNodeIter<'a> {
-    pub fn new(iter: MergingIter<DataPageIter<'a>>, highest: Option<&'a [u8]>) -> Self {
-        Self { iter, highest }
-    }
-}
-
-impl<'a> ForwardIter for DataNodeIter<'a> {
-    type Key = Key<'a>;
-    type Value = Value<'a>;
-
-    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
-        self.iter.last()
-    }
-
-    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
-        if let Some((key, _)) = self.iter.next() {
-            if let Some(highest) = self.highest {
-                if key.raw >= highest {
-                    self.iter.skip_all();
-                }
-            }
-        }
-        self.iter.last()
-    }
-}
-
-impl<'a> SeekableIter for DataNodeIter<'a> {
-    fn seek<T>(&mut self, target: &T)
-    where
-        T: Comparable<Self::Key>,
-    {
-        self.iter.seek(target);
-    }
-}
-
-impl<'a> RewindableIter for DataNodeIter<'a> {
-    fn rewind(&mut self) {
-        self.iter.rewind();
-    }
-}
-
-pub struct IndexNodeIter<'a> {
-    iter: MergingIter<IndexPageIter<'a>>,
-    highest: Option<&'a [u8]>,
-}
-
-impl<'a> IndexNodeIter<'a> {
-    pub fn new(iter: MergingIter<IndexPageIter<'a>>, highest: Option<&'a [u8]>) -> Self {
-        Self { iter, highest }
-    }
-}
-
-impl<'a> ForwardIter for IndexNodeIter<'a> {
-    type Key = &'a [u8];
-    type Value = Index;
-
-    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
-        self.iter.last()
-    }
-
-    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
-        let last_index = self.iter.last().map(|(_, i)| *i);
-        while let Some((key, index)) = self.iter.next() {
-            if index == &NULL_INDEX {
-                continue;
-            }
-            if let Some(highest) = self.highest {
-                if key >= &highest {
-                    self.iter.skip_all();
-                    break;
-                }
-            }
-            if let Some(last_index) = last_index {
-                if index.id == last_index.id {
-                    assert!(index.ver < last_index.ver);
-                    continue;
-                }
-            }
-            break;
-        }
-        self.iter.last()
-    }
-}
-
-impl<'a> SeekableIter for IndexNodeIter<'a> {
-    fn seek<T>(&mut self, target: &T)
-    where
-        T: Comparable<Self::Key>,
-    {
-        self.iter.seek(target);
-    }
-}
-
-impl<'a> RewindableIter for IndexNodeIter<'a> {
-    fn rewind(&mut self) {
-        self.iter.rewind();
-    }
-}
 
 pub struct BTree {
     opts: Options,
@@ -573,22 +455,12 @@ impl BTree {
         let mut delta_page = if let Some(right_index) = right_index {
             assert!(right_index.0 > split_index.0);
             let delta_data = [left_index, split_index, (right_index.0, NULL_INDEX)];
-            trace!(
-                "reconcile split node {} {:?} with {:?}",
-                node.id,
-                node.view,
-                delta_data
-            );
+            trace!("reconcile split node {} with {:?}", node.id, delta_data);
             let mut delta_iter = SliceIter::from(&delta_data);
             IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
         } else {
             let delta_data = [left_index, split_index];
-            trace!(
-                "reconcile split node {} {:?} with {:?}",
-                node.id,
-                node.view,
-                delta_data
-            );
+            trace!("reconcile split node {} with {:?}", node.id, delta_data);
             let mut delta_iter = SliceIter::from(&delta_data);
             IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
         };
@@ -597,6 +469,7 @@ impl BTree {
         delta_page.set_rank(node.view.rank() + 1);
         delta_page.set_next(node.view.as_addr().into());
         let mut new_page = self.update_node(node.id, delta_page.next(), delta_page, ghost)?;
+        trace!("reconcile split node {} done {:?}", node.id, new_page);
         if new_page.rank() as usize >= self.opts.index_delta_length {
             let new_node = Node::new(node.id, new_page.into());
             new_page = self.consolidate_index_node(new_node, ghost).await?;
@@ -619,15 +492,18 @@ impl BTree {
         let split_index = split.get();
         let root_data = [([].as_slice(), left_index), split_index];
         let mut root_iter = SliceIter::from(&root_data);
-        trace!("reconcile split root with {:?}", root_data);
+        trace!("reconcile split root {} with {:?}", node.id, root_data);
         let root_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
 
         // Replaces the original root with the new root.
-        self.update_node(node.id, root_addr, root_page, ghost)
+        let new_page = self
+            .update_node(node.id, root_addr, root_page, ghost)
             .map_err(|err| {
                 self.table.dealloc(left_id, ghost.guard());
                 err
-            })
+            })?;
+        trace!("reconcile split root {} done {:?}", node.id, new_page);
+        Ok(new_page)
     }
 
     fn install_split<'a: 'g, 'g>(
@@ -714,7 +590,7 @@ impl BTree {
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
         let mut new_page = self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
-        trace!("consolidated data node {}", node.id);
+        trace!("consolidate data node {} done {:?}", node.id, new_page);
         if new_page.size() >= self.opts.data_node_size {
             new_page = self.split_data_node(node.id, new_page, ghost)?;
         }
@@ -730,7 +606,7 @@ impl BTree {
         let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
         let mut new_page = self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
-        trace!("consolidated index node {}", node.id);
+        trace!("consolidate index node {} done {:?}", node.id, new_page);
         if new_page.size() >= self.opts.index_node_size {
             new_page = self.split_index_node(node.id, new_page, ghost)?;
         }
