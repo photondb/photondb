@@ -1,8 +1,8 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use photondb_engine::tree::*;
 
-const N: usize = 1 << 10;
-const M: usize = 1 << 4;
+const N: usize = 1 << 20;
+const M: usize = 1 << 10;
 const STEP: usize = N / M;
 
 fn table_get(table: &Table, i: usize) {
@@ -38,6 +38,8 @@ fn bench(c: &mut Criterion) {
 
     c.bench_function("get", |b| b.iter(|| bench_get(&table)));
     c.bench_function("put", |b| b.iter(|| bench_put(&table)));
+
+    println!("{:?}", table.stats());
 }
 
 criterion_group!(benches, bench);

@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use log::trace;
 
 use super::{
@@ -9,11 +11,49 @@ use super::{
     Error, Ghost, Options, Result,
 };
 
+#[derive(Debug)]
+pub struct Stats {
+    pub num_data_splits: usize,
+    pub num_data_consolidations: usize,
+    pub num_index_splits: usize,
+    pub num_index_consolidations: usize,
+}
+
+struct AtomicStats {
+    num_data_splits: AtomicUsize,
+    num_data_consolidations: AtomicUsize,
+    num_index_splits: AtomicUsize,
+    num_index_consolidations: AtomicUsize,
+}
+
+impl AtomicStats {
+    fn snapshot(&self) -> Stats {
+        Stats {
+            num_data_splits: self.num_data_splits.load(Ordering::Relaxed),
+            num_data_consolidations: self.num_data_consolidations.load(Ordering::Relaxed),
+            num_index_splits: self.num_index_splits.load(Ordering::Relaxed),
+            num_index_consolidations: self.num_index_consolidations.load(Ordering::Relaxed),
+        }
+    }
+}
+
+impl Default for AtomicStats {
+    fn default() -> Self {
+        AtomicStats {
+            num_data_splits: AtomicUsize::new(0),
+            num_data_consolidations: AtomicUsize::new(0),
+            num_index_splits: AtomicUsize::new(0),
+            num_index_consolidations: AtomicUsize::new(0),
+        }
+    }
+}
+
 pub struct BTree {
     opts: Options,
     table: PageTable,
     cache: PageCache,
     store: PageStore,
+    stats: AtomicStats,
 }
 
 impl BTree {
@@ -26,8 +66,13 @@ impl BTree {
             table,
             cache,
             store,
+            stats: AtomicStats::default(),
         };
         tree.init()
+    }
+
+    pub fn stats(&self) -> Stats {
+        self.stats.snapshot()
     }
 
     pub fn get<'a: 'g, 'g>(
@@ -502,11 +547,14 @@ impl BTree {
         let data_page = DataPageRef::from(page);
         if let Some((sep, mut iter)) = data_page.split() {
             let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-            self.install_split(id, page, sep, right_page.into(), ghost)
+            let new_page = self
+                .install_split(id, page, sep, right_page.into(), ghost)
                 .map_err(|err| unsafe {
                     self.cache.dealloc(right_page);
                     err
-                })
+                })?;
+            self.stats.num_data_splits.fetch_add(1, Ordering::Relaxed);
+            Ok(new_page)
         } else {
             Ok(page)
         }
@@ -521,11 +569,14 @@ impl BTree {
         let index_page = IndexPageRef::from(page);
         if let Some((sep, mut iter)) = index_page.split() {
             let right_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-            self.install_split(id, page, sep, right_page.into(), ghost)
+            let new_page = self
+                .install_split(id, page, sep, right_page.into(), ghost)
                 .map_err(|err| unsafe {
                     self.cache.dealloc(right_page);
                     err
-                })
+                })?;
+            self.stats.num_index_splits.fetch_add(1, Ordering::Relaxed);
+            Ok(new_page)
         } else {
             Ok(page)
         }
@@ -540,6 +591,9 @@ impl BTree {
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
         let mut new_page = self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
+        self.stats
+            .num_data_consolidations
+            .fetch_add(1, Ordering::Relaxed);
         trace!("consolidate data node {} done {:?}", node.id, new_page);
         if new_page.size() >= self.opts.data_node_size {
             new_page = self.split_data_node(node.id, new_page, ghost)?;
@@ -556,6 +610,9 @@ impl BTree {
         let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
         let mut new_page = self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
+        self.stats
+            .num_index_consolidations
+            .fetch_add(1, Ordering::Relaxed);
         trace!("consolidate index node {} done {:?}", node.id, new_page);
         if new_page.size() >= self.opts.index_node_size {
             new_page = self.split_index_node(node.id, new_page, ghost)?;

@@ -1,4 +1,4 @@
-use super::{BTree, Ghost, Options, Result};
+use super::{BTree, Ghost, Options, Result, Stats};
 
 pub struct Table {
     tree: BTree,
@@ -8,6 +8,10 @@ impl Table {
     pub fn open(opts: Options) -> Result<Self> {
         let tree = BTree::open(opts)?;
         Ok(Self { tree })
+    }
+
+    pub fn stats(&self) -> Stats {
+        self.tree.stats()
     }
 
     pub fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>> {

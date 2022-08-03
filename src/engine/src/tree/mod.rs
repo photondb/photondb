@@ -8,7 +8,7 @@ mod ghost;
 use ghost::{Ghost, Guard};
 
 mod btree;
-use btree::BTree;
+use btree::{BTree, Stats};
 
 mod node;
 mod page;
