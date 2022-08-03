@@ -378,6 +378,10 @@ impl<I> MergingIterBuilder<I>
 where
     I: ForwardIter,
 {
+    pub fn len(&self) -> usize {
+        self.children.len()
+    }
+
     pub fn add(&mut self, iter: I) {
         let rank = self.children.len();
         self.children.push(ReverseIter { iter, rank });

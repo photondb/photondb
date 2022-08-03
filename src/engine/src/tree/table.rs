@@ -131,4 +131,15 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn put_and_then_get() {
+        let table = open_default_table();
+        for i in 0..N {
+            table_put(&table, i);
+        }
+        for i in 0..N {
+            table_get(&table, i, true);
+        }
+    }
 }

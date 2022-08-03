@@ -13,15 +13,19 @@ use super::{
 
 #[derive(Debug)]
 pub struct Stats {
+    pub num_get_pages: usize,
     pub num_data_splits: usize,
-    pub num_data_consolidations: usize,
+    pub num_data_major_consolidations: usize,
+    pub num_data_minor_consolidations: usize,
     pub num_index_splits: usize,
     pub num_index_consolidations: usize,
 }
 
 struct AtomicStats {
+    num_get_pages: AtomicUsize,
     num_data_splits: AtomicUsize,
-    num_data_consolidations: AtomicUsize,
+    num_data_major_consolidations: AtomicUsize,
+    num_data_minor_consolidations: AtomicUsize,
     num_index_splits: AtomicUsize,
     num_index_consolidations: AtomicUsize,
 }
@@ -29,8 +33,14 @@ struct AtomicStats {
 impl AtomicStats {
     fn snapshot(&self) -> Stats {
         Stats {
+            num_get_pages: self.num_get_pages.load(Ordering::Relaxed),
             num_data_splits: self.num_data_splits.load(Ordering::Relaxed),
-            num_data_consolidations: self.num_data_consolidations.load(Ordering::Relaxed),
+            num_data_major_consolidations: self
+                .num_data_major_consolidations
+                .load(Ordering::Relaxed),
+            num_data_minor_consolidations: self
+                .num_data_minor_consolidations
+                .load(Ordering::Relaxed),
             num_index_splits: self.num_index_splits.load(Ordering::Relaxed),
             num_index_consolidations: self.num_index_consolidations.load(Ordering::Relaxed),
         }
@@ -40,8 +50,10 @@ impl AtomicStats {
 impl Default for AtomicStats {
     fn default() -> Self {
         AtomicStats {
+            num_get_pages: AtomicUsize::new(0),
             num_data_splits: AtomicUsize::new(0),
-            num_data_consolidations: AtomicUsize::new(0),
+            num_data_major_consolidations: AtomicUsize::new(0),
+            num_data_minor_consolidations: AtomicUsize::new(0),
             num_index_splits: AtomicUsize::new(0),
             num_index_consolidations: AtomicUsize::new(0),
         }
@@ -236,15 +248,18 @@ impl BTree {
 
         // Deallocates the old page chain.
         let cache = self.cache.clone();
+        let base = PageAddr::from(new.next());
+        let mut next = old;
         ghost.guard().defer(move || unsafe {
-            let mut next = old;
-            while let PageAddr::Mem(addr) = next {
-                if let Some(page) = PagePtr::new(addr as *mut u8) {
-                    next = page.next().into();
-                    cache.dealloc(page);
-                } else {
-                    break;
+            while next != base {
+                if let PageAddr::Mem(addr) = next {
+                    if let Some(page) = PagePtr::new(addr as *mut u8) {
+                        next = page.next().into();
+                        cache.dealloc(page);
+                        continue;
+                    }
                 }
+                break;
             }
         });
 
@@ -339,6 +354,7 @@ impl BTree {
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.traverse_node(node, ghost, |page| {
+            self.stats.num_get_pages.fetch_add(1, Ordering::Relaxed);
             if page.kind() == PageKind::Data {
                 let page = DataPageRef::from(page);
                 if let Some((_, v)) = page.find(key) {
@@ -582,18 +598,60 @@ impl BTree {
         }
     }
 
+    fn iter_delta_data<'a: 'g, 'g>(
+        &'a self,
+        node: Node<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<(DataNodeIter<'g>, u64)> {
+        let mut size = 0;
+        let mut next = 0;
+        let mut merger = MergingIterBuilder::default();
+        let mut highest = None;
+        self.traverse_node(node, ghost, |page| {
+            match page.kind() {
+                PageKind::Data => {
+                    if size >= page.size() / 1 || merger.len() < 2 || highest.is_some() {
+                        size += page.size();
+                        next = page.next();
+                        merger.add(page.into());
+                    } else {
+                        return true;
+                    }
+                }
+                PageKind::Split => {
+                    if highest == None {
+                        let split = SplitPageRef::from(page);
+                        let index = split.get();
+                        highest = Some(index.0);
+                    }
+                }
+                PageKind::Index => unreachable!(),
+            }
+            false
+        })?;
+        let iter = DataNodeIter::new(merger.build(), highest);
+        Ok((iter, next))
+    }
+
     fn consolidate_data_node<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         ghost: &'g Ghost,
     ) -> Result<PageRef<'g>> {
-        let mut iter = self.iter_data_node(node, ghost)?;
+        let (mut iter, next) = self.iter_delta_data(node, ghost)?;
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
+        page.set_next(next);
         let mut new_page = self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
-        self.stats
-            .num_data_consolidations
-            .fetch_add(1, Ordering::Relaxed);
+        if next == 0 {
+            self.stats
+                .num_data_major_consolidations
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.stats
+                .num_data_minor_consolidations
+                .fetch_add(1, Ordering::Relaxed);
+        }
         trace!("consolidate data node {} done {:?}", node.id, new_page);
         if new_page.size() >= self.opts.data_node_size {
             new_page = self.split_data_node(node.id, new_page, ghost)?;
