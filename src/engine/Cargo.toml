@@ -7,6 +7,12 @@ edition = "2021"
 crossbeam-epoch = "0.9"
 jemallocator = "0.5"
 thiserror = "1.0"
-tokio = { version = "1", features = ["full"] }
 log = "0.4"
 env_logger = "0.9"
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "criterion"
+harness = false

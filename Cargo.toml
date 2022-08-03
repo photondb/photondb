@@ -1,2 +1,5 @@
 [workspace]
 members = ["src/engine", "src/runtime"]
+
+[profile.bench]
+debug = true

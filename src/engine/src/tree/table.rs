@@ -5,26 +5,26 @@ pub struct Table {
 }
 
 impl Table {
-    pub async fn open(opts: Options) -> Result<Self> {
-        let tree = BTree::open(opts).await?;
+    pub fn open(opts: Options) -> Result<Self> {
+        let tree = BTree::open(opts)?;
         Ok(Self { tree })
     }
 
-    pub async fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>> {
+    pub fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>> {
         let ghost = &Ghost::pin();
-        let value = self.tree.get(key, lsn, ghost).await?;
+        let value = self.tree.get(key, lsn, ghost)?;
         Ok(value.map(|v| v.to_vec()))
     }
 
-    pub async fn put(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
+    pub fn put(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
         let ghost = &Ghost::pin();
-        self.tree.put(key, lsn, value, ghost).await?;
+        self.tree.put(key, lsn, value, ghost)?;
         Ok(())
     }
 
-    pub async fn delete(&self, key: &[u8], lsn: u64) -> Result<()> {
+    pub fn delete(&self, key: &[u8], lsn: u64) -> Result<()> {
         let ghost = &Ghost::pin();
-        self.tree.delete(key, lsn, ghost).await?;
+        self.tree.delete(key, lsn, ghost)?;
         Ok(())
     }
 }
@@ -37,7 +37,7 @@ mod tests {
         let _ = env_logger::builder().try_init();
     }
 
-    async fn open_table() -> Table {
+    fn open_small_table() -> Table {
         init();
         let opts = Options {
             data_node_size: 256,
@@ -46,64 +46,85 @@ mod tests {
             index_delta_length: 4,
             ..Default::default()
         };
-        Table::open(opts).await.unwrap()
+        Table::open(opts).unwrap()
     }
 
-    async fn table_put(table: &Table, k: u64) {
-        let buf = k.to_be_bytes();
-        let key = buf.as_slice();
-        let value = buf.as_slice();
-        table.put(key, k, value).await.unwrap();
-        let got_value = table.get(key, k).await.unwrap().unwrap();
-        assert_eq!(got_value, value);
+    fn open_default_table() -> Table {
+        init();
+        Table::open(Options::default()).unwrap()
     }
 
-    async fn table_get(table: &Table, k: u64, exists: bool) {
-        let buf = k.to_be_bytes();
+    fn table_get(table: &Table, i: u64, should_exists: bool) {
+        let buf = i.to_be_bytes();
         let key = buf.as_slice();
-        let value = buf.as_slice();
-        let got_value = table.get(key, k).await.unwrap();
-        if exists {
-            assert_eq!(got_value.unwrap(), value);
+        let got = table.get(key, i).unwrap();
+        if should_exists {
+            assert_eq!(got.unwrap(), key);
         } else {
-            assert_eq!(got_value, None);
+            assert_eq!(got, None);
         }
     }
 
-    #[tokio::test]
-    async fn small_dataset() {
-        let table = open_table().await;
-        let key = b"key";
-        let value = b"value";
-        table.put(key, 0, value).await.unwrap();
-        let got_value = table.get(key, 0).await.unwrap().unwrap();
-        assert_eq!(got_value, value);
-        table.delete(key, 0).await.unwrap();
-        let got_value = table.get(key, 0).await.unwrap();
-        assert_eq!(got_value, None);
+    fn table_put(table: &Table, i: u64) {
+        let buf = i.to_be_bytes();
+        let key = buf.as_slice();
+        table.put(key, 0, key).unwrap();
+        let got = table.get(key, 0).unwrap();
+        assert_eq!(got.unwrap(), key);
     }
 
-    const N: u64 = 1024;
+    fn table_delete(table: &Table, i: u64) {
+        let buf = i.to_be_bytes();
+        let key = buf.as_slice();
+        table.delete(key, 0).unwrap();
+        let got = table.get(key, 0).unwrap();
+        assert_eq!(got, None);
+    }
 
-    #[tokio::test]
-    async fn large_dataset_forward() {
-        let table = open_table().await;
+    #[test]
+    fn crud() {
+        let table = open_small_table();
+        table_get(&table, 0, false);
+        table_put(&table, 0);
+        table_delete(&table, 0);
+    }
+
+    const N: u64 = 1 << 12;
+    const M: u64 = 1 << 4;
+    const STEP: usize = (N / M) as usize;
+
+    #[test]
+    fn put_forward() {
+        let table = open_small_table();
         for i in 0..N {
-            table_put(&table, i).await;
+            table_put(&table, i);
         }
         for i in 0..N {
-            table_get(&table, i, true).await;
+            table_get(&table, i, true);
         }
     }
 
-    #[tokio::test]
-    async fn large_dataset_backward() {
-        let table = open_table().await;
+    #[test]
+    fn put_backward() {
+        let table = open_small_table();
         for i in (0..N).rev() {
-            table_put(&table, i).await;
+            table_put(&table, i);
         }
         for i in (0..N).rev() {
-            table_get(&table, i, true).await;
+            table_get(&table, i, true);
+        }
+    }
+
+    #[test]
+    fn put_repeated() {
+        let table = open_default_table();
+        for i in 0..N {
+            table_put(&table, i);
+        }
+        for _ in 0..STEP {
+            for i in (0..N).step_by(STEP) {
+                table_put(&table, i);
+            }
         }
     }
 }

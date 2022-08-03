@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use log::trace;
 
 use super::{
@@ -19,10 +17,10 @@ pub struct BTree {
 }
 
 impl BTree {
-    pub async fn open(opts: Options) -> Result<Self> {
+    pub fn open(opts: Options) -> Result<Self> {
         let table = PageTable::default();
         let cache = PageCache::default();
-        let store = PageStore::open(opts.clone()).await?;
+        let store = PageStore::open()?;
         let tree = Self {
             opts,
             table,
@@ -32,7 +30,7 @@ impl BTree {
         tree.init()
     }
 
-    pub async fn get<'a: 'g, 'g>(
+    pub fn get<'a: 'g, 'g>(
         &'a self,
         key: &[u8],
         lsn: u64,
@@ -40,45 +38,35 @@ impl BTree {
     ) -> Result<Option<&'g [u8]>> {
         let key = Key::new(key, lsn);
         loop {
-            match self.try_get(key, ghost).await {
+            match self.try_get(key, ghost) {
                 Err(Error::Again) => continue,
                 other => return other,
             }
         }
     }
 
-    async fn try_get<'a: 'g, 'g>(
-        &'a self,
-        key: Key<'_>,
-        ghost: &'g Ghost,
-    ) -> Result<Option<&'g [u8]>> {
-        let node = self.find_data_node(key.raw, ghost).await?;
-        self.lookup_value(key, node, ghost).await
+    fn try_get<'a: 'g, 'g>(&'a self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
+        let node = self.find_data_node(key.raw, ghost)?;
+        self.lookup_value(key, node, ghost)
     }
 
-    pub async fn put<'g>(
-        &self,
-        key: &[u8],
-        lsn: u64,
-        value: &[u8],
-        ghost: &'g Ghost,
-    ) -> Result<()> {
+    pub fn put<'g>(&self, key: &[u8], lsn: u64, value: &[u8], ghost: &'g Ghost) -> Result<()> {
         let key = Key::new(key, lsn);
         let value = Value::Put(value);
-        self.update(key, value, ghost).await
+        self.update(key, value, ghost)
     }
 
-    pub async fn delete<'g>(&self, key: &[u8], lsn: u64, ghost: &'g Ghost) -> Result<()> {
+    pub fn delete<'g>(&self, key: &[u8], lsn: u64, ghost: &'g Ghost) -> Result<()> {
         let key = Key::new(key, lsn);
         let value = Value::Delete;
-        self.update(key, value, ghost).await
+        self.update(key, value, ghost)
     }
 
-    async fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
+    fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
         let page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         loop {
-            match self.try_update(key.raw, page, ghost).await {
+            match self.try_update(key.raw, page, ghost) {
                 Ok(_) => return Ok(()),
                 Err(Error::Again) => continue,
                 Err(err) => {
@@ -91,8 +79,8 @@ impl BTree {
         }
     }
 
-    async fn try_update<'g>(&self, key: &[u8], mut page: PagePtr, ghost: &'g Ghost) -> Result<()> {
-        let mut node = self.find_data_node(key, ghost).await?;
+    fn try_update<'g>(&self, key: &[u8], mut page: PagePtr, ghost: &'g Ghost) -> Result<()> {
+        let mut node = self.find_data_node(key, ghost)?;
         loop {
             page.set_ver(node.view.ver());
             page.set_rank(node.view.rank() + 1);
@@ -101,7 +89,7 @@ impl BTree {
                 Ok(_) => {
                     if page.rank() as usize >= self.opts.data_delta_length {
                         node.view = page.into();
-                        let _ = self.consolidate_data_node(node, ghost).await;
+                        let _ = self.consolidate_data_node(node, ghost);
                     }
                     return Ok(());
                 }
@@ -117,28 +105,6 @@ impl BTree {
                 }
             }
         }
-    }
-
-    pub async fn trace<'g>(&self, ghost: &'g Ghost) -> Result<()> {
-        let mut queue = VecDeque::from([ROOT_INDEX]);
-        while let Some(index) = queue.pop_front() {
-            let node = self.node(index.id, ghost).unwrap();
-            if node.view.is_data() {
-                trace!("data node {:?} {:?}", index, node.view);
-                let mut iter = self.iter_data_node(node, ghost).await?;
-                while let Some(item) = iter.next() {
-                    trace!("- {:?}", item);
-                }
-            } else {
-                trace!("index node {:?} {:?}", index, node.view);
-                let mut iter = self.iter_index_node(node, ghost).await?;
-                while let Some(item) = iter.next() {
-                    trace!("- {:?}", item);
-                    queue.push_back(item.1);
-                }
-            }
-        }
-        Ok(())
     }
 }
 
@@ -169,7 +135,7 @@ impl BTree {
         }
     }
 
-    async fn load_page_with_view<'a: 'g, 'g>(
+    fn load_page_with_view<'a: 'g, 'g>(
         &'a self,
         _: u64,
         view: PageView<'g>,
@@ -177,14 +143,11 @@ impl BTree {
     ) -> Result<PageRef<'g>> {
         match view {
             PageView::Mem(page) => Ok(page),
-            PageView::Disk(_, _) => {
-                // self.swapin_page(id, addr).await,
-                todo!()
-            }
+            PageView::Disk(_, _) => todo!(),
         }
     }
 
-    async fn load_page_with_addr<'a: 'g, 'g>(
+    fn load_page_with_addr<'a: 'g, 'g>(
         &'a self,
         _: u64,
         addr: PageAddr,
@@ -192,10 +155,7 @@ impl BTree {
     ) -> Result<Option<PageRef<'g>>> {
         match addr {
             PageAddr::Mem(addr) => Ok(unsafe { PageRef::new(addr as *mut u8) }),
-            PageAddr::Disk(_) => {
-                // self.swapin_page(id, addr).await,
-                todo!()
-            }
+            PageAddr::Disk(_) => todo!(),
         }
     }
 
@@ -252,7 +212,7 @@ impl BTree {
         Ok(id)
     }
 
-    async fn traverse_node<'a: 'g, 'g, F>(
+    fn traverse_node<'a: 'g, 'g, F>(
         &'a self,
         node: Node<'g>,
         ghost: &'g Ghost,
@@ -261,15 +221,12 @@ impl BTree {
     where
         F: FnMut(PageRef<'g>) -> bool,
     {
-        let mut page = self.load_page_with_view(node.id, node.view, ghost).await?;
+        let mut page = self.load_page_with_view(node.id, node.view, ghost)?;
         loop {
             if f(page) {
                 break;
             }
-            match self
-                .load_page_with_addr(node.id, page.next().into(), ghost)
-                .await?
-            {
+            match self.load_page_with_addr(node.id, page.next().into(), ghost)? {
                 Some(next) => page = next,
                 None => break,
             }
@@ -277,7 +234,7 @@ impl BTree {
         Ok(())
     }
 
-    async fn iter_data_node<'a: 'g, 'g>(
+    fn iter_data_node<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         ghost: &'g Ghost,
@@ -299,12 +256,11 @@ impl BTree {
                 PageKind::Index => unreachable!(),
             }
             false
-        })
-        .await?;
+        })?;
         Ok(DataNodeIter::new(merger.build(), highest))
     }
 
-    async fn iter_index_node<'a: 'g, 'g>(
+    fn iter_index_node<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         ghost: &'g Ghost,
@@ -326,12 +282,11 @@ impl BTree {
                 PageKind::Data => unreachable!(),
             }
             false
-        })
-        .await?;
+        })?;
         Ok(IndexNodeIter::new(merger.build(), highest))
     }
 
-    async fn lookup_value<'a: 'g, 'g>(
+    fn lookup_value<'a: 'g, 'g>(
         &'a self,
         key: Key<'_>,
         node: Node<'g>,
@@ -347,12 +302,11 @@ impl BTree {
                 }
             }
             false
-        })
-        .await?;
+        })?;
         Ok(value)
     }
 
-    async fn lookup_index<'a: 'g, 'g>(
+    fn lookup_index<'a: 'g, 'g>(
         &'a self,
         key: &[u8],
         node: Node<'g>,
@@ -370,12 +324,11 @@ impl BTree {
                 }
             }
             false
-        })
-        .await?;
+        })?;
         Ok(value)
     }
 
-    async fn lookup_index_range<'a: 'g, 'g>(
+    fn lookup_index_range<'a: 'g, 'g>(
         &'a self,
         key: &[u8],
         node: Node<'g>,
@@ -388,51 +341,48 @@ impl BTree {
                 let page = IndexPageRef::from(page);
                 let (left, right) = page.find_range(key);
                 if let Some(left) = left {
-                    left_index = Some(left);
-                    right_index = right;
-                    return true;
+                    if left.1 != NULL_INDEX {
+                        left_index = Some(left);
+                        right_index = right;
+                        return true;
+                    }
                 }
             }
             false
-        })
-        .await?;
+        })?;
         Ok((left_index, right_index))
     }
 
-    async fn find_data_node<'a: 'g, 'g>(
-        &'a self,
-        key: &[u8],
-        ghost: &'g Ghost,
-    ) -> Result<Node<'g>> {
+    fn find_data_node<'a: 'g, 'g>(&'a self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
         let mut cursor = ROOT_INDEX;
         let mut parent = None;
         loop {
             // Our access pattern guarantees that the node must exists.
             let node = self.node(cursor.id, ghost).unwrap();
             if node.view.ver() != cursor.ver {
-                self.reconcile_node(node, parent, ghost).await?;
+                self.reconcile_node(node, parent, ghost)?;
                 return Err(Error::Again);
             }
             if node.view.is_data() {
                 return Ok(node);
             }
             // Our access pattern guarantees that the index must exists.
-            cursor = self.lookup_index(key, node, ghost).await?.unwrap();
+            cursor = self.lookup_index(key, node, ghost)?.unwrap();
             parent = Some(node);
         }
     }
 
-    async fn reconcile_node<'a: 'g, 'g>(
+    fn reconcile_node<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         parent: Option<Node<'g>>,
         ghost: &'g Ghost,
     ) -> Result<()> {
-        let page = self.load_page_with_view(node.id, node.view, ghost).await?;
+        let page = self.load_page_with_view(node.id, node.view, ghost)?;
         if page.kind() == PageKind::Split {
             let split = SplitPageRef::from(page);
             if let Some(node) = parent {
-                self.reconcile_split_node(node, split, ghost).await?;
+                self.reconcile_split_node(node, split, ghost)?;
             } else {
                 self.reconcile_split_root(node, split, ghost)?;
             }
@@ -440,14 +390,14 @@ impl BTree {
         Ok(())
     }
 
-    async fn reconcile_split_node<'a: 'g, 'g>(
+    fn reconcile_split_node<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         split: SplitPageRef<'g>,
         ghost: &'g Ghost,
     ) -> Result<PageRef<'g>> {
         let split_index = split.get();
-        let (left_index, right_index) = self.lookup_index_range(split_index.0, node, ghost).await?;
+        let (left_index, right_index) = self.lookup_index_range(split_index.0, node, ghost)?;
         // The left index must exists when split.
         let mut left_index = left_index.unwrap();
         left_index.1.ver = split.ver();
@@ -472,7 +422,7 @@ impl BTree {
         trace!("reconcile split node {} done {:?}", node.id, new_page);
         if new_page.rank() as usize >= self.opts.index_delta_length {
             let new_node = Node::new(node.id, new_page.into());
-            new_page = self.consolidate_index_node(new_node, ghost).await?;
+            new_page = self.consolidate_index_node(new_node, ghost)?;
         }
         Ok(new_page)
     }
@@ -581,12 +531,12 @@ impl BTree {
         }
     }
 
-    async fn consolidate_data_node<'a: 'g, 'g>(
+    fn consolidate_data_node<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         ghost: &'g Ghost,
     ) -> Result<PageRef<'g>> {
-        let mut iter = self.iter_data_node(node, ghost).await?;
+        let mut iter = self.iter_data_node(node, ghost)?;
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
         let mut new_page = self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
@@ -597,12 +547,12 @@ impl BTree {
         Ok(new_page)
     }
 
-    async fn consolidate_index_node<'a: 'g, 'g>(
+    fn consolidate_index_node<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         ghost: &'g Ghost,
     ) -> Result<PageRef<'g>> {
-        let mut iter = self.iter_index_node(node, ghost).await?;
+        let mut iter = self.iter_index_node(node, ghost)?;
         let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
         let mut new_page = self.replace_node(node.id, node.view.as_addr(), page, ghost)?;

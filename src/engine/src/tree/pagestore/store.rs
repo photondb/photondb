@@ -1,4 +1,4 @@
-use crate::tree::{page::PagePtr, Options, Result};
+use crate::tree::{page::PagePtr, Result};
 
 #[derive(Copy, Clone, Debug)]
 pub struct PageInfo {
@@ -11,7 +11,7 @@ pub struct PageStore {}
 
 #[allow(dead_code)]
 impl PageStore {
-    pub async fn open(_opts: Options) -> Result<Self> {
+    pub fn open() -> Result<Self> {
         Ok(Self {})
     }
 
@@ -19,7 +19,7 @@ impl PageStore {
         todo!()
     }
 
-    pub async fn load_page(&self, _addr: u64) -> Result<PagePtr> {
+    pub fn load_page(&self, _addr: u64) -> Result<PagePtr> {
         todo!()
     }
 
