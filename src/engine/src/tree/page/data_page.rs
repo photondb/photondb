@@ -73,10 +73,10 @@ impl<'a> DataPageRef<'a> {
 }
 
 impl<'a> Deref for DataPageRef<'a> {
-    type Target = PageRef<'a>;
+    type Target = SortedPageRef<'a, Key<'a>, Value<'a>>;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        &self.0
     }
 }
 

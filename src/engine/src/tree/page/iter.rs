@@ -307,10 +307,10 @@ where
     }
 
     fn take_children(&mut self) -> Vec<ReverseIter<I>> {
-        if !self.heap.is_empty() {
-            std::mem::take(&mut self.heap).into_vec()
-        } else {
+        if self.heap.is_empty() {
             std::mem::take(&mut self.children)
+        } else {
+            std::mem::take(&mut self.heap).into_vec()
         }
     }
 }
@@ -327,11 +327,10 @@ where
     }
 
     fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
-        if let Some(mut iter) = self.heap.pop() {
-            iter.next();
-            self.heap.push(iter);
-        } else {
+        if self.heap.is_empty() {
             self.init_heap();
+        } else if let Some(mut iter) = self.heap.peek_mut() {
+            iter.next();
         }
         self.last()
     }

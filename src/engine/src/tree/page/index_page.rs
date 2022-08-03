@@ -69,10 +69,10 @@ impl<'a> IndexPageRef<'a> {
 }
 
 impl<'a> Deref for IndexPageRef<'a> {
-    type Target = PageRef<'a>;
+    type Target = SortedPageRef<'a, &'a [u8], Index>;
 
     fn deref(&self) -> &Self::Target {
-        self.0.deref()
+        &self.0
     }
 }
 
