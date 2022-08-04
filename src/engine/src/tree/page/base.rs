@@ -368,12 +368,9 @@ impl PageBuilder {
 pub mod tests {
     use super::*;
 
-    /// A global page allocator for tests.
-    pub const ALLOC: BuiltinAlloc = BuiltinAlloc;
-
     #[test]
     fn page() {
-        let mut ptr = ALLOC.alloc(PAGE_HEADER_SIZE).unwrap();
+        let mut ptr = BuiltinAlloc.alloc(PAGE_HEADER_SIZE).unwrap();
         ptr.set_default();
 
         assert_eq!(ptr.ver(), 0);

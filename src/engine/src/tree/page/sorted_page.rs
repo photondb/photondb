@@ -307,14 +307,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{base::tests::ALLOC, *};
+    use super::*;
 
     #[test]
     fn data_page() {
         let data = [(1, 0), (2, 0), (4, 0), (7, 0), (8, 0)];
         let mut iter = SliceIter::from(&data);
         let page = SortedPageBuilder::new(PageKind::Data, true)
-            .build_from_iter(&ALLOC, &mut iter)
+            .build_from_iter(&BuiltinAlloc, &mut iter)
             .unwrap();
         assert_eq!(page.kind(), PageKind::Data);
         assert_eq!(page.is_data(), true);
