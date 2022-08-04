@@ -25,18 +25,18 @@ pub use sorted_page::{SortedPageBuilder, SortedPageIter, SortedPageRef};
 mod util;
 use util::{BufReader, BufWriter};
 
-pub enum TypedPageRef<'a> {
+pub enum TypedPage<'a> {
     Data(DataPageRef<'a>),
     Index(IndexPageRef<'a>),
     Split(SplitPageRef<'a>),
 }
 
-impl<'a> From<PageRef<'a>> for TypedPageRef<'a> {
+impl<'a> From<PageRef<'a>> for TypedPage<'a> {
     fn from(page: PageRef<'a>) -> Self {
         match page.kind() {
-            PageKind::Data => TypedPageRef::Data(page.into()),
-            PageKind::Index => TypedPageRef::Index(page.into()),
-            PageKind::Split => TypedPageRef::Split(page.into()),
+            PageKind::Data => Self::Data(page.into()),
+            PageKind::Index => Self::Index(page.into()),
+            PageKind::Split => Self::Split(page.into()),
         }
     }
 }

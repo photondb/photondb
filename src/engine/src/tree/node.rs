@@ -1,4 +1,8 @@
-use super::{page::*, pagecache::PageView, pagetable::PageTable};
+use super::{
+    page::*,
+    pagecache::{PageAddr, PageView},
+    pagetable::PageTable,
+};
 
 pub const NULL_INDEX: Index = Index::with_id(PageTable::NAN);
 pub const ROOT_INDEX: Index = Index::with_id(PageTable::MIN);
@@ -15,12 +19,21 @@ impl<'a> Node<'a> {
     }
 }
 
-pub struct DataNodeIter<'a> {
-    highest: Option<&'a [u8]>,
-    children: Vec<DataPageIter<'a>>,
+pub struct DataNodeChain<'a> {
+    pub next: PageAddr,
+    pub highest: Option<&'a [u8]>,
+    pub children: Vec<DataPageIter<'a>>,
 }
 
-impl<'a> DataNodeIter<'a> {
+impl<'a> DataNodeChain<'a> {
+    pub fn new(next: PageAddr, highest: Option<&'a [u8]>, children: Vec<DataPageIter<'a>>) -> Self {
+        Self {
+            next,
+            highest,
+            children,
+        }
+    }
+
     pub fn iter(&mut self) -> DataIter<'a, '_> {
         let mut merger = MergingIterBuilder::with_exact(self.children.len());
         for iter in self.children.iter_mut() {
@@ -77,12 +90,16 @@ impl<'a, 'i> SeekableIter<Key<'_>> for DataIter<'a, 'i> {
     }
 }
 
-pub struct IndexNodeIter<'a> {
-    highest: Option<&'a [u8]>,
-    children: Vec<IndexPageIter<'a>>,
+pub struct IndexNodeChain<'a> {
+    pub highest: Option<&'a [u8]>,
+    pub children: Vec<IndexPageIter<'a>>,
 }
 
-impl<'a> IndexNodeIter<'a> {
+impl<'a> IndexNodeChain<'a> {
+    pub fn new(highest: Option<&'a [u8]>, children: Vec<IndexPageIter<'a>>) -> Self {
+        Self { highest, children }
+    }
+
     pub fn iter(&mut self) -> IndexIter<'a, '_> {
         let mut merger = MergingIterBuilder::with_exact(self.children.len());
         for iter in self.children.iter_mut() {

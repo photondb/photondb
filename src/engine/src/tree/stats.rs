@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct Counter(AtomicU64);
 
 impl Counter {
-    pub fn incr(&self) {
+    pub fn inc(&self) {
         self.0.fetch_add(1, Ordering::Relaxed);
     }
 

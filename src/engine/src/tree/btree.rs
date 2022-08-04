@@ -262,7 +262,7 @@ impl BTree {
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.walk_node(node, ghost, |page| {
-            if let TypedPageRef::Data(page) = page.into() {
+            if let TypedPage::Data(page) = page.into() {
                 if let Some((_, v)) = page.find(key) {
                     value = v.into();
                     return true;
@@ -281,7 +281,7 @@ impl BTree {
     ) -> Result<Option<Index>> {
         let mut value = None;
         self.walk_node(node, ghost, |page| {
-            if let TypedPageRef::Index(page) = page.into() {
+            if let TypedPage::Index(page) = page.into() {
                 if let Some((_, v)) = page.find(key) {
                     if v != NULL_INDEX {
                         value = v.into();
@@ -303,7 +303,7 @@ impl BTree {
         let mut left_index = None;
         let mut right_index = None;
         self.walk_node(node, ghost, |page| {
-            if let TypedPageRef::Index(page) = page.into() {
+            if let TypedPage::Index(page) = page.into() {
                 let (left, right) = page.find_range(key);
                 if let Some(left) = left {
                     if left.1 != NULL_INDEX {
@@ -318,78 +318,105 @@ impl BTree {
         Ok((left_index, right_index))
     }
 
-    /*
-    fn iter_data_node<'a: 'g, 'g>(
+    fn data_node_chain<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         ghost: &'g Ghost,
-    ) -> Result<DataNodeIter<'g>> {
-        let mut merger = MergingIterBuilder::default();
+    ) -> Result<DataNodeChain<'g>> {
+        let mut size = 0;
+        let mut next = 0;
         let mut highest = None;
-        self.traverse_node(node, ghost, |page| {
-            match page.kind() {
-                PageKind::Data => {
-                    merger.add(page.into());
+        let mut children = Vec::with_capacity(node.view.rank() as usize + 1);
+        self.walk_node(node, ghost, |page| {
+            match TypedPage::from(page) {
+                TypedPage::Data(page) => {
+                    // TODO: explores other strategies here.
+                    if size < page.size() && highest.is_none() && children.len() >= 2 {
+                        return true;
+                    }
+                    size += page.size();
+                    next = page.next();
+                    children.push(page.into());
                 }
-                PageKind::Split => {
+                TypedPage::Split(page) => {
                     if highest == None {
-                        let split = SplitPageRef::from(page);
-                        let index = split.get();
+                        let index = page.get();
                         highest = Some(index.0);
                     }
                 }
-                PageKind::Index => unreachable!(),
+                _ => unreachable!(),
             }
             false
         })?;
-        Ok(DataNodeIter::new(merger.build(), highest))
+        Ok(DataNodeChain::new(next.into(), highest, children))
     }
 
-    fn iter_index_node<'a: 'g, 'g>(
+    fn index_node_chain<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         ghost: &'g Ghost,
-    ) -> Result<IndexNodeIter<'g>> {
-        let mut merger = MergingIterBuilder::default();
+    ) -> Result<IndexNodeChain<'g>> {
         let mut highest = None;
-        self.traverse_node(node, ghost, |page| {
-            match page.kind() {
-                PageKind::Index => {
-                    merger.add(page.into());
+        let mut children = Vec::with_capacity(node.view.rank() as usize + 1);
+        self.walk_node(node, ghost, |page| {
+            match TypedPage::from(page) {
+                TypedPage::Index(page) => {
+                    children.push(page.into());
                 }
-                PageKind::Split => {
+                TypedPage::Split(page) => {
                     if highest == None {
-                        let split = SplitPageRef::from(page);
-                        let index = split.get();
+                        let index = page.get();
                         highest = Some(index.0);
                     }
                 }
-                PageKind::Data => unreachable!(),
+                _ => unreachable!(),
             }
             false
         })?;
-        Ok(IndexNodeIter::new(merger.build(), highest))
+        Ok(IndexNodeChain::new(highest, children))
     }
 
-    fn find_data_node<'a: 'g, 'g>(&'a self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
-        let mut cursor = ROOT_INDEX;
-        let mut parent = None;
-        loop {
-            // Our access pattern guarantees that the node must exists.
-            let node = self.node(cursor.id, ghost).unwrap();
-            if node.view.ver() != cursor.ver {
-                self.reconcile_node(node, parent, ghost)?;
-                return Err(Error::Again);
-            }
-            if node.view.is_data() {
-                return Ok(node);
-            }
-            // Our access pattern guarantees that the index must exists.
-            cursor = self.lookup_index(key, node, ghost)?.unwrap();
-            parent = Some(node);
+    fn consolidate_data_node<'a: 'g, 'g>(
+        &'a self,
+        node: Node<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<PageRef<'g>> {
+        let mut chain = self.data_node_chain(node, ghost)?;
+        let mut iter = chain.iter();
+        let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
+        page.set_ver(node.view.ver());
+        page.set_next(chain.next.into());
+        let addr = node.view.as_addr();
+        let mut new_page = self.update_node(node.id, addr, page, ghost)?;
+        self.dealloc_node(addr, chain.next, ghost);
+        self.stats.num_data_consolidations.inc();
+        trace!("consolidate data node {} done {:?}", node.id, new_page);
+        if new_page.size() >= self.opts.data_node_size {
+            // new_page = self.split_data_node(node.id, new_page, ghost)?;
         }
+        Ok(new_page)
     }
 
+    fn consolidate_index_node<'a: 'g, 'g>(
+        &'a self,
+        node: Node<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<PageRef<'g>> {
+        let mut chain = self.index_node_chain(node, ghost)?;
+        let mut iter = chain.iter();
+        let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
+        page.set_ver(node.view.ver());
+        let addr = node.view.as_addr();
+        let mut new_page = self.update_node(node.id, addr, page, ghost)?;
+        self.stats.num_index_consolidations.inc();
+        trace!("consolidate index node {} done {:?}", node.id, new_page);
+        if new_page.size() >= self.opts.index_node_size {
+            // new_page = self.split_index_node(node.id, new_page, ghost)?;
+        }
+        Ok(new_page)
+    }
+
+    /*
     fn reconcile_node<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
@@ -553,86 +580,6 @@ impl BTree {
         } else {
             Ok(page)
         }
-    }
-
-    fn iter_delta_data<'a: 'g, 'g>(
-        &'a self,
-        node: Node<'g>,
-        ghost: &'g Ghost,
-    ) -> Result<(DataNodeIter<'g>, u64)> {
-        let mut size = 0;
-        let mut next = 0;
-        let mut merger = MergingIterBuilder::default();
-        let mut highest = None;
-        self.traverse_node(node, ghost, |page| {
-            match page.kind() {
-                PageKind::Data => {
-                    if size >= page.size() / 1 || merger.len() < 2 || highest.is_some() {
-                        size += page.size();
-                        next = page.next();
-                        merger.add(page.into());
-                    } else {
-                        return true;
-                    }
-                }
-                PageKind::Split => {
-                    if highest == None {
-                        let split = SplitPageRef::from(page);
-                        let index = split.get();
-                        highest = Some(index.0);
-                    }
-                }
-                PageKind::Index => unreachable!(),
-            }
-            false
-        })?;
-        let iter = DataNodeIter::new(merger.build(), highest);
-        Ok((iter, next))
-    }
-
-    fn consolidate_data_node<'a: 'g, 'g>(
-        &'a self,
-        node: Node<'g>,
-        ghost: &'g Ghost,
-    ) -> Result<PageRef<'g>> {
-        let (mut iter, next) = self.iter_delta_data(node, ghost)?;
-        let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-        page.set_ver(node.view.ver());
-        page.set_next(next);
-        let mut new_page = self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
-        if next == 0 {
-            self.stats
-                .num_data_major_consolidations
-                .fetch_add(1, Ordering::Relaxed);
-        } else {
-            self.stats
-                .num_data_minor_consolidations
-                .fetch_add(1, Ordering::Relaxed);
-        }
-        trace!("consolidate data node {} done {:?}", node.id, new_page);
-        if new_page.size() >= self.opts.data_node_size {
-            new_page = self.split_data_node(node.id, new_page, ghost)?;
-        }
-        Ok(new_page)
-    }
-
-    fn consolidate_index_node<'a: 'g, 'g>(
-        &'a self,
-        node: Node<'g>,
-        ghost: &'g Ghost,
-    ) -> Result<PageRef<'g>> {
-        let mut iter = self.iter_index_node(node, ghost)?;
-        let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-        page.set_ver(node.view.ver());
-        let mut new_page = self.replace_node(node.id, node.view.as_addr(), page, ghost)?;
-        self.stats
-            .num_index_consolidations
-            .fetch_add(1, Ordering::Relaxed);
-        trace!("consolidate index node {} done {:?}", node.id, new_page);
-        if new_page.size() >= self.opts.index_node_size {
-            new_page = self.split_index_node(node.id, new_page, ghost)?;
-        }
-        Ok(new_page)
     }
     */
 }
