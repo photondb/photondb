@@ -19,13 +19,13 @@ impl<'a> Node<'a> {
     }
 }
 
-pub struct DataNodeChain<'a> {
+pub struct DataIterChain<'a> {
     pub next: PageAddr,
     pub highest: Option<&'a [u8]>,
     pub children: Vec<DataPageIter<'a>>,
 }
 
-impl<'a> DataNodeChain<'a> {
+impl<'a> DataIterChain<'a> {
     pub fn new(next: PageAddr, highest: Option<&'a [u8]>, children: Vec<DataPageIter<'a>>) -> Self {
         Self {
             next,
@@ -34,28 +34,28 @@ impl<'a> DataNodeChain<'a> {
         }
     }
 
-    pub fn iter(&mut self) -> DataIter<'a, '_> {
+    pub fn iter(&mut self) -> MergingDataIter<'a, '_> {
         let mut merger = MergingIterBuilder::with_exact(self.children.len());
         for iter in self.children.iter_mut() {
             merger.add(iter);
         }
         let iter = merger.build();
-        DataIter::new(iter, self.highest)
+        MergingDataIter::new(iter, self.highest)
     }
 }
 
-pub struct DataIter<'a, 'i> {
+pub struct MergingDataIter<'a, 'i> {
     iter: MergingIter<&'i mut DataPageIter<'a>>,
     highest: Option<&'a [u8]>,
 }
 
-impl<'a, 'i> DataIter<'a, 'i> {
+impl<'a, 'i> MergingDataIter<'a, 'i> {
     pub fn new(iter: MergingIter<&'i mut DataPageIter<'a>>, highest: Option<&'a [u8]>) -> Self {
         Self { iter, highest }
     }
 }
 
-impl<'a, 'i> ForwardIter for DataIter<'a, 'i> {
+impl<'a, 'i> ForwardIter for MergingDataIter<'a, 'i> {
     type Item = DataItem<'a>;
 
     fn last(&self) -> Option<&Self::Item> {
@@ -78,45 +78,45 @@ impl<'a, 'i> ForwardIter for DataIter<'a, 'i> {
     }
 }
 
-impl<'a, 'i> RewindableIter for DataIter<'a, 'i> {
+impl<'a, 'i> RewindableIter for MergingDataIter<'a, 'i> {
     fn rewind(&mut self) {
         self.iter.rewind();
     }
 }
 
-impl<'a, 'i> SeekableIter<Key<'_>> for DataIter<'a, 'i> {
+impl<'a, 'i> SeekableIter<Key<'_>> for MergingDataIter<'a, 'i> {
     fn seek(&mut self, target: &Key<'_>) {
         self.iter.seek(target);
     }
 }
 
-pub struct IndexNodeChain<'a> {
+pub struct IndexIterChain<'a> {
     pub highest: Option<&'a [u8]>,
     pub children: Vec<IndexPageIter<'a>>,
 }
 
-impl<'a> IndexNodeChain<'a> {
+impl<'a> IndexIterChain<'a> {
     pub fn new(highest: Option<&'a [u8]>, children: Vec<IndexPageIter<'a>>) -> Self {
         Self { highest, children }
     }
 
-    pub fn iter(&mut self) -> IndexIter<'a, '_> {
+    pub fn iter(&mut self) -> MergingIndexIter<'a, '_> {
         let mut merger = MergingIterBuilder::with_exact(self.children.len());
         for iter in self.children.iter_mut() {
             merger.add(iter);
         }
         let iter = merger.build();
-        IndexIter::new(iter, self.highest)
+        MergingIndexIter::new(iter, self.highest)
     }
 }
 
-pub struct IndexIter<'a, 'i> {
+pub struct MergingIndexIter<'a, 'i> {
     iter: MergingIter<&'i mut IndexPageIter<'a>>,
     highest: Option<&'a [u8]>,
     last_index: Index,
 }
 
-impl<'a, 'i> IndexIter<'a, 'i> {
+impl<'a, 'i> MergingIndexIter<'a, 'i> {
     pub fn new(iter: MergingIter<&'i mut IndexPageIter<'a>>, highest: Option<&'a [u8]>) -> Self {
         Self {
             iter,
@@ -126,7 +126,7 @@ impl<'a, 'i> IndexIter<'a, 'i> {
     }
 }
 
-impl<'a, 'i> ForwardIter for IndexIter<'a, 'i> {
+impl<'a, 'i> ForwardIter for MergingIndexIter<'a, 'i> {
     type Item = IndexItem<'a>;
 
     fn last(&self) -> Option<&Self::Item> {
@@ -155,13 +155,13 @@ impl<'a, 'i> ForwardIter for IndexIter<'a, 'i> {
     }
 }
 
-impl<'a, 'i> RewindableIter for IndexIter<'a, 'i> {
+impl<'a, 'i> RewindableIter for MergingIndexIter<'a, 'i> {
     fn rewind(&mut self) {
         self.iter.rewind();
     }
 }
 
-impl<'a, 'i> SeekableIter<[u8]> for IndexIter<'a, 'i> {
+impl<'a, 'i> SeekableIter<[u8]> for MergingIndexIter<'a, 'i> {
     fn seek(&mut self, target: &[u8]) {
         self.iter.seek(target);
     }

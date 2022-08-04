@@ -318,11 +318,11 @@ impl BTree {
         Ok((left_index, right_index))
     }
 
-    fn data_node_chain<'a: 'g, 'g>(
+    fn data_iter_chain<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         ghost: &'g Ghost,
-    ) -> Result<DataNodeChain<'g>> {
+    ) -> Result<DataIterChain<'g>> {
         let mut size = 0;
         let mut next = 0;
         let mut highest = None;
@@ -348,14 +348,14 @@ impl BTree {
             }
             false
         })?;
-        Ok(DataNodeChain::new(next.into(), highest, children))
+        Ok(DataIterChain::new(next.into(), highest, children))
     }
 
-    fn index_node_chain<'a: 'g, 'g>(
+    fn index_iter_chain<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         ghost: &'g Ghost,
-    ) -> Result<IndexNodeChain<'g>> {
+    ) -> Result<IndexIterChain<'g>> {
         let mut highest = None;
         let mut children = Vec::with_capacity(node.view.rank() as usize + 1);
         self.walk_node(node, ghost, |page| {
@@ -373,7 +373,7 @@ impl BTree {
             }
             false
         })?;
-        Ok(IndexNodeChain::new(highest, children))
+        Ok(IndexIterChain::new(highest, children))
     }
 
     fn split_data_node<'a: 'g, 'g>(
@@ -529,7 +529,7 @@ impl BTree {
         node: Node<'g>,
         ghost: &'g Ghost,
     ) -> Result<PageRef<'g>> {
-        let mut chain = self.data_node_chain(node, ghost)?;
+        let mut chain = self.data_iter_chain(node, ghost)?;
         let mut iter = chain.iter();
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
@@ -553,7 +553,7 @@ impl BTree {
         node: Node<'g>,
         ghost: &'g Ghost,
     ) -> Result<PageRef<'g>> {
-        let mut chain = self.index_node_chain(node, ghost)?;
+        let mut chain = self.index_iter_chain(node, ghost)?;
         let mut iter = chain.iter();
         let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
