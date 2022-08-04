@@ -45,7 +45,6 @@ pub struct DataPageRef<'a>(SortedPageRef<'a, Key<'a>, Value<'a>>);
 impl<'a> DataPageRef<'a> {
     pub fn new(base: PageRef<'a>) -> Self {
         assert_eq!(base.kind(), PageKind::Data);
-        assert!(base.is_data());
         Self(unsafe { SortedPageRef::new(base) })
     }
 

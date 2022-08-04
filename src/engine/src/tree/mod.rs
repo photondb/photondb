@@ -7,8 +7,11 @@ pub use error::{Error, Result};
 mod ghost;
 use ghost::{Ghost, Guard};
 
-//mod btree;
-//use btree::{BTree, Stats};
+mod btree;
+use btree::BTree;
+
+mod stats;
+pub use stats::Stats;
 
 mod node;
 mod page;

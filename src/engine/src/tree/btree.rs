@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use log::trace;
 
 use super::{
@@ -8,57 +6,9 @@ use super::{
     pagecache::{PageAddr, PageCache, PageView},
     pagestore::PageStore,
     pagetable::PageTable,
+    stats::{AtomicStats, Stats},
     Error, Ghost, Options, Result,
 };
-
-#[derive(Debug)]
-pub struct Stats {
-    pub num_get_pages: usize,
-    pub num_data_splits: usize,
-    pub num_data_major_consolidations: usize,
-    pub num_data_minor_consolidations: usize,
-    pub num_index_splits: usize,
-    pub num_index_consolidations: usize,
-}
-
-struct AtomicStats {
-    num_get_pages: AtomicUsize,
-    num_data_splits: AtomicUsize,
-    num_data_major_consolidations: AtomicUsize,
-    num_data_minor_consolidations: AtomicUsize,
-    num_index_splits: AtomicUsize,
-    num_index_consolidations: AtomicUsize,
-}
-
-impl AtomicStats {
-    fn snapshot(&self) -> Stats {
-        Stats {
-            num_get_pages: self.num_get_pages.load(Ordering::Relaxed),
-            num_data_splits: self.num_data_splits.load(Ordering::Relaxed),
-            num_data_major_consolidations: self
-                .num_data_major_consolidations
-                .load(Ordering::Relaxed),
-            num_data_minor_consolidations: self
-                .num_data_minor_consolidations
-                .load(Ordering::Relaxed),
-            num_index_splits: self.num_index_splits.load(Ordering::Relaxed),
-            num_index_consolidations: self.num_index_consolidations.load(Ordering::Relaxed),
-        }
-    }
-}
-
-impl Default for AtomicStats {
-    fn default() -> Self {
-        AtomicStats {
-            num_get_pages: AtomicUsize::new(0),
-            num_data_splits: AtomicUsize::new(0),
-            num_data_major_consolidations: AtomicUsize::new(0),
-            num_data_minor_consolidations: AtomicUsize::new(0),
-            num_index_splits: AtomicUsize::new(0),
-            num_index_consolidations: AtomicUsize::new(0),
-        }
-    }
-}
 
 pub struct BTree {
     opts: Options,
@@ -95,15 +45,15 @@ impl BTree {
     ) -> Result<Option<&'g [u8]>> {
         let key = Key::new(key, lsn);
         loop {
-            match self.try_get(key, ghost) {
+            match self.try_get(&key, ghost) {
                 Err(Error::Again) => continue,
                 other => return other,
             }
         }
     }
 
-    fn try_get<'a: 'g, 'g>(&'a self, key: Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
-        let node = self.find_data_node(key.raw, ghost)?;
+    fn try_get<'a: 'g, 'g>(&'a self, key: &Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
+        let node = self.find_leaf(key.raw, ghost)?;
         self.lookup_value(key, node, ghost)
     }
 
@@ -137,7 +87,7 @@ impl BTree {
     }
 
     fn try_update<'g>(&self, key: &[u8], mut page: PagePtr, ghost: &'g Ghost) -> Result<()> {
-        let mut node = self.find_data_node(key, ghost)?;
+        let mut node = self.find_leaf(key, ghost)?;
         loop {
             page.set_ver(node.view.ver());
             page.set_rank(node.view.rank() + 1);
@@ -146,7 +96,7 @@ impl BTree {
                 Ok(_) => {
                     if page.rank() as usize >= self.opts.data_delta_length {
                         node.view = page.into();
-                        let _ = self.consolidate_data_node(node, ghost);
+                        // let _ = self.consolidate_data_node(node, ghost);
                     }
                     return Ok(());
                 }
@@ -179,6 +129,11 @@ impl BTree {
         Ok(self)
     }
 
+    fn node<'a: 'g, 'g>(&'a self, id: u64, ghost: &'g Ghost) -> Option<Node<'g>> {
+        let addr = self.table.get(id).into();
+        self.page_view(addr, ghost).map(|view| Node::new(id, view))
+    }
+
     fn page_view<'a: 'g, 'g>(&'a self, addr: PageAddr, _: &'g Ghost) -> Option<PageView<'g>> {
         match addr {
             PageAddr::Mem(addr) => {
@@ -190,35 +145,6 @@ impl BTree {
                 .page_info(addr)
                 .map(|info| PageView::Disk(info, addr)),
         }
-    }
-
-    fn load_page_with_view<'a: 'g, 'g>(
-        &'a self,
-        _: u64,
-        view: PageView<'g>,
-        _: &'g Ghost,
-    ) -> Result<PageRef<'g>> {
-        match view {
-            PageView::Mem(page) => Ok(page),
-            PageView::Disk(_, _) => todo!(),
-        }
-    }
-
-    fn load_page_with_addr<'a: 'g, 'g>(
-        &'a self,
-        _: u64,
-        addr: PageAddr,
-        _: &'g Ghost,
-    ) -> Result<Option<PageRef<'g>>> {
-        match addr {
-            PageAddr::Mem(addr) => Ok(unsafe { PageRef::new(addr as *mut u8) }),
-            PageAddr::Disk(_) => todo!(),
-        }
-    }
-
-    fn node<'a: 'g, 'g>(&'a self, id: u64, ghost: &'g Ghost) -> Option<Node<'g>> {
-        let addr = self.table.get(id).into();
-        self.page_view(addr, ghost).map(|view| Node::new(id, view))
     }
 
     fn update_node<'a: 'g, 'g>(
@@ -237,21 +163,11 @@ impl BTree {
             })
     }
 
-    fn replace_node<'a: 'g, 'g>(
-        &'a self,
-        id: u64,
-        old: PageAddr,
-        new: PagePtr,
-        ghost: &'g Ghost,
-    ) -> Result<PageRef<'g>> {
-        self.update_node(id, old, new, ghost)?;
-
-        // Deallocates the old page chain.
+    fn dealloc_node<'a: 'g, 'g>(&'a self, addr: PageAddr, until: PageAddr, ghost: &'g Ghost) {
         let cache = self.cache.clone();
-        let base = PageAddr::from(new.next());
-        let mut next = old;
         ghost.guard().defer(move || unsafe {
-            while next != base {
+            let mut next = addr;
+            while next != until {
                 if let PageAddr::Mem(addr) = next {
                     if let Some(page) = PagePtr::new(addr as *mut u8) {
                         next = page.next().into();
@@ -262,8 +178,6 @@ impl BTree {
                 break;
             }
         });
-
-        Ok(new.into())
     }
 
     fn install_node<'a: 'g, 'g>(&'a self, new: impl Into<u64>, ghost: &'g Ghost) -> Result<u64> {
@@ -272,12 +186,58 @@ impl BTree {
         Ok(id)
     }
 
-    fn traverse_node<'a: 'g, 'g, F>(
+    fn load_page_with_view<'a: 'g, 'g>(
         &'a self,
-        node: Node<'g>,
-        ghost: &'g Ghost,
-        mut f: F,
-    ) -> Result<()>
+        _: u64,
+        view: PageView<'g>,
+        _: &'g Ghost,
+    ) -> Result<PageRef<'g>> {
+        match view {
+            PageView::Mem(page) => Ok(page),
+            PageView::Disk(_, addr) => {
+                let ptr = self.store.load_page(addr)?;
+                Ok(ptr.into())
+            }
+        }
+    }
+
+    fn load_page_with_addr<'a: 'g, 'g>(
+        &'a self,
+        _: u64,
+        addr: PageAddr,
+        _: &'g Ghost,
+    ) -> Result<Option<PageRef<'g>>> {
+        match addr {
+            PageAddr::Mem(addr) => Ok(unsafe { PageRef::new(addr as *mut u8) }),
+            PageAddr::Disk(addr) => {
+                let ptr = self.store.load_page(addr)?;
+                Ok(Some(ptr.into()))
+            }
+        }
+    }
+}
+
+impl BTree {
+    fn find_leaf<'a: 'g, 'g>(&'a self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
+        let mut cursor = ROOT_INDEX;
+        let mut parent = None;
+        loop {
+            // Our access pattern guarantees that the node must exists.
+            let node = self.node(cursor.id, ghost).unwrap();
+            if node.view.ver() != cursor.ver {
+                // self.reconcile_node(node, parent, ghost)?;
+                return Err(Error::Again);
+            }
+            if node.view.is_data() {
+                return Ok(node);
+            }
+            // Our access pattern guarantees that the index must exists.
+            cursor = self.lookup_index(key, node, ghost)?.unwrap();
+            parent = Some(node);
+        }
+    }
+
+    fn walk_node<'a: 'g, 'g, F>(&'a self, node: Node<'g>, ghost: &'g Ghost, mut f: F) -> Result<()>
     where
         F: FnMut(PageRef<'g>) -> bool,
     {
@@ -294,6 +254,71 @@ impl BTree {
         Ok(())
     }
 
+    fn lookup_value<'a: 'g, 'g>(
+        &'a self,
+        key: &Key<'_>,
+        node: Node<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<Option<&'g [u8]>> {
+        let mut value = None;
+        self.walk_node(node, ghost, |page| {
+            if let TypedPageRef::Data(page) = page.into() {
+                if let Some((_, v)) = page.find(key) {
+                    value = v.into();
+                    return true;
+                }
+            }
+            false
+        })?;
+        Ok(value)
+    }
+
+    fn lookup_index<'a: 'g, 'g>(
+        &'a self,
+        key: &[u8],
+        node: Node<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<Option<Index>> {
+        let mut value = None;
+        self.walk_node(node, ghost, |page| {
+            if let TypedPageRef::Index(page) = page.into() {
+                if let Some((_, v)) = page.find(key) {
+                    if v != NULL_INDEX {
+                        value = v.into();
+                        return true;
+                    }
+                }
+            }
+            false
+        })?;
+        Ok(value)
+    }
+
+    fn lookup_index_range<'a: 'g, 'g>(
+        &'a self,
+        key: &[u8],
+        node: Node<'g>,
+        ghost: &'g Ghost,
+    ) -> Result<(Option<IndexItem<'g>>, Option<IndexItem<'g>>)> {
+        let mut left_index = None;
+        let mut right_index = None;
+        self.walk_node(node, ghost, |page| {
+            if let TypedPageRef::Index(page) = page.into() {
+                let (left, right) = page.find_range(key);
+                if let Some(left) = left {
+                    if left.1 != NULL_INDEX {
+                        left_index = Some(left);
+                        right_index = right;
+                        return true;
+                    }
+                }
+            }
+            false
+        })?;
+        Ok((left_index, right_index))
+    }
+
+    /*
     fn iter_data_node<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
@@ -344,74 +369,6 @@ impl BTree {
             false
         })?;
         Ok(IndexNodeIter::new(merger.build(), highest))
-    }
-
-    fn lookup_value<'a: 'g, 'g>(
-        &'a self,
-        key: Key<'_>,
-        node: Node<'g>,
-        ghost: &'g Ghost,
-    ) -> Result<Option<&'g [u8]>> {
-        let mut value = None;
-        self.traverse_node(node, ghost, |page| {
-            self.stats.num_get_pages.fetch_add(1, Ordering::Relaxed);
-            if page.kind() == PageKind::Data {
-                let page = DataPageRef::from(page);
-                if let Some((_, v)) = page.find(key) {
-                    value = v.into();
-                    return true;
-                }
-            }
-            false
-        })?;
-        Ok(value)
-    }
-
-    fn lookup_index<'a: 'g, 'g>(
-        &'a self,
-        key: &[u8],
-        node: Node<'g>,
-        ghost: &'g Ghost,
-    ) -> Result<Option<Index>> {
-        let mut value = None;
-        self.traverse_node(node, ghost, |page| {
-            if page.kind() == PageKind::Index {
-                let page = IndexPageRef::from(page);
-                if let Some((_, v)) = page.find(key) {
-                    if v != NULL_INDEX {
-                        value = v.into();
-                        return true;
-                    }
-                }
-            }
-            false
-        })?;
-        Ok(value)
-    }
-
-    fn lookup_index_range<'a: 'g, 'g>(
-        &'a self,
-        key: &[u8],
-        node: Node<'g>,
-        ghost: &'g Ghost,
-    ) -> Result<(Option<(&'g [u8], Index)>, Option<(&'g [u8], Index)>)> {
-        let mut left_index = None;
-        let mut right_index = None;
-        self.traverse_node(node, ghost, |page| {
-            if page.kind() == PageKind::Index {
-                let page = IndexPageRef::from(page);
-                let (left, right) = page.find_range(key);
-                if let Some(left) = left {
-                    if left.1 != NULL_INDEX {
-                        left_index = Some(left);
-                        right_index = right;
-                        return true;
-                    }
-                }
-            }
-            false
-        })?;
-        Ok((left_index, right_index))
     }
 
     fn find_data_node<'a: 'g, 'g>(&'a self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
@@ -677,4 +634,5 @@ impl BTree {
         }
         Ok(new_page)
     }
+    */
 }

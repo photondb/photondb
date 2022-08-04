@@ -27,7 +27,7 @@ impl<'a> DataNodeIter<'a> {
             merger.add(iter);
         }
         let iter = merger.build();
-        DataIter::new(iter, self.highest.clone())
+        DataIter::new(iter, self.highest)
     }
 }
 
@@ -89,7 +89,7 @@ impl<'a> IndexNodeIter<'a> {
             merger.add(iter);
         }
         let iter = merger.build();
-        IndexIter::new(iter, self.highest.clone())
+        IndexIter::new(iter, self.highest)
     }
 }
 
