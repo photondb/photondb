@@ -96,7 +96,7 @@ impl BTree {
                 Ok(_) => {
                     if page.rank() as usize >= self.opts.data_delta_length {
                         node.view = page.into();
-                        // let _ = self.consolidate_data_node(node, ghost);
+                        let _ = self.consolidate_data_node(node, ghost);
                     }
                     return Ok(());
                 }

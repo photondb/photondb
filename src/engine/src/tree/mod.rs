@@ -1,17 +1,17 @@
-//mod table;
-//pub use table::Table;
+mod table;
+pub use table::Table;
 
 mod error;
 pub use error::{Error, Result};
 
-mod ghost;
-use ghost::{Ghost, Guard};
+mod stats;
+pub use stats::Stats;
 
 mod btree;
 use btree::BTree;
 
-mod stats;
-pub use stats::Stats;
+mod ghost;
+use ghost::{Ghost, Guard};
 
 mod node;
 mod page;

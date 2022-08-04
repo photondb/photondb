@@ -3,18 +3,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct Counter(AtomicU64);
 
 impl Counter {
-    pub fn inc(&self) {
-        self.0.fetch_add(1, Ordering::Relaxed);
+    pub fn get(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
     }
 
-    pub fn value(&self) -> u64 {
-        self.0.load(Ordering::Relaxed)
+    pub fn inc(&self) {
+        self.0.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 impl Default for Counter {
     fn default() -> Self {
-        Counter(AtomicU64::new(0))
+        Self(AtomicU64::new(0))
     }
 }
 
@@ -37,10 +37,10 @@ pub struct AtomicStats {
 impl AtomicStats {
     pub fn snapshot(&self) -> Stats {
         Stats {
-            num_data_splits: self.num_data_splits.value(),
-            num_data_consolidations: self.num_data_consolidations.value(),
-            num_index_splits: self.num_index_splits.value(),
-            num_index_consolidations: self.num_index_consolidations.value(),
+            num_data_splits: self.num_data_splits.get(),
+            num_data_consolidations: self.num_data_consolidations.get(),
+            num_index_splits: self.num_index_splits.get(),
+            num_index_consolidations: self.num_index_consolidations.get(),
         }
     }
 }
