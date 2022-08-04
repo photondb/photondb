@@ -3,10 +3,11 @@ use std::{
     mem::size_of,
 };
 
-use super::{BufReader, BufWriter, Comparable};
+use super::{BufReader, BufWriter};
 
+/// An interface to encode data.
 pub trait Encodable {
-    /// Returns the size to encode this object.
+    /// Returns the exact size to encode this object.
     fn encode_size(&self) -> usize;
 
     /// Encodes this object to a `BufWriter`.
@@ -17,6 +18,7 @@ pub trait Encodable {
     unsafe fn encode_to(&self, w: &mut BufWriter);
 }
 
+/// An interface to decode data.
 pub trait Decodable {
     /// Decodes an object from a `BufReader`.
     ///
@@ -24,6 +26,30 @@ pub trait Decodable {
     ///
     /// The `BufReader` must be initialized with enough data to decode such an object.
     unsafe fn decode_from(r: &mut BufReader) -> Self;
+}
+
+pub trait Comparable<T> {
+    fn compare(&self, other: &T) -> Ordering;
+
+    fn eq(&self, other: &T) -> bool {
+        self.compare(other) == Ordering::Equal
+    }
+
+    fn lt(&self, other: &T) -> bool {
+        self.compare(other) == Ordering::Less
+    }
+
+    fn le(&self, other: &T) -> bool {
+        self.compare(other) != Ordering::Greater
+    }
+
+    fn gt(&self, other: &T) -> bool {
+        self.compare(other) == Ordering::Greater
+    }
+
+    fn ge(&self, other: &T) -> bool {
+        self.compare(other) != Ordering::Less
+    }
 }
 
 impl Encodable for u64 {
@@ -42,6 +68,12 @@ impl Decodable for u64 {
     }
 }
 
+impl Comparable<u64> for u64 {
+    fn compare(&self, other: &u64) -> Ordering {
+        self.cmp(other)
+    }
+}
+
 impl Encodable for &[u8] {
     fn encode_size(&self) -> usize {
         BufWriter::length_prefixed_slice_size(self)
@@ -55,6 +87,12 @@ impl Encodable for &[u8] {
 impl Decodable for &[u8] {
     unsafe fn decode_from(r: &mut BufReader) -> Self {
         r.get_length_prefixed_slice()
+    }
+}
+
+impl Comparable<&[u8]> for &[u8] {
+    fn compare(&self, other: &&[u8]) -> Ordering {
+        self.cmp(other)
     }
 }
 
@@ -85,12 +123,6 @@ impl PartialOrd for Key<'_> {
     }
 }
 
-impl Comparable<Key<'_>> for Key<'_> {
-    fn compare(&self, other: &Key<'_>) -> Ordering {
-        self.cmp(other)
-    }
-}
-
 impl Encodable for Key<'_> {
     fn encode_size(&self) -> usize {
         BufWriter::length_prefixed_slice_size(self.raw) + size_of::<u64>()
@@ -107,6 +139,12 @@ impl Decodable for Key<'_> {
         let raw = r.get_length_prefixed_slice();
         let lsn = r.get_u64();
         Self { raw, lsn }
+    }
+}
+
+impl Comparable<Key<'_>> for Key<'_> {
+    fn compare(&self, other: &Key<'_>) -> Ordering {
+        self.cmp(other)
     }
 }
 

@@ -2,44 +2,7 @@ use std::{
     cmp::{Ord, Ordering},
     collections::BinaryHeap,
     ops::{Deref, DerefMut},
-    slice,
 };
-
-pub trait Comparable<T> {
-    fn compare(&self, other: &T) -> Ordering;
-
-    fn eq(&self, other: &T) -> bool {
-        self.compare(other) == Ordering::Equal
-    }
-
-    fn lt(&self, other: &T) -> bool {
-        self.compare(other) == Ordering::Less
-    }
-
-    fn le(&self, other: &T) -> bool {
-        self.compare(other) != Ordering::Greater
-    }
-
-    fn gt(&self, other: &T) -> bool {
-        self.compare(other) == Ordering::Greater
-    }
-
-    fn ge(&self, other: &T) -> bool {
-        self.compare(other) != Ordering::Less
-    }
-}
-
-impl Comparable<u64> for u64 {
-    fn compare(&self, other: &u64) -> Ordering {
-        self.cmp(other)
-    }
-}
-
-impl Comparable<&[u8]> for &[u8] {
-    fn compare(&self, other: &&[u8]) -> Ordering {
-        self.cmp(other)
-    }
-}
 
 pub trait ForwardIter {
     type Item;
@@ -57,10 +20,10 @@ pub trait ForwardIter {
 }
 
 pub trait SeekableIter: ForwardIter {
+    type Target;
+
     /// Positions the next item at or after `target`.
-    fn seek<T>(&mut self, target: &T)
-    where
-        T: Comparable<Self::Item>;
+    fn seek(&mut self, target: &Self::Target);
 }
 
 pub trait RewindableIter: ForwardIter {
@@ -71,7 +34,7 @@ pub trait RewindableIter: ForwardIter {
 /// A wrapper that turns a slice into a `SeekableIter` and `RewindableIter`.
 pub struct SliceIter<'a, I> {
     data: &'a [I],
-    iter: slice::Iter<'a, I>,
+    iter: std::slice::Iter<'a, I>,
     last: Option<&'a I>,
 }
 
@@ -105,14 +68,10 @@ impl<'a, I> SeekableIter for SliceIter<'a, I>
 where
     I: Ord,
 {
-    fn seek<T>(&mut self, target: &T)
-    where
-        T: Comparable<I>,
-    {
-        let index = match self
-            .data
-            .binary_search_by(|item| target.compare(item).reverse())
-        {
+    type Target = I;
+
+    fn seek(&mut self, target: &Self::Target) {
+        let index = match self.data.binary_search_by(|item| item.cmp(target)) {
             Ok(i) => i,
             Err(i) => i,
         };
@@ -242,7 +201,7 @@ where
 {
     fn cmp(&self, other: &Self) -> Ordering {
         let mut ord = match (self.last(), other.last()) {
-            (Some(a), Some(b)) => b.cmp(&a),
+            (Some(a), Some(b)) => b.cmp(a),
             (Some(_), None) => Ordering::Greater,
             (None, Some(_)) => Ordering::Less,
             (None, None) => Ordering::Equal,
@@ -345,10 +304,9 @@ where
     I: SeekableIter,
     I::Item: Ord,
 {
-    fn seek<T>(&mut self, target: &T)
-    where
-        T: Comparable<I::Item>,
-    {
+    type Target = I::Target;
+
+    fn seek(&mut self, target: &Self::Target) {
         self.reset(|iter| iter.seek(target));
     }
 }

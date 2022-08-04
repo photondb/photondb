@@ -1,4 +1,4 @@
-use std::{mem::size_of, slice};
+use std::mem::size_of;
 
 /// An unsafe, little-endian buffer reader.
 pub struct BufReader {
@@ -28,7 +28,7 @@ impl BufReader {
     pub unsafe fn get_slice<'a>(&mut self, len: usize) -> &'a [u8] {
         let ptr = self.ptr.add(self.pos);
         self.pos += len;
-        slice::from_raw_parts(ptr, len)
+        std::slice::from_raw_parts(ptr, len)
     }
 
     pub unsafe fn get_length_prefixed_slice<'a>(&mut self) -> &'a [u8] {
