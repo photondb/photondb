@@ -13,10 +13,8 @@ pub use data::{Comparable, Decodable, Encodable, Index, Key, Value};
 mod data_page;
 pub use data_page::{DataPageBuilder, DataPageIter, DataPageRef};
 
-/*
 mod index_page;
 pub use index_page::{IndexPageBuilder, IndexPageIter, IndexPageRef};
-*/
 
 mod split_page;
 pub use split_page::{SplitPageBuilder, SplitPageRef};

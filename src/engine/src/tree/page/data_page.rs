@@ -2,6 +2,8 @@ use std::ops::Deref;
 
 use super::*;
 
+pub type DataItem<'a> = (Key<'a>, Value<'a>);
+
 /// A builder to create data pages.
 pub struct DataPageBuilder(SortedPageBuilder);
 
@@ -24,7 +26,7 @@ impl DataPageBuilder {
     pub fn build_from_iter<'a, A, I>(self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
-        I: RewindableIter<Item = (Key<'a>, Value<'a>)>,
+        I: RewindableIter<Item = DataItem<'a>>,
     {
         self.0.build_from_iter(alloc, iter)
     }
@@ -42,8 +44,8 @@ impl<'a> DataPageRef<'a> {
     }
 
     /// Returns the entry that matches `target`.
-    pub fn find(&self, target: Key<'_>) -> Option<(Key<'a>, Value<'a>)> {
-        if let Some((k, v)) = self.0.seek(&target) {
+    pub fn find(&self, target: &Key<'_>) -> Option<DataItem<'a>> {
+        if let Some((k, v)) = self.0.seek(target) {
             if k.raw == target.raw {
                 return Some((k, v));
             }
@@ -110,7 +112,7 @@ where
 }
 
 impl<'a> ForwardIter for DataPageIter<'a> {
-    type Item = (Key<'a>, Value<'a>);
+    type Item = DataItem<'a>;
 
     fn last(&self) -> Option<&Self::Item> {
         self.0.last()

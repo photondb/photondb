@@ -2,6 +2,8 @@ use std::ops::Deref;
 
 use super::*;
 
+pub type IndexItem<'a> = (&'a [u8], Index);
+
 /// A builder to create index pages.
 pub struct IndexPageBuilder(SortedPageBuilder);
 
@@ -16,7 +18,7 @@ impl IndexPageBuilder {
     pub fn build_from_iter<'a, A, I>(self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
-        I: RewindableIter<Key = &'a [u8], Value = Index>,
+        I: RewindableIter<Item = IndexItem<'a>>,
     {
         self.0.build_from_iter(alloc, iter)
     }
@@ -34,33 +36,32 @@ impl<'a> IndexPageRef<'a> {
     }
 
     /// Returns the entry that contains `target`.
-    pub fn find(&self, target: &[u8]) -> Option<(&'a [u8], Index)> {
+    pub fn find(&self, target: &[u8]) -> Option<IndexItem<'a>> {
         self.0.seek_back(&target)
     }
 
     /// Returns the two entries that enclose `target`.
-    pub fn find_range(
-        &self,
-        target: &[u8],
-    ) -> (Option<(&'a [u8], Index)>, Option<(&'a [u8], Index)>) {
+    pub fn find_range(&self, target: &[u8]) -> (Option<IndexItem<'a>>, Option<IndexItem<'a>>) {
         match self.0.search(&target) {
             Ok(i) => (self.0.get(i), i.checked_add(1).and_then(|i| self.0.get(i))),
             Err(i) => (i.checked_sub(1).and_then(|i| self.0.get(i)), self.0.get(i)),
         }
     }
 
+    /// Creates an iterator over entries in this page.
     pub fn iter(&self) -> IndexPageIter<'a> {
         IndexPageIter::new(self.clone())
     }
 
-    pub fn split(&self) -> Option<(&'a [u8], IndexPageSplitIter<'a>)> {
+    /// Returns a split key and an iterator over the entries at or after the split key.
+    pub fn split(&self) -> Option<(&'a [u8], BoundedIter<IndexPageIter<'a>>)> {
         if let Some((sep, _)) = self.0.get(self.0.len() / 2) {
             let rank = match self.0.search(&sep) {
                 Ok(i) => i,
                 Err(i) => i,
             };
             if rank > 0 {
-                let iter = IndexPageSplitIter::new(self.iter(), rank);
+                let iter = BoundedIter::new(self.iter(), rank);
                 return Some((sep, iter));
             }
         }
@@ -104,14 +105,13 @@ where
 }
 
 impl<'a> ForwardIter for IndexPageIter<'a> {
-    type Key = &'a [u8];
-    type Value = Index;
+    type Item = IndexItem<'a>;
 
-    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
+    fn last(&self) -> Option<&Self::Item> {
         self.0.last()
     }
 
-    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
+    fn next(&mut self) -> Option<&Self::Item> {
         self.0.next()
     }
 
@@ -124,11 +124,8 @@ impl<'a> ForwardIter for IndexPageIter<'a> {
     }
 }
 
-impl<'a> SeekableIter for IndexPageIter<'a> {
-    fn seek<T>(&mut self, target: &T)
-    where
-        T: Comparable<Self::Key>,
-    {
+impl<'a> SeekableIter<[u8]> for IndexPageIter<'a> {
+    fn seek(&mut self, target: &[u8]) {
         self.0.seek(target);
     }
 }
@@ -136,45 +133,5 @@ impl<'a> SeekableIter for IndexPageIter<'a> {
 impl<'a> RewindableIter for IndexPageIter<'a> {
     fn rewind(&mut self) {
         self.0.rewind();
-    }
-}
-
-pub struct IndexPageSplitIter<'a> {
-    base: IndexPageIter<'a>,
-    skip: usize,
-}
-
-impl<'a> IndexPageSplitIter<'a> {
-    fn new(mut base: IndexPageIter<'a>, skip: usize) -> Self {
-        base.skip(skip);
-        Self { base, skip }
-    }
-}
-
-impl<'a> ForwardIter for IndexPageSplitIter<'a> {
-    type Key = &'a [u8];
-    type Value = Index;
-
-    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
-        self.base.last()
-    }
-
-    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
-        self.base.next()
-    }
-
-    fn skip(&mut self, n: usize) {
-        self.base.skip(n)
-    }
-
-    fn skip_all(&mut self) {
-        self.base.skip_all()
-    }
-}
-
-impl<'a> RewindableIter for IndexPageSplitIter<'a> {
-    fn rewind(&mut self) {
-        self.base.rewind();
-        self.base.skip(self.skip);
     }
 }
