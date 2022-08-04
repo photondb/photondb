@@ -19,11 +19,9 @@ pub trait ForwardIter {
     }
 }
 
-pub trait SeekableIter: ForwardIter {
-    type Target;
-
+pub trait SeekableIter<T>: ForwardIter {
     /// Positions the next item at or after `target`.
-    fn seek(&mut self, target: &Self::Target);
+    fn seek(&mut self, target: &T);
 }
 
 pub trait RewindableIter: ForwardIter {
@@ -48,10 +46,7 @@ impl<'a, I> SliceIter<'a, I> {
     }
 }
 
-impl<'a, I> ForwardIter for SliceIter<'a, I>
-where
-    I: Ord,
-{
+impl<'a, I> ForwardIter for SliceIter<'a, I> {
     type Item = I;
 
     fn last(&self) -> Option<&I> {
@@ -64,13 +59,11 @@ where
     }
 }
 
-impl<'a, I> SeekableIter for SliceIter<'a, I>
+impl<'a, I> SeekableIter<I> for SliceIter<'a, I>
 where
     I: Ord,
 {
-    type Target = I;
-
-    fn seek(&mut self, target: &Self::Target) {
+    fn seek(&mut self, target: &I) {
         let index = match self.data.binary_search_by(|item| item.cmp(target)) {
             Ok(i) => i,
             Err(i) => i,
@@ -80,10 +73,7 @@ where
     }
 }
 
-impl<'a, I> RewindableIter for SliceIter<'a, I>
-where
-    I: Ord,
-{
+impl<'a, I> RewindableIter for SliceIter<'a, I> {
     fn rewind(&mut self) {
         self.iter = self.data.iter();
         self.last = None;
@@ -114,10 +104,7 @@ impl<I> OptionIter<I> {
     }
 }
 
-impl<I> ForwardIter for OptionIter<I>
-where
-    I: Ord,
-{
+impl<I> ForwardIter for OptionIter<I> {
     type Item = I;
 
     fn last(&self) -> Option<&I> {
@@ -134,10 +121,7 @@ where
     }
 }
 
-impl<I> RewindableIter for OptionIter<I>
-where
-    I: Ord,
-{
+impl<I> RewindableIter for OptionIter<I> {
     fn rewind(&mut self) {
         if let Some(last) = self.last.take() {
             self.next = Some(last);
@@ -299,14 +283,12 @@ where
     }
 }
 
-impl<I> SeekableIter for MergingIter<I>
+impl<I, T> SeekableIter<T> for MergingIter<I>
 where
-    I: SeekableIter,
+    I: SeekableIter<T>,
     I::Item: Ord,
 {
-    type Target = I::Target;
-
-    fn seek(&mut self, target: &Self::Target) {
+    fn seek(&mut self, target: &T) {
         self.reset(|iter| iter.seek(target));
     }
 }

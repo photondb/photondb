@@ -3,30 +3,28 @@ use std::{cmp::Ordering, marker::PhantomData, mem::size_of, ops::Deref};
 use super::*;
 
 /// A builder to create pages with sorted entries.
-pub struct SortedPageBuilder<K, V> {
+pub struct SortedPageBuilder {
     base: PageBuilder,
     offsets_size: usize,
     payload_size: usize,
-    _mark: PhantomData<(K, V)>,
 }
 
 // TODO: Optimizes the page layout with
 // https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
-impl<K, V> SortedPageBuilder<K, V>
-where
-    K: Encodable,
-    V: Encodable,
-{
+impl SortedPageBuilder {
     pub fn new(kind: PageKind, is_data: bool) -> Self {
         Self {
             base: PageBuilder::new(kind, is_data),
             offsets_size: 0,
             payload_size: 0,
-            _mark: PhantomData,
         }
     }
 
-    fn add(&mut self, key: &K, value: &V) {
+    fn add<K, V>(&mut self, key: &K, value: &V)
+    where
+        K: Encodable,
+        V: Encodable,
+    {
         self.offsets_size += size_of::<u32>();
         self.payload_size += key.encode_size() + value.encode_size();
     }
@@ -48,10 +46,16 @@ where
     }
 
     /// Builds a page with entries from the given iterator.
-    pub fn build_from_iter<A, I>(mut self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
+    pub fn build_from_iter<A, I, K, V>(
+        mut self,
+        alloc: &A,
+        iter: &mut I,
+    ) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
         I: RewindableIter<Item = (K, V)>,
+        K: Encodable,
+        V: Encodable,
     {
         iter.rewind();
         while let Some((k, v)) = iter.next() {
@@ -69,19 +73,14 @@ where
     }
 }
 
-struct SortedPageBuf<K, V> {
+struct SortedPageBuf {
     offsets: *mut u32,
     content: BufWriter,
     current: usize,
-    _mark: PhantomData<(K, V)>,
 }
 
-impl<K, V> SortedPageBuf<K, V>
-where
-    K: Encodable,
-    V: Encodable,
-{
-    unsafe fn new(mut base: PagePtr, builder: SortedPageBuilder<K, V>) -> Self {
+impl SortedPageBuf {
+    unsafe fn new(mut base: PagePtr, builder: SortedPageBuilder) -> Self {
         let offsets = base.content_mut() as *mut u32;
         let mut content = BufWriter::new(base.content_mut());
         content.skip(builder.offsets_size);
@@ -89,11 +88,14 @@ where
             offsets,
             content,
             current: 0,
-            _mark: PhantomData,
         }
     }
 
-    unsafe fn add(&mut self, key: &K, value: &V) {
+    unsafe fn add<K, V>(&mut self, key: &K, value: &V)
+    where
+        K: Encodable,
+        V: Encodable,
+    {
         let offset = self.content.pos() as u32;
         self.offsets.add(self.current).write(offset.to_le());
         self.current += 1;
@@ -103,17 +105,16 @@ where
 }
 
 /// An immutable reference to a sorted page.
-pub struct SortedPageRef<'a, K, V, T> {
+pub struct SortedPageRef<'a, K, V> {
     base: PageRef<'a>,
     offsets: &'a [u32],
-    _mark: PhantomData<(K, V, T)>,
+    _mark: PhantomData<(K, V)>,
 }
 
-impl<'a, K, V, T> SortedPageRef<'a, K, V, T>
+impl<'a, K, V> SortedPageRef<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
-    T: Comparable<K>,
 {
     pub unsafe fn new(base: PageRef<'a>) -> Self {
         let offsets_ptr = base.content() as *const u32;
@@ -154,7 +155,10 @@ where
     ///
     /// If `target` is found, returns `Result::Ok` with its index. Otherwise, returns `Result::Err`
     /// with the index where `target` could be inserted while maintaining the sorted order.
-    pub fn search(&self, target: &T) -> Result<usize, usize> {
+    pub fn search<T>(&self, target: &T) -> Result<usize, usize>
+    where
+        T: Comparable<K>,
+    {
         let mut left = 0;
         let mut right = self.len();
         while left < right {
@@ -174,7 +178,10 @@ where
     }
 
     /// Returns the first entry that is no less than `target`.
-    pub fn seek(&self, target: &T) -> Option<(K, V)> {
+    pub fn seek<T>(&self, target: &T) -> Option<(K, V)>
+    where
+        T: Comparable<K>,
+    {
         let rank = match self.search(target) {
             Ok(i) => i,
             Err(i) => i,
@@ -183,7 +190,10 @@ where
     }
 
     /// Returns the first entry that is no greater than `target`.
-    pub fn seek_back(&self, target: &T) -> Option<(K, V)> {
+    pub fn seek_back<T>(&self, target: &T) -> Option<(K, V)>
+    where
+        T: Comparable<K>,
+    {
         match self.search(target) {
             Ok(i) => self.get(i),
             Err(i) => i.checked_sub(1).and_then(|i| self.get(i)),
@@ -196,7 +206,7 @@ where
     }
 }
 
-impl<'a, K, V, T> Clone for SortedPageRef<'a, K, V, T> {
+impl<'a, K, V> Clone for SortedPageRef<'a, K, V> {
     fn clone(&self) -> Self {
         Self {
             base: self.base,
@@ -206,7 +216,7 @@ impl<'a, K, V, T> Clone for SortedPageRef<'a, K, V, T> {
     }
 }
 
-impl<'a, K, V, T> Deref for SortedPageRef<'a, K, V, T> {
+impl<'a, K, V> Deref for SortedPageRef<'a, K, V> {
     type Target = PageRef<'a>;
 
     fn deref(&self) -> &Self::Target {
@@ -214,19 +224,18 @@ impl<'a, K, V, T> Deref for SortedPageRef<'a, K, V, T> {
     }
 }
 
-pub struct SortedPageIter<'a, K, V, T> {
-    page: SortedPageRef<'a, K, V, T>,
+pub struct SortedPageIter<'a, K, V> {
+    page: SortedPageRef<'a, K, V>,
     next: usize,
     last: Option<(K, V)>,
 }
 
-impl<'a, K, V, T> SortedPageIter<'a, K, V, T>
+impl<'a, K, V> SortedPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
-    T: Comparable<K>,
 {
-    pub fn new(page: SortedPageRef<'a, K, V, T>) -> Self {
+    pub fn new(page: SortedPageRef<'a, K, V>) -> Self {
         Self {
             page,
             next: 0,
@@ -235,11 +244,10 @@ where
     }
 }
 
-impl<'a, K, V, T> ForwardIter for SortedPageIter<'a, K, V, T>
+impl<'a, K, V> ForwardIter for SortedPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
-    T: Comparable<K>,
 {
     type Item = (K, V);
 
@@ -260,14 +268,12 @@ where
     }
 }
 
-impl<'a, K, V, T> SeekableIter for SortedPageIter<'a, K, V, T>
+impl<'a, K, V, T> SeekableIter<T> for SortedPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
     T: Comparable<K>,
 {
-    type Target = T;
-
     fn seek(&mut self, target: &T) {
         self.next = match self.page.search(target) {
             Ok(i) => i,
@@ -277,11 +283,10 @@ where
     }
 }
 
-impl<'a, K, V, T> RewindableIter for SortedPageIter<'a, K, V, T>
+impl<'a, K, V> RewindableIter for SortedPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
-    T: Comparable<K>,
 {
     fn rewind(&mut self) {
         self.next = 0;
