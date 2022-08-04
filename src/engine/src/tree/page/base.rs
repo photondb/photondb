@@ -20,7 +20,7 @@ impl PagePtr {
         NonNull::new(ptr).map(Self)
     }
 
-    /// Returns the raw pointer.
+    /// Returns the raw pointer to this page.
     pub const fn as_raw(self) -> *mut u8 {
         self.0.as_ptr()
     }
@@ -45,7 +45,7 @@ impl PagePtr {
         (self.as_raw() as *mut u32).add(4)
     }
 
-    /// Returns the page version.
+    /// Returns the version of this page.
     pub fn ver(&self) -> u64 {
         unsafe {
             let mut ver = 0u64;
@@ -64,7 +64,7 @@ impl PagePtr {
         }
     }
 
-    /// Returns the rank of the page in the chain.
+    /// Returns the rank of this page in the chain.
     pub fn rank(&self) -> u8 {
         unsafe { self.rank_ptr().read() }
     }
@@ -97,7 +97,7 @@ impl PagePtr {
         }
     }
 
-    /// Returns the page kind.
+    /// Returns the `PageKind` of this page.
     pub fn kind(&self) -> PageKind {
         self.tags().kind()
     }
@@ -106,7 +106,7 @@ impl PagePtr {
         self.set_tags(self.tags().with_kind(kind));
     }
 
-    /// Returns true if this is a data page.
+    /// Returns true if this page is a data page.
     pub fn is_data(&self) -> bool {
         self.tags().is_data()
     }
@@ -115,27 +115,17 @@ impl PagePtr {
         self.set_tags(self.tags().with_data(is_data));
     }
 
-    /// Sets the page header as default.
+    /// Sets the header of this page to default.
     pub fn set_default(&mut self) {
         unsafe { self.as_raw().write_bytes(0, PAGE_HEADER_SIZE) };
     }
 
-    /// Returns a pointer to the page content.
-    pub fn content(&self) -> *const u8 {
-        unsafe { self.as_raw().add(PAGE_HEADER_SIZE) }
-    }
-
-    /// Returns a mutable pointer to the page content.
-    pub fn content_mut(&mut self) -> *mut u8 {
-        unsafe { self.as_raw().add(PAGE_HEADER_SIZE) }
-    }
-
-    /// Returns the size of the page.
+    /// Returns the size of this page.
     pub fn size(&self) -> usize {
         PAGE_HEADER_SIZE + self.content_size() as usize
     }
 
-    /// Returns the size of the page content.
+    /// Returns the content size of this page.
     pub fn content_size(&self) -> usize {
         let size = unsafe { self.content_size_ptr().read() };
         u32::from_le(size) as usize
@@ -146,6 +136,16 @@ impl PagePtr {
         unsafe {
             self.content_size_ptr().write((size as u32).to_le());
         }
+    }
+
+    /// Returns a raw pointer to the content of this page.
+    pub fn content(&self) -> *const u8 {
+        unsafe { self.as_raw().add(PAGE_HEADER_SIZE) }
+    }
+
+    /// Returns a mutable pointer to the content of this page.
+    pub fn content_mut(&mut self) -> *mut u8 {
+        unsafe { self.as_raw().add(PAGE_HEADER_SIZE) }
     }
 }
 
@@ -218,6 +218,7 @@ impl fmt::Debug for PageRef<'_> {
 #[derive(Copy, Clone, Debug, Default)]
 struct PageTags(u8);
 
+/// The most significant bit indicates whether this page is a data page.
 const PAGE_KIND_MASK: u8 = 0x7F;
 
 impl PageTags {
@@ -258,6 +259,7 @@ impl From<PageTags> for u8 {
     }
 }
 
+/// A list of possible page kinds.
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PageKind {
@@ -337,6 +339,7 @@ pub mod tests {
 
     use super::*;
 
+    /// A global page allocator for tests.
     pub const ALLOC: TestAlloc = TestAlloc;
 
     pub struct TestAlloc;
@@ -384,6 +387,7 @@ pub mod tests {
         ptr.set_data(false);
         assert_eq!(ptr.is_data(), false);
 
+        assert_eq!(ptr.size(), buf.len());
         assert_eq!(ptr.content_size(), 0);
         ptr.set_content_size(4);
         assert_eq!(ptr.content_size(), 4);
