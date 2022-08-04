@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use photondb_engine::tree::*;
 
 const N: usize = 1 << 24;
-const M: usize = 1 << 20;
+const M: usize = 1 << 14;
 
 fn table_get(table: &Table, i: usize) {
     let buf = i.to_be_bytes();
@@ -16,6 +16,12 @@ fn table_put(table: &Table, i: usize) {
     table.put(key, 0, key).unwrap();
 }
 
+fn table_delete(table: &Table, i: usize) {
+    let buf = i.to_be_bytes();
+    let key = buf.as_slice();
+    table.delete(key, 0).unwrap();
+}
+
 fn bench_get(table: &Table) {
     for i in (0..N).step_by(M) {
         table_get(table, i);
@@ -25,6 +31,12 @@ fn bench_get(table: &Table) {
 fn bench_put(table: &Table) {
     for i in (0..N).step_by(M) {
         table_put(table, i);
+    }
+}
+
+fn bench_delete(table: &Table) {
+    for i in (0..N).step_by(M) {
+        table_delete(table, i);
     }
 }
 
@@ -51,7 +63,18 @@ fn bench(c: &mut Criterion) {
         })
     });
 
-    println!("num_gets: {}, num_puts: {}", num_gets, num_puts);
+    let mut num_deletes = 0;
+    c.bench_function("delete", |b| {
+        b.iter(|| {
+            num_deletes += N / M;
+            bench_delete(&table);
+        })
+    });
+
+    println!(
+        "num_gets: {}, num_puts: {}, num_deletes: {}",
+        num_gets, num_puts, num_deletes
+    );
     println!("{:?}", table.stats());
 }
 
