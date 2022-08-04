@@ -225,6 +225,12 @@ impl<'a, K, V> Deref for SortedPageRef<'a, K, V> {
     }
 }
 
+impl<'a, K, V> From<SortedPageRef<'a, K, V>> for PageRef<'a> {
+    fn from(page: SortedPageRef<'a, K, V>) -> Self {
+        page.base
+    }
+}
+
 pub struct SortedPageIter<'a, K, V> {
     page: SortedPageRef<'a, K, V>,
     next: usize,

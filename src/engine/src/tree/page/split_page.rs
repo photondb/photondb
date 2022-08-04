@@ -49,11 +49,14 @@ impl<'a> Deref for SplitPageRef<'a> {
     }
 }
 
-impl<'a, T> From<T> for SplitPageRef<'a>
-where
-    T: Into<PageRef<'a>>,
-{
-    fn from(base: T) -> Self {
-        Self::new(base.into())
+impl<'a> From<PageRef<'a>> for SplitPageRef<'a> {
+    fn from(base: PageRef<'a>) -> Self {
+        Self::new(base)
+    }
+}
+
+impl<'a> From<SplitPageRef<'a>> for PageRef<'a> {
+    fn from(page: SplitPageRef<'a>) -> Self {
+        page.0.into()
     }
 }

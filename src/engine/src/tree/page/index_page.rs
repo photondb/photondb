@@ -82,12 +82,9 @@ impl<'a> Deref for IndexPageRef<'a> {
     }
 }
 
-impl<'a, T> From<T> for IndexPageRef<'a>
-where
-    T: Into<PageRef<'a>>,
-{
-    fn from(base: T) -> Self {
-        Self::new(base.into())
+impl<'a> From<PageRef<'a>> for IndexPageRef<'a> {
+    fn from(base: PageRef<'a>) -> Self {
+        Self::new(base)
     }
 }
 
