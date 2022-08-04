@@ -2,12 +2,10 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Alloc")]
-    Alloc,
     #[error("Again")]
     Again,
-    #[error("Corrupted: {0}")]
-    Corrupted(String),
+    #[error("Alloc")]
+    Alloc,
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

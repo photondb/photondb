@@ -1,8 +1,14 @@
-use std::ops::Deref;
+use std::{cmp::Ordering, ops::Deref};
 
 use super::*;
 
 pub type DataItem<'a> = (Key<'a>, Value<'a>);
+
+impl<'a> Comparable<DataItem<'a>> for DataItem<'a> {
+    fn compare(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+    }
+}
 
 /// A builder to create data pages.
 pub struct DataPageBuilder(SortedPageBuilder);
@@ -131,14 +137,14 @@ impl<'a> ForwardIter for DataPageIter<'a> {
     }
 }
 
-impl<'a> SeekableIter<Key<'_>> for DataPageIter<'a> {
-    fn seek(&mut self, target: &Key<'_>) {
-        self.0.seek(target);
-    }
-}
-
 impl<'a> RewindableIter for DataPageIter<'a> {
     fn rewind(&mut self) {
         self.0.rewind();
+    }
+}
+
+impl<'a> SeekableIter<Key<'_>> for DataPageIter<'a> {
+    fn seek(&mut self, target: &Key<'_>) {
+        self.0.seek(target);
     }
 }

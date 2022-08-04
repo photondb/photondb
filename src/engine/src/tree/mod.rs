@@ -1,20 +1,20 @@
 //mod table;
 //pub use table::Table;
 
-//mod error;
-//pub use error::{Error, Result};
+mod error;
+pub use error::{Error, Result};
 
-//mod ghost;
-//use ghost::{Ghost, Guard};
+mod ghost;
+use ghost::{Ghost, Guard};
 
 //mod btree;
 //use btree::{BTree, Stats};
 
-//mod node;
+mod node;
 mod page;
-//mod pagecache;
-//mod pagestore;
-//mod pagetable;
+mod pagecache;
+mod pagestore;
+mod pagetable;
 
 #[derive(Clone, Debug)]
 pub struct Options {

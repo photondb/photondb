@@ -1,8 +1,14 @@
-use std::ops::Deref;
+use std::{cmp::Ordering, ops::Deref};
 
 use super::*;
 
 pub type IndexItem<'a> = (&'a [u8], Index);
+
+impl<'a> Comparable<IndexItem<'a>> for IndexItem<'a> {
+    fn compare(&self, other: &Self) -> Ordering {
+        self.0.cmp(other.0)
+    }
+}
 
 /// A builder to create index pages.
 pub struct IndexPageBuilder(SortedPageBuilder);
@@ -124,14 +130,14 @@ impl<'a> ForwardIter for IndexPageIter<'a> {
     }
 }
 
-impl<'a> SeekableIter<[u8]> for IndexPageIter<'a> {
-    fn seek(&mut self, target: &[u8]) {
-        self.0.seek(target);
-    }
-}
-
 impl<'a> RewindableIter for IndexPageIter<'a> {
     fn rewind(&mut self) {
         self.0.rewind();
+    }
+}
+
+impl<'a> SeekableIter<[u8]> for IndexPageIter<'a> {
+    fn seek(&mut self, target: &[u8]) {
+        self.0.seek(target);
     }
 }

@@ -273,6 +273,17 @@ where
     }
 }
 
+impl<'a, K, V> RewindableIter for SortedPageIter<'a, K, V>
+where
+    K: Decodable + Ord,
+    V: Decodable,
+{
+    fn rewind(&mut self) {
+        self.next = 0;
+        self.last = None;
+    }
+}
+
 impl<'a, K, V, T> SeekableIter<T> for SortedPageIter<'a, K, V>
 where
     K: Decodable + Ord,
@@ -284,17 +295,6 @@ where
             Ok(i) => i,
             Err(i) => i,
         };
-        self.last = None;
-    }
-}
-
-impl<'a, K, V> RewindableIter for SortedPageIter<'a, K, V>
-where
-    K: Decodable + Ord,
-    V: Decodable,
-{
-    fn rewind(&mut self) {
-        self.next = 0;
         self.last = None;
     }
 }

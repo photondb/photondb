@@ -15,26 +15,25 @@ impl<'a> Node<'a> {
     }
 }
 
-pub struct DataNodeIter<'a> {
-    iter: MergingIter<DataPageIter<'a>>,
+pub struct DataIter<'a, 'i> {
+    iter: MergingIter<&'i mut DataPageIter<'a>>,
     highest: Option<&'a [u8]>,
 }
 
-impl<'a> DataNodeIter<'a> {
-    pub fn new(iter: MergingIter<DataPageIter<'a>>, highest: Option<&'a [u8]>) -> Self {
+impl<'a, 'i> DataIter<'a, 'i> {
+    pub fn new(iter: MergingIter<&'i mut DataPageIter<'a>>, highest: Option<&'a [u8]>) -> Self {
         Self { iter, highest }
     }
 }
 
-impl<'a> ForwardIter for DataNodeIter<'a> {
-    type Key = Key<'a>;
-    type Value = Value<'a>;
+impl<'a, 'i> ForwardIter for DataIter<'a, 'i> {
+    type Item = DataItem<'a>;
 
-    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
+    fn last(&self) -> Option<&Self::Item> {
         self.iter.last()
     }
 
-    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
+    fn next(&mut self) -> Option<&Self::Item> {
         if let Some((key, _)) = self.iter.next() {
             if let Some(highest) = self.highest {
                 if key.raw >= highest {
@@ -50,29 +49,26 @@ impl<'a> ForwardIter for DataNodeIter<'a> {
     }
 }
 
-impl<'a> SeekableIter for DataNodeIter<'a> {
-    fn seek<T>(&mut self, target: &T)
-    where
-        T: Comparable<Self::Key>,
-    {
-        self.iter.seek(target);
-    }
-}
-
-impl<'a> RewindableIter for DataNodeIter<'a> {
+impl<'a, 'i> RewindableIter for DataIter<'a, 'i> {
     fn rewind(&mut self) {
         self.iter.rewind();
     }
 }
 
-pub struct IndexNodeIter<'a> {
-    iter: MergingIter<IndexPageIter<'a>>,
+impl<'a, 'i> SeekableIter<Key<'_>> for DataIter<'a, 'i> {
+    fn seek(&mut self, target: &Key<'_>) {
+        self.iter.seek(target);
+    }
+}
+
+pub struct IndexIter<'a, 'i> {
+    iter: MergingIter<&'i mut IndexPageIter<'a>>,
     highest: Option<&'a [u8]>,
     last_index: Index,
 }
 
-impl<'a> IndexNodeIter<'a> {
-    pub fn new(iter: MergingIter<IndexPageIter<'a>>, highest: Option<&'a [u8]>) -> Self {
+impl<'a, 'i> IndexIter<'a, 'i> {
+    pub fn new(iter: MergingIter<&'i mut IndexPageIter<'a>>, highest: Option<&'a [u8]>) -> Self {
         Self {
             iter,
             highest,
@@ -81,16 +77,15 @@ impl<'a> IndexNodeIter<'a> {
     }
 }
 
-impl<'a> ForwardIter for IndexNodeIter<'a> {
-    type Key = &'a [u8];
-    type Value = Index;
+impl<'a, 'i> ForwardIter for IndexIter<'a, 'i> {
+    type Item = IndexItem<'a>;
 
-    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
+    fn last(&self) -> Option<&Self::Item> {
         self.iter.last()
     }
 
-    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
-        while let Some((key, index)) = self.iter.next().cloned() {
+    fn next(&mut self) -> Option<&Self::Item> {
+        while let Some(&(key, index)) = self.iter.next() {
             if let Some(highest) = self.highest {
                 if key >= highest {
                     self.iter.skip_all();
@@ -111,17 +106,14 @@ impl<'a> ForwardIter for IndexNodeIter<'a> {
     }
 }
 
-impl<'a> SeekableIter for IndexNodeIter<'a> {
-    fn seek<T>(&mut self, target: &T)
-    where
-        T: Comparable<Self::Key>,
-    {
-        self.iter.seek(target);
+impl<'a, 'i> RewindableIter for IndexIter<'a, 'i> {
+    fn rewind(&mut self) {
+        self.iter.rewind();
     }
 }
 
-impl<'a> RewindableIter for IndexNodeIter<'a> {
-    fn rewind(&mut self) {
-        self.iter.rewind();
+impl<'a, 'i> SeekableIter<[u8]> for IndexIter<'a, 'i> {
+    fn seek(&mut self, target: &[u8]) {
+        self.iter.seek(target);
     }
 }
