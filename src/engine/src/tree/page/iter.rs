@@ -13,13 +13,20 @@ pub trait ForwardIter {
     /// Advances to the next item and returns it.
     fn next(&mut self) -> Option<&Self::Item>;
 
+    /// Skips the next `n` items.
+    fn skip(&mut self, mut n: usize) {
+        while n > 0 && self.next().is_some() {
+            n -= 1;
+        }
+    }
+
     /// Skips all items to the end.
     fn skip_all(&mut self) {
         while self.next().is_some() {}
     }
 }
 
-pub trait SeekableIter<T>: ForwardIter {
+pub trait SeekableIter<T: ?Sized>: ForwardIter {
     /// Positions the next item at or after `target`.
     fn seek(&mut self, target: &T);
 }
@@ -138,6 +145,54 @@ impl<I> From<I> for OptionIter<I> {
 impl<I> From<Option<I>> for OptionIter<I> {
     fn from(next: Option<I>) -> Self {
         Self::new(next)
+    }
+}
+
+pub struct BoundedIter<I> {
+    iter: I,
+    start: usize,
+}
+
+impl<I> BoundedIter<I>
+where
+    I: ForwardIter,
+{
+    pub fn new(mut iter: I, start: usize) -> Self {
+        iter.skip(start);
+        Self { iter, start }
+    }
+}
+
+impl<I> ForwardIter for BoundedIter<I>
+where
+    I: ForwardIter,
+{
+    type Item = I::Item;
+
+    fn last(&self) -> Option<&Self::Item> {
+        self.iter.last()
+    }
+
+    fn next(&mut self) -> Option<&Self::Item> {
+        self.iter.next()
+    }
+
+    fn skip(&mut self, n: usize) {
+        self.iter.skip(n)
+    }
+
+    fn skip_all(&mut self) {
+        self.iter.skip_all()
+    }
+}
+
+impl<I> RewindableIter for BoundedIter<I>
+where
+    I: RewindableIter,
+{
+    fn rewind(&mut self) {
+        self.iter.rewind();
+        self.iter.skip(self.start);
     }
 }
 
@@ -364,6 +419,18 @@ mod tests {
             assert_eq!(iter.last(), None);
             assert_eq!(iter.next(), Some(&1));
             assert_eq!(iter.last(), Some(&1));
+            assert_eq!(iter.next(), None);
+            iter.rewind();
+        }
+    }
+
+    #[test]
+    fn bounded_iter() {
+        let iter = SliceIter::from(&[1, 2, 3]);
+        let mut iter = BoundedIter::new(iter, 1);
+        for _ in 0..2 {
+            assert_eq!(iter.next(), Some(&2));
+            assert_eq!(iter.next(), Some(&3));
             assert_eq!(iter.next(), None);
             iter.rewind();
         }

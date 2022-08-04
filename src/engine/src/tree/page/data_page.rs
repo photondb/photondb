@@ -24,7 +24,7 @@ impl DataPageBuilder {
     pub fn build_from_iter<'a, A, I>(self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
-        I: RewindableIter<Key = Key<'a>, Value = Value<'a>>,
+        I: RewindableIter<Item = (Key<'a>, Value<'a>)>,
     {
         self.0.build_from_iter(alloc, iter)
     }
@@ -51,11 +51,13 @@ impl<'a> DataPageRef<'a> {
         None
     }
 
+    /// Creates an iterator over entries in this page.
     pub fn iter(&self) -> DataPageIter<'a> {
         DataPageIter::new(self.clone())
     }
 
-    pub fn split(&self) -> Option<(&'a [u8], DataPageSplitIter<'a>)> {
+    /// Returns a split key for split and an iterator over entries at and after the split key.
+    pub fn split(&self) -> Option<(&'a [u8], BoundedIter<DataPageIter<'a>>)> {
         if let Some((mut sep, _)) = self.0.get(self.0.len() / 2) {
             // Avoids splitting entries of the same raw key.
             sep.lsn = u64::MAX;
@@ -64,7 +66,7 @@ impl<'a> DataPageRef<'a> {
                 Err(i) => i,
             };
             if rank > 0 {
-                let iter = DataPageSplitIter::new(self.iter(), rank);
+                let iter = BoundedIter::new(self.iter(), rank);
                 return Some((sep.raw, iter));
             }
         }
@@ -108,14 +110,13 @@ where
 }
 
 impl<'a> ForwardIter for DataPageIter<'a> {
-    type Key = Key<'a>;
-    type Value = Value<'a>;
+    type Item = (Key<'a>, Value<'a>);
 
-    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
+    fn last(&self) -> Option<&Self::Item> {
         self.0.last()
     }
 
-    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
+    fn next(&mut self) -> Option<&Self::Item> {
         self.0.next()
     }
 
@@ -128,11 +129,8 @@ impl<'a> ForwardIter for DataPageIter<'a> {
     }
 }
 
-impl<'a> SeekableIter for DataPageIter<'a> {
-    fn seek<T>(&mut self, target: &T)
-    where
-        T: Comparable<Self::Key>,
-    {
+impl<'a> SeekableIter<Key<'_>> for DataPageIter<'a> {
+    fn seek(&mut self, target: &Key<'_>) {
         self.0.seek(target);
     }
 }
@@ -140,45 +138,5 @@ impl<'a> SeekableIter for DataPageIter<'a> {
 impl<'a> RewindableIter for DataPageIter<'a> {
     fn rewind(&mut self) {
         self.0.rewind();
-    }
-}
-
-pub struct DataPageSplitIter<'a> {
-    base: DataPageIter<'a>,
-    skip: usize,
-}
-
-impl<'a> DataPageSplitIter<'a> {
-    fn new(mut base: DataPageIter<'a>, skip: usize) -> Self {
-        base.skip(skip);
-        Self { base, skip }
-    }
-}
-
-impl<'a> ForwardIter for DataPageSplitIter<'a> {
-    type Key = Key<'a>;
-    type Value = Value<'a>;
-
-    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
-        self.base.last()
-    }
-
-    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
-        self.base.next()
-    }
-
-    fn skip(&mut self, n: usize) {
-        self.base.skip(n)
-    }
-
-    fn skip_all(&mut self) {
-        self.base.skip_all()
-    }
-}
-
-impl<'a> RewindableIter for DataPageSplitIter<'a> {
-    fn rewind(&mut self) {
-        self.base.rewind();
-        self.base.skip(self.skip);
     }
 }

@@ -131,7 +131,7 @@ where
         }
     }
 
-    /// Returns the number of entries in the page.
+    /// Returns the number of entries.
     pub fn len(&self) -> usize {
         self.offsets.len()
     }
@@ -153,8 +153,9 @@ where
 
     /// Searches `target` in the page.
     ///
-    /// If `target` is found, returns `Result::Ok` with its index. Otherwise, returns `Result::Err`
-    /// with the index where `target` could be inserted while maintaining the sorted order.
+    /// If `target` is found, returns `Result::Ok` with its index.
+    /// If `target is not found, returns `Result::Err` with the index where `target` could be
+    /// inserted while maintaining the sorted order.
     pub fn search<T>(&self, target: &T) -> Result<usize, usize>
     where
         T: Comparable<K>,
@@ -261,6 +262,10 @@ where
             next
         });
         self.last.as_ref()
+    }
+
+    fn skip(&mut self, n: usize) {
+        self.next = self.next.saturating_add(n).min(self.page.len());
     }
 
     fn skip_all(&mut self) {
