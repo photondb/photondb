@@ -3,7 +3,7 @@ use log::trace;
 use super::{
     node::*,
     page::*,
-    pagecache::{PageAddr, PageCache, PageView},
+    pagecache::PageCache,
     pagestore::PageStore,
     pagetable::PageTable,
     stats::{AtomicStats, Stats},

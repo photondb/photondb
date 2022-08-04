@@ -1,4 +1,11 @@
-use std::{alloc::Layout, fmt, marker::PhantomData, ops::Deref, ptr::NonNull};
+use std::{
+    alloc::{alloc, dealloc, Layout},
+    fmt,
+    marker::PhantomData,
+    mem::size_of,
+    ops::Deref,
+    ptr::NonNull,
+};
 
 // Page header: ver (6B) | rank (1B) | tags (1B) | next (8B) | content_size (4B) |
 const PAGE_ALIGNMENT: usize = 8;
@@ -305,6 +312,32 @@ pub unsafe trait PageAlloc {
     }
 }
 
+pub struct BuiltinAlloc;
+
+impl BuiltinAlloc {
+    pub unsafe fn usable_size(ptr: *mut u8) -> usize {
+        (ptr as *mut usize).sub(1).read()
+    }
+}
+
+unsafe impl PageAlloc for BuiltinAlloc {
+    type Error = ();
+
+    fn alloc(&self, size: usize) -> Result<PagePtr, Self::Error> {
+        unsafe {
+            let ptr = alloc(Self::alloc_layout(size + size_of::<usize>()));
+            (ptr as *mut usize).write(size);
+            PagePtr::new(ptr.add(size_of::<usize>())).ok_or(())
+        }
+    }
+
+    unsafe fn dealloc(&self, page: PagePtr) {
+        let ptr = page.as_raw();
+        let size = Self::usable_size(ptr) + size_of::<usize>();
+        dealloc(ptr.sub(size_of::<usize>()), Self::alloc_layout(size));
+    }
+}
+
 /// A builder to create base pages.
 pub struct PageBuilder {
     kind: PageKind,
@@ -333,38 +366,14 @@ impl PageBuilder {
 
 #[cfg(test)]
 pub mod tests {
-    use std::alloc::GlobalAlloc;
-
-    use jemallocator::{usable_size, Jemalloc};
-
     use super::*;
 
     /// A global page allocator for tests.
-    pub const ALLOC: TestAlloc = TestAlloc;
-
-    pub struct TestAlloc;
-
-    unsafe impl PageAlloc for TestAlloc {
-        type Error = ();
-
-        fn alloc(&self, size: usize) -> Result<PagePtr, Self::Error> {
-            unsafe {
-                let ptr = Jemalloc.alloc(Self::alloc_layout(size));
-                PagePtr::new(ptr).ok_or(())
-            }
-        }
-
-        unsafe fn dealloc(&self, page: PagePtr) {
-            let ptr = page.as_raw();
-            let size = usable_size(ptr);
-            Jemalloc.dealloc(ptr, Self::alloc_layout(size));
-        }
-    }
+    pub const ALLOC: BuiltinAlloc = BuiltinAlloc;
 
     #[test]
     fn page() {
-        let mut buf = [1u8; PAGE_HEADER_SIZE];
-        let mut ptr = unsafe { PagePtr::new(buf.as_mut_ptr()).unwrap() };
+        let mut ptr = ALLOC.alloc(PAGE_HEADER_SIZE).unwrap();
         ptr.set_default();
 
         assert_eq!(ptr.ver(), 0);
@@ -387,7 +396,6 @@ pub mod tests {
         ptr.set_data(false);
         assert_eq!(ptr.is_data(), false);
 
-        assert_eq!(ptr.size(), buf.len());
         assert_eq!(ptr.content_size(), 0);
         ptr.set_content_size(4);
         assert_eq!(ptr.content_size(), 4);

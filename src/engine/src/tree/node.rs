@@ -1,8 +1,4 @@
-use super::{
-    page::*,
-    pagecache::{PageAddr, PageView},
-    pagetable::PageTable,
-};
+use super::{page::*, pagestore::PageInfo, pagetable::PageTable};
 
 pub const NULL_INDEX: Index = Index::with_id(PageTable::NAN);
 pub const ROOT_INDEX: Index = Index::with_id(PageTable::MIN);
@@ -16,6 +12,78 @@ pub struct Node<'a> {
 impl<'a> Node<'a> {
     pub fn new(id: u64, view: PageView<'a>) -> Self {
         Self { id, view }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum PageAddr {
+    Mem(u64),
+    Disk(u64),
+}
+
+const MEM_DISK_MASK: u64 = 1 << 63;
+
+impl From<u64> for PageAddr {
+    fn from(addr: u64) -> Self {
+        if addr & MEM_DISK_MASK == 0 {
+            Self::Mem(addr)
+        } else {
+            Self::Disk(addr & !MEM_DISK_MASK)
+        }
+    }
+}
+
+impl From<PageAddr> for u64 {
+    fn from(addr: PageAddr) -> u64 {
+        match addr {
+            PageAddr::Mem(addr) => addr,
+            PageAddr::Disk(addr) => addr | MEM_DISK_MASK,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum PageView<'a> {
+    Mem(PageRef<'a>),
+    Disk(PageInfo, u64),
+}
+
+impl PageView<'_> {
+    pub fn ver(&self) -> u64 {
+        match self {
+            Self::Mem(page) => page.ver(),
+            Self::Disk(info, _) => info.ver,
+        }
+    }
+
+    pub fn rank(&self) -> u8 {
+        match self {
+            Self::Mem(page) => page.rank(),
+            Self::Disk(info, _) => info.rank,
+        }
+    }
+
+    pub fn is_data(&self) -> bool {
+        match self {
+            Self::Mem(page) => page.is_data(),
+            Self::Disk(info, _) => info.is_data,
+        }
+    }
+
+    pub fn as_addr(&self) -> PageAddr {
+        match *self {
+            Self::Mem(page) => PageAddr::Mem(page.into()),
+            Self::Disk(_, addr) => PageAddr::Disk(addr),
+        }
+    }
+}
+
+impl<'a, T> From<T> for PageView<'a>
+where
+    T: Into<PageRef<'a>>,
+{
+    fn from(page: T) -> Self {
+        Self::Mem(page.into())
     }
 }
 

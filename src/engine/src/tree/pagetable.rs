@@ -196,6 +196,9 @@ macro_rules! define_level {
     };
 }
 
+#[cfg(miri)]
+const FANOUT: usize = 1 << 4;
+#[cfg(not(miri))]
 const FANOUT: usize = 1 << 16;
 const L0_LEN: usize = FANOUT;
 const L1_LEN: usize = FANOUT - 1;

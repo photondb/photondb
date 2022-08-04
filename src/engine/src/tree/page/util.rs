@@ -9,9 +9,11 @@ pub struct BufReader {
 macro_rules! get_int {
     ($name:ident, $t:ty) => {
         pub unsafe fn $name(&mut self) -> $t {
-            let ptr = self.ptr.add(self.pos) as *const $t;
+            let mut v: $t = 0;
+            let ptr = &mut v as *mut $t as *mut u8;
+            ptr.copy_from_nonoverlapping(self.ptr.add(self.pos), size_of::<$t>());
             self.pos += size_of::<$t>();
-            <$t>::from_le(ptr.read())
+            <$t>::from_le(v)
         }
     };
 }
@@ -46,8 +48,9 @@ pub struct BufWriter {
 macro_rules! put_int {
     ($name:ident, $t:ty) => {
         pub unsafe fn $name(&mut self, v: $t) {
-            let ptr = self.ptr.add(self.pos) as *mut $t;
-            ptr.write(v.to_le());
+            let v = v.to_le();
+            let ptr = &v as *const $t as *const u8;
+            ptr.copy_to_nonoverlapping(self.ptr.add(self.pos), size_of::<$t>());
             self.pos += size_of::<$t>();
         }
     };

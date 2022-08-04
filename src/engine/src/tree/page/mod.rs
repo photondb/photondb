@@ -1,5 +1,5 @@
 mod base;
-pub use base::{PageAlloc, PageBuilder, PageKind, PagePtr, PageRef};
+pub use base::{BuiltinAlloc, PageAlloc, PageBuilder, PageKind, PagePtr, PageRef};
 
 mod data;
 pub use data::{Comparable, Decodable, Encodable, Index, Key, Value};
