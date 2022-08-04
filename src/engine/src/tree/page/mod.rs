@@ -7,6 +7,7 @@ pub use iter::{
     SeekableIter, SliceIter,
 };
 
+/*
 mod data;
 pub use data::{Decodable, Encodable, Index, Key, Value};
 
@@ -39,3 +40,5 @@ where
     T::Value: Encodable + Decodable,
 {
 }
+
+*/

@@ -42,49 +42,41 @@ impl Comparable<&[u8]> for &[u8] {
 }
 
 pub trait ForwardIter {
-    type Key: Ord;
-    type Value;
+    type Item;
 
-    /// Returns the last entry.
-    fn last(&self) -> Option<&(Self::Key, Self::Value)>;
+    /// Returns the last item.
+    fn last(&self) -> Option<&Self::Item>;
 
-    /// Advances to the next entry and returns it.
-    fn next(&mut self) -> Option<&(Self::Key, Self::Value)>;
+    /// Advances to the next item and returns it.
+    fn next(&mut self) -> Option<&Self::Item>;
 
-    /// Skips the next `n` entries.
-    fn skip(&mut self, mut n: usize) {
-        while n > 0 && self.next().is_some() {
-            n -= 1;
-        }
-    }
-
-    /// Skips all entries.
+    /// Skips all items to the end.
     fn skip_all(&mut self) {
         while self.next().is_some() {}
     }
 }
 
 pub trait SeekableIter: ForwardIter {
-    /// Positions the next entry at or after `target`.
+    /// Positions the next item at or after `target`.
     fn seek<T>(&mut self, target: &T)
     where
-        T: Comparable<Self::Key>;
+        T: Comparable<Self::Item>;
 }
 
 pub trait RewindableIter: ForwardIter {
-    /// Positions the next entry at the front.
+    /// Positions the next item at the front.
     fn rewind(&mut self);
 }
 
 /// A wrapper that turns a slice into a `SeekableIter` and `RewindableIter`.
-pub struct SliceIter<'a, K, V> {
-    data: &'a [(K, V)],
-    iter: slice::Iter<'a, (K, V)>,
-    last: Option<&'a (K, V)>,
+pub struct SliceIter<'a, I> {
+    data: &'a [I],
+    iter: slice::Iter<'a, I>,
+    last: Option<&'a I>,
 }
 
-impl<'a, K, V> SliceIter<'a, K, V> {
-    pub fn new(data: &'a [(K, V)]) -> Self {
+impl<'a, I> SliceIter<'a, I> {
+    pub fn new(data: &'a [I]) -> Self {
         SliceIter {
             data,
             iter: data.iter(),
@@ -93,34 +85,33 @@ impl<'a, K, V> SliceIter<'a, K, V> {
     }
 }
 
-impl<'a, K, V> ForwardIter for SliceIter<'a, K, V>
+impl<'a, I> ForwardIter for SliceIter<'a, I>
 where
-    K: Ord,
+    I: Ord,
 {
-    type Key = K;
-    type Value = V;
+    type Item = I;
 
-    fn last(&self) -> Option<&(K, V)> {
+    fn last(&self) -> Option<&I> {
         self.last
     }
 
-    fn next(&mut self) -> Option<&(K, V)> {
+    fn next(&mut self) -> Option<&I> {
         self.last = self.iter.next();
         self.last
     }
 }
 
-impl<'a, K, V> SeekableIter for SliceIter<'a, K, V>
+impl<'a, I> SeekableIter for SliceIter<'a, I>
 where
-    K: Ord,
+    I: Ord,
 {
     fn seek<T>(&mut self, target: &T)
     where
-        T: Comparable<K>,
+        T: Comparable<I>,
     {
         let index = match self
             .data
-            .binary_search_by(|(k, _)| target.compare(k).reverse())
+            .binary_search_by(|item| target.compare(item).reverse())
         {
             Ok(i) => i,
             Err(i) => i,
@@ -130,9 +121,9 @@ where
     }
 }
 
-impl<'a, K, V> RewindableIter for SliceIter<'a, K, V>
+impl<'a, I> RewindableIter for SliceIter<'a, I>
 where
-    K: Ord,
+    I: Ord,
 {
     fn rewind(&mut self) {
         self.iter = self.data.iter();
@@ -140,42 +131,41 @@ where
     }
 }
 
-impl<'a, K, V> From<&'a [(K, V)]> for SliceIter<'a, K, V> {
-    fn from(data: &'a [(K, V)]) -> Self {
+impl<'a, I> From<&'a [I]> for SliceIter<'a, I> {
+    fn from(data: &'a [I]) -> Self {
         Self::new(data)
     }
 }
 
-impl<'a, K, V, const N: usize> From<&'a [(K, V); N]> for SliceIter<'a, K, V> {
-    fn from(data: &'a [(K, V); N]) -> Self {
+impl<'a, I, const N: usize> From<&'a [I; N]> for SliceIter<'a, I> {
+    fn from(data: &'a [I; N]) -> Self {
         Self::new(data.as_slice())
     }
 }
 
 /// A wrapper that turns an option into a `RewindableIter`.
-pub struct OptionIter<K, V> {
-    next: Option<(K, V)>,
-    last: Option<(K, V)>,
+pub struct OptionIter<I> {
+    next: Option<I>,
+    last: Option<I>,
 }
 
-impl<K, V> OptionIter<K, V> {
-    pub fn new(next: Option<(K, V)>) -> Self {
+impl<I> OptionIter<I> {
+    pub fn new(next: Option<I>) -> Self {
         OptionIter { next, last: None }
     }
 }
 
-impl<K, V> ForwardIter for OptionIter<K, V>
+impl<I> ForwardIter for OptionIter<I>
 where
-    K: Ord,
+    I: Ord,
 {
-    type Key = K;
-    type Value = V;
+    type Item = I;
 
-    fn last(&self) -> Option<&(K, V)> {
+    fn last(&self) -> Option<&I> {
         self.last.as_ref()
     }
 
-    fn next(&mut self) -> Option<&(K, V)> {
+    fn next(&mut self) -> Option<&I> {
         if let Some(next) = self.next.take() {
             self.last = Some(next);
             self.last.as_ref()
@@ -185,9 +175,9 @@ where
     }
 }
 
-impl<K, V> RewindableIter for OptionIter<K, V>
+impl<I> RewindableIter for OptionIter<I>
 where
-    K: Ord,
+    I: Ord,
 {
     fn rewind(&mut self) {
         if let Some(last) = self.last.take() {
@@ -196,14 +186,14 @@ where
     }
 }
 
-impl<K, V> From<(K, V)> for OptionIter<K, V> {
-    fn from(item: (K, V)) -> Self {
+impl<I> From<I> for OptionIter<I> {
+    fn from(item: I) -> Self {
         Self::new(Some(item))
     }
 }
 
-impl<K, V> From<Option<(K, V)>> for OptionIter<K, V> {
-    fn from(next: Option<(K, V)>) -> Self {
+impl<I> From<Option<I>> for OptionIter<I> {
+    fn from(next: Option<I>) -> Self {
         Self::new(next)
     }
 }
@@ -228,11 +218,17 @@ impl<I> DerefMut for ReverseIter<I> {
     }
 }
 
-impl<I> Eq for ReverseIter<I> where I: ForwardIter {}
+impl<I> Eq for ReverseIter<I>
+where
+    I: ForwardIter,
+    I::Item: Ord,
+{
+}
 
 impl<I> PartialEq for ReverseIter<I>
 where
     I: ForwardIter,
+    I::Item: Ord,
 {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
@@ -242,10 +238,11 @@ where
 impl<I> Ord for ReverseIter<I>
 where
     I: ForwardIter,
+    I::Item: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         let mut ord = match (self.last(), other.last()) {
-            (Some(a), Some(b)) => b.0.cmp(&a.0),
+            (Some(a), Some(b)) => b.cmp(&a),
             (Some(_), None) => Ordering::Greater,
             (None, Some(_)) => Ordering::Less,
             (None, None) => Ordering::Equal,
@@ -260,6 +257,7 @@ where
 impl<I> PartialOrd for ReverseIter<I>
 where
     I: ForwardIter,
+    I::Item: Ord,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -270,6 +268,7 @@ where
 pub struct MergingIter<I>
 where
     I: ForwardIter,
+    I::Item: Ord,
 {
     heap: BinaryHeap<ReverseIter<I>>,
     children: Vec<ReverseIter<I>>,
@@ -278,6 +277,7 @@ where
 impl<I> MergingIter<I>
 where
     I: ForwardIter,
+    I::Item: Ord,
 {
     fn new(children: Vec<ReverseIter<I>>) -> Self {
         Self {
@@ -318,15 +318,15 @@ where
 impl<I> ForwardIter for MergingIter<I>
 where
     I: ForwardIter,
+    I::Item: Ord,
 {
-    type Key = I::Key;
-    type Value = I::Value;
+    type Item = I::Item;
 
-    fn last(&self) -> Option<&(Self::Key, Self::Value)> {
+    fn last(&self) -> Option<&Self::Item> {
         self.heap.peek().and_then(|iter| iter.last())
     }
 
-    fn next(&mut self) -> Option<&(Self::Key, Self::Value)> {
+    fn next(&mut self) -> Option<&Self::Item> {
         if self.heap.is_empty() {
             self.init_heap();
         } else if let Some(mut iter) = self.heap.peek_mut() {
@@ -343,10 +343,11 @@ where
 impl<I> SeekableIter for MergingIter<I>
 where
     I: SeekableIter,
+    I::Item: Ord,
 {
     fn seek<T>(&mut self, target: &T)
     where
-        T: Comparable<I::Key>,
+        T: Comparable<I::Item>,
     {
         self.reset(|iter| iter.seek(target));
     }
@@ -355,6 +356,7 @@ where
 impl<I> RewindableIter for MergingIter<I>
 where
     I: RewindableIter,
+    I::Item: Ord,
 {
     fn rewind(&mut self) {
         self.reset(|iter| iter.rewind());
@@ -377,6 +379,7 @@ impl<I> Default for MergingIterBuilder<I> {
 impl<I> MergingIterBuilder<I>
 where
     I: ForwardIter,
+    I::Item: Ord,
 {
     pub fn len(&self) -> usize {
         self.children.len()
@@ -398,25 +401,29 @@ mod tests {
 
     #[test]
     fn slice_iter() {
-        let mut iter = SliceIter::from(&[(1, 2), (3, 4)]);
+        let mut iter = SliceIter::from(&[1, 2]);
         for _ in 0..2 {
             assert_eq!(iter.last(), None);
-            assert_eq!(iter.next(), Some(&(1, 2)));
-            assert_eq!(iter.last(), Some(&(1, 2)));
-            assert_eq!(iter.next(), Some(&(3, 4)));
-            assert_eq!(iter.last(), Some(&(3, 4)));
+            assert_eq!(iter.next(), Some(&1));
+            assert_eq!(iter.last(), Some(&1));
+            assert_eq!(iter.next(), Some(&2));
+            assert_eq!(iter.last(), Some(&2));
             assert_eq!(iter.next(), None);
             iter.rewind();
         }
+
+        iter.rewind();
+        iter.skip_all();
+        assert_eq!(iter.next(), None);
     }
 
     #[test]
     fn option_iter() {
-        let mut iter = OptionIter::from((1, 2));
+        let mut iter = OptionIter::from(1);
         for _ in 0..2 {
             assert_eq!(iter.last(), None);
-            assert_eq!(iter.next(), Some(&(1, 2)));
-            assert_eq!(iter.last(), Some(&(1, 2)));
+            assert_eq!(iter.next(), Some(&1));
+            assert_eq!(iter.last(), Some(&1));
             assert_eq!(iter.next(), None);
             iter.rewind();
         }
@@ -424,25 +431,11 @@ mod tests {
 
     #[test]
     fn merging_iter() {
-        let data = [
-            [(1, 1), (3, 1)],
-            [(2, 0), (4, 0)],
-            [(1, 0), (8, 0)],
-            [(3, 0), (7, 0)],
-        ];
-        let sorted_data = [
-            (1, 1),
-            (1, 0),
-            (2, 0),
-            (3, 1),
-            (3, 0),
-            (4, 0),
-            (7, 0),
-            (8, 0),
-        ];
+        let input_data = [[1, 3], [2, 4], [1, 8], [3, 7]];
+        let sorted_data = [1, 1, 2, 3, 3, 4, 7, 8];
 
         let mut merger = MergingIterBuilder::default();
-        for item in data.iter() {
+        for item in input_data.iter() {
             merger.add(SliceIter::from(item));
         }
         let mut iter = merger.build();
@@ -460,20 +453,18 @@ mod tests {
 
         // Tests seek()
         iter.seek(&0);
-        assert_eq!(iter.next(), Some(&(1, 1)));
+        assert_eq!(iter.next(), Some(&1));
         iter.seek(&9);
         assert_eq!(iter.next(), None);
         iter.seek(&1);
-        assert_eq!(iter.next(), Some(&(1, 1)));
+        assert_eq!(iter.next(), Some(&1));
         iter.seek(&3);
-        assert_eq!(iter.next(), Some(&(3, 1)));
+        assert_eq!(iter.next(), Some(&3));
         iter.seek(&5);
-        assert_eq!(iter.next(), Some(&(7, 0)));
+        assert_eq!(iter.next(), Some(&7));
 
-        // Tests skip() and skip_all()
+        // Tests skip_all()
         iter.rewind();
-        iter.skip(1);
-        assert_eq!(iter.next(), Some(&(1, 0)));
         iter.skip_all();
         assert_eq!(iter.next(), None);
     }
