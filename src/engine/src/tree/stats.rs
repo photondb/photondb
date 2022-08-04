@@ -20,6 +20,7 @@ impl Default for Counter {
 
 #[derive(Debug)]
 pub struct Stats {
+    pub cache_size: u64,
     pub num_data_splits: u64,
     pub num_data_consolidations: u64,
     pub num_index_splits: u64,
@@ -37,6 +38,7 @@ pub struct AtomicStats {
 impl AtomicStats {
     pub fn snapshot(&self) -> Stats {
         Stats {
+            cache_size: 0,
             num_data_splits: self.num_data_splits.get(),
             num_data_consolidations: self.num_data_consolidations.get(),
             num_index_splits: self.num_index_splits.get(),

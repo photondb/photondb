@@ -95,6 +95,12 @@ impl Default for PageCache {
     }
 }
 
+impl PageCache {
+    pub fn size(&self) -> usize {
+        self.size.load(Ordering::Relaxed)
+    }
+}
+
 unsafe impl PageAlloc for PageCache {
     type Error = Error;
 

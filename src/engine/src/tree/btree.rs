@@ -34,7 +34,9 @@ impl BTree {
     }
 
     pub fn stats(&self) -> Stats {
-        self.stats.snapshot()
+        let mut stats = self.stats.snapshot();
+        stats.cache_size = self.cache.size() as u64;
+        stats
     }
 
     pub fn get<'a: 'g, 'g>(

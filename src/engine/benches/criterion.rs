@@ -1,9 +1,8 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use photondb_engine::tree::*;
 
-const N: usize = 1 << 20;
-const M: usize = 1 << 4;
-const STEP: usize = N / M;
+const N: usize = 1 << 24;
+const M: usize = 1 << 20;
 
 fn table_get(table: &Table, i: usize) {
     let buf = i.to_be_bytes();
@@ -18,13 +17,13 @@ fn table_put(table: &Table, i: usize) {
 }
 
 fn bench_get(table: &Table) {
-    for i in (0..N).step_by(STEP) {
+    for i in (0..N).step_by(M) {
         table_get(table, i);
     }
 }
 
 fn bench_put(table: &Table) {
-    for i in (0..N).step_by(STEP) {
+    for i in (0..N).step_by(M) {
         table_put(table, i);
     }
 }
@@ -39,7 +38,7 @@ fn bench(c: &mut Criterion) {
     let mut num_gets = 0;
     c.bench_function("get", |b| {
         b.iter(|| {
-            num_gets += M;
+            num_gets += N / M;
             bench_get(&table);
         })
     });
@@ -47,7 +46,7 @@ fn bench(c: &mut Criterion) {
     let mut num_puts = 0;
     c.bench_function("put", |b| {
         b.iter(|| {
-            num_puts += M;
+            num_puts += N / M;
             bench_put(&table);
         })
     });
