@@ -15,6 +15,22 @@ impl<'a> Node<'a> {
     }
 }
 
+pub struct DataNodeIter<'a> {
+    highest: Option<&'a [u8]>,
+    children: Vec<DataPageIter<'a>>,
+}
+
+impl<'a> DataNodeIter<'a> {
+    pub fn iter(&mut self) -> DataIter<'a, '_> {
+        let mut merger = MergingIterBuilder::with_exact(self.children.len());
+        for iter in self.children.iter_mut() {
+            merger.add(iter);
+        }
+        let iter = merger.build();
+        DataIter::new(iter, self.highest.clone())
+    }
+}
+
 pub struct DataIter<'a, 'i> {
     iter: MergingIter<&'i mut DataPageIter<'a>>,
     highest: Option<&'a [u8]>,
@@ -58,6 +74,22 @@ impl<'a, 'i> RewindableIter for DataIter<'a, 'i> {
 impl<'a, 'i> SeekableIter<Key<'_>> for DataIter<'a, 'i> {
     fn seek(&mut self, target: &Key<'_>) {
         self.iter.seek(target);
+    }
+}
+
+pub struct IndexNodeIter<'a> {
+    highest: Option<&'a [u8]>,
+    children: Vec<IndexPageIter<'a>>,
+}
+
+impl<'a> IndexNodeIter<'a> {
+    pub fn iter(&mut self) -> IndexIter<'a, '_> {
+        let mut merger = MergingIterBuilder::with_exact(self.children.len());
+        for iter in self.children.iter_mut() {
+            merger.add(iter);
+        }
+        let iter = merger.build();
+        IndexIter::new(iter, self.highest.clone())
     }
 }
 

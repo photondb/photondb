@@ -415,6 +415,12 @@ where
     I: ForwardIter,
     I::Item: Comparable<I::Item>,
 {
+    pub fn with_exact(len: usize) -> Self {
+        let mut children = Vec::new();
+        children.reserve_exact(len);
+        Self { children }
+    }
+
     pub fn len(&self) -> usize {
         self.children.len()
     }
