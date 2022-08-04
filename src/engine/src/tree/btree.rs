@@ -562,6 +562,7 @@ impl BTree {
 
         let addr = node.view.as_addr();
         let page = self.update_node(node.id, addr, page, ghost)?;
+        self.dealloc_node(addr, page.next().into(), ghost);
         self.stats.num_index_consolidations.inc();
         trace!("consolidate index node {} {:?}", node.id, page);
 
