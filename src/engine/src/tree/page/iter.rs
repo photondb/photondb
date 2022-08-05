@@ -64,10 +64,10 @@ pub trait SeekableIter<T: ?Sized>: ForwardIter {
     fn seek(&mut self, target: &T);
 }
 
-impl<T, I> SeekableIter<T> for &mut I
+impl<I, T> SeekableIter<T> for &mut I
 where
-    T: ?Sized,
     I: SeekableIter<T>,
+    T: ?Sized,
 {
     fn seek(&mut self, target: &T) {
         (**self).seek(target)
@@ -415,15 +415,6 @@ where
     I: ForwardIter,
     I::Item: Comparable<I::Item>,
 {
-    pub fn with(children: Vec<I>) -> Self {
-        let children = children
-            .into_iter()
-            .enumerate()
-            .map(|(rank, iter)| ReverseIter { iter, rank })
-            .collect();
-        Self { children }
-    }
-
     pub fn with_len(len: usize) -> Self {
         let mut children = Vec::new();
         children.reserve_exact(len);

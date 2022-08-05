@@ -147,22 +147,22 @@ impl Tree {
     fn try_insert<'g>(&self, key: &[u8], mut page: PagePtr, guard: &'g Guard) -> Result<()> {
         let mut node = self.find_leaf(key, guard)?;
         loop {
-            page.set_ver(node.view.ver());
-            page.set_rank(node.view.rank() + 1);
-            page.set_next(node.view.as_addr().into());
+            page.set_ver(node.page.ver());
+            page.set_rank(node.page.rank() + 1);
+            page.set_next(node.page.as_addr().into());
             match self.table.cas(node.id, page.next(), page.into()) {
                 Ok(_) => {
                     if page.rank() as usize >= self.opts.data_delta_length {
-                        node.view = page.into();
+                        node.page = page.into();
                         let _ = self.consolidate_data_node(node, guard);
                     }
                     return Ok(());
                 }
                 Err(addr) => {
-                    if let Some(view) = self.page_view(addr.into(), guard) {
+                    if let Some(page) = self.page_view(addr.into(), guard) {
                         // We can keep retrying as long as the page version doesn't change.
-                        if view.ver() == node.view.ver() {
-                            node.view = view;
+                        if page.ver() == node.page.ver() {
+                            node.page = page;
                             continue;
                         }
                     }
@@ -186,7 +186,7 @@ impl Tree {
 impl Tree {
     fn node<'a: 'g, 'g>(&'a self, id: u64, guard: &'g Guard) -> Option<Node<'g>> {
         let addr = self.table.get(id).into();
-        self.page_view(addr, guard).map(|view| Node::new(id, view))
+        self.page_view(addr, guard).map(|page| Node::new(id, page))
     }
 
     fn page_view<'a: 'g, 'g>(&'a self, addr: PageAddr, _: &'g Guard) -> Option<PageView<'g>> {
@@ -278,11 +278,11 @@ impl Tree {
         let mut parent = None;
         loop {
             let node = self.node(cursor.id, guard).expect("the node must be valid");
-            if node.view.ver() != cursor.ver {
+            if node.page.ver() != cursor.ver {
                 self.reconcile_node(node, parent, guard)?;
                 return Err(Error::Again);
             }
-            if node.view.is_data() {
+            if node.page.is_data() {
                 return Ok(node);
             }
             cursor = self
@@ -296,7 +296,7 @@ impl Tree {
     where
         F: FnMut(PageRef<'g>) -> bool,
     {
-        let mut page = self.load_page_with_view(node.id, node.view, guard)?;
+        let mut page = self.load_page_with_view(node.id, node.page, guard)?;
         loop {
             if f(page) {
                 break;
@@ -373,19 +373,18 @@ impl Tree {
         Ok((left_index, right_index))
     }
 
-    fn data_node_iter<'a: 'g, 'g>(
+    fn data_node_view<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         guard: &'g Guard,
-    ) -> Result<DataNodeIter<'g>> {
+    ) -> Result<DataNodeView<'g>> {
         let mut size = 0;
         let mut next = 0;
         let mut highest = None;
-        let mut children = Vec::with_capacity(node.view.rank() as usize + 1);
+        let mut children = Vec::with_capacity(node.page.rank() as usize + 1);
         self.walk_node(node, guard, |page| {
             match TypedPage::from(page) {
                 TypedPage::Data(page) => {
-                    // TODO: explores other strategies here.
                     if size < page.size() && highest.is_none() && children.len() >= 2 {
                         return true;
                     }
@@ -403,49 +402,16 @@ impl Tree {
             }
             false
         })?;
-        Ok(DataNodeIter::new(next.into(), highest, children))
+        Ok(DataNodeView::new(next.into(), highest, children))
     }
 
-    fn data_iter_chain<'a: 'g, 'g>(
+    fn index_iter_view<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
         guard: &'g Guard,
-    ) -> Result<DataIterChain<'g>> {
-        let mut size = 0;
-        let mut next = 0;
+    ) -> Result<IndexNodeView<'g>> {
         let mut highest = None;
-        let mut children = Vec::with_capacity(node.view.rank() as usize + 1);
-        self.walk_node(node, guard, |page| {
-            match TypedPage::from(page) {
-                TypedPage::Data(page) => {
-                    // TODO: explores other strategies here.
-                    if size < page.size() && highest.is_none() && children.len() >= 2 {
-                        return true;
-                    }
-                    size += page.size();
-                    next = page.next();
-                    children.push(page.into());
-                }
-                TypedPage::Split(page) => {
-                    if highest == None {
-                        let index = page.get();
-                        highest = Some(index.0);
-                    }
-                }
-                _ => unreachable!(),
-            }
-            false
-        })?;
-        Ok(DataIterChain::new(next.into(), highest, children))
-    }
-
-    fn index_iter_chain<'a: 'g, 'g>(
-        &'a self,
-        node: Node<'g>,
-        guard: &'g Guard,
-    ) -> Result<IndexIterChain<'g>> {
-        let mut highest = None;
-        let mut children = Vec::with_capacity(node.view.rank() as usize + 1);
+        let mut children = Vec::with_capacity(node.page.rank() as usize + 1);
         self.walk_node(node, guard, |page| {
             match TypedPage::from(page) {
                 TypedPage::Index(page) => {
@@ -461,7 +427,7 @@ impl Tree {
             }
             false
         })?;
-        Ok(IndexIterChain::new(highest, children))
+        Ok(IndexNodeView::new(highest, children))
     }
 
     fn split_data_node<'a: 'g, 'g>(
@@ -535,7 +501,7 @@ impl Tree {
         parent: Option<Node<'g>>,
         guard: &'g Guard,
     ) -> Result<()> {
-        let page = self.load_page_with_view(node.id, node.view, guard)?;
+        let page = self.load_page_with_view(node.id, node.page, guard)?;
         if let TypedPage::Split(page) = page.into() {
             if let Some(node) = parent {
                 self.reconcile_split_node(node, page, guard)?;
@@ -570,14 +536,14 @@ impl Tree {
             IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
         };
 
-        index_page.set_ver(node.view.ver());
-        index_page.set_rank(node.view.rank() + 1);
-        index_page.set_next(node.view.as_addr().into());
+        index_page.set_ver(node.page.ver());
+        index_page.set_rank(node.page.rank() + 1);
+        index_page.set_next(node.page.as_addr().into());
         let page = self.update_node(node.id, index_page.next(), index_page, guard)?;
         trace!("reconcile split node {} {:?}", node.id, page);
 
         if page.rank() as usize >= self.opts.index_delta_length {
-            node.view = page.into();
+            node.page = page.into();
             self.consolidate_index_node(node, guard)
         } else {
             Ok(page)
@@ -591,11 +557,11 @@ impl Tree {
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
         assert_eq!(node.id, ROOT_INDEX.id);
-        let root_addr = node.view.as_addr();
+        let root_addr = node.page.as_addr();
 
         // Builds a new root with the original root in the left and the split node in the right.
         let left_id = self.install_node(root_addr, guard)?;
-        let left_index = Index::new(left_id, node.view.ver());
+        let left_index = Index::new(left_id, node.page.ver());
         let split_index = split.get();
         let root_data = [([].as_slice(), left_index), split_index];
         let mut root_iter = SliceIter::from(&root_data);
@@ -617,16 +583,15 @@ impl Tree {
         node: Node<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
-        //let mut chain = self.data_iter_chain(node, guard)?;
-        // let mut iter = chain.iter();
-        let mut chain = self.data_node_iter(node, guard)?;
-        let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut chain)?;
-        page.set_ver(node.view.ver());
-        page.set_next(chain.next().into());
+        let mut view = self.data_node_view(node, guard)?;
+        let mut iter = view.iter();
+        let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
+        page.set_ver(node.page.ver());
+        page.set_next(view.next().into());
 
-        let addr = node.view.as_addr();
+        let addr = node.page.as_addr();
         let page = self.update_node(node.id, addr, page, guard)?;
-        self.dealloc_node(addr, chain.next(), guard);
+        self.dealloc_node(addr, page.next().into(), guard);
         self.stats.num_data_consolidations.inc();
         trace!("consolidate data node {} {:?}", node.id, page);
 
@@ -642,12 +607,12 @@ impl Tree {
         node: Node<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
-        let mut chain = self.index_iter_chain(node, guard)?;
-        let mut iter = chain.iter();
+        let mut view = self.index_iter_view(node, guard)?;
+        let mut iter = view.iter();
         let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-        page.set_ver(node.view.ver());
+        page.set_ver(node.page.ver());
 
-        let addr = node.view.as_addr();
+        let addr = node.page.as_addr();
         let page = self.update_node(node.id, addr, page, guard)?;
         self.dealloc_node(addr, page.next().into(), guard);
         self.stats.num_index_consolidations.inc();

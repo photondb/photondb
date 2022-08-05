@@ -1,8 +1,8 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use photondb_engine::tree::*;
 
-const N: usize = 1 << 24;
-const M: usize = 1 << 14;
+const N: usize = 1 << 20;
+const M: usize = 1 << 16;
 
 fn table_get(table: &Table, i: usize) {
     let buf = i.to_be_bytes();

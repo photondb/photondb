@@ -10,9 +10,6 @@ pub use iter::{
     SeekableIter, SliceIter,
 };
 
-mod merging_iter;
-pub use merging_iter::MergingIter as MergingIter2;
-
 mod data_page;
 pub use data_page::{DataItem, DataPageBuilder, DataPageIter, DataPageRef};
 
