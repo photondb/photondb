@@ -36,7 +36,7 @@ impl PageTable {
             .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
     }
 
-    pub fn alloc(&self, _: &Guard) -> Option<u64> {
+    pub fn alloc(&self) -> Option<u64> {
         self.inner.alloc()
     }
 
@@ -220,12 +220,12 @@ mod tests {
     fn alloc() {
         let guard = unsafe { unprotected() };
         let table = PageTable::default();
-        assert_eq!(table.alloc(guard), Some(1));
-        assert_eq!(table.alloc(guard), Some(2));
+        assert_eq!(table.alloc(), Some(1));
+        assert_eq!(table.alloc(), Some(2));
         table.dealloc(1, guard);
         table.dealloc(2, guard);
-        assert_eq!(table.alloc(guard), Some(2));
-        assert_eq!(table.alloc(guard), Some(1));
+        assert_eq!(table.alloc(), Some(2));
+        assert_eq!(table.alloc(), Some(1));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crossbeam_epoch::{pin, unprotected, Guard};
+use crossbeam_epoch::{pin, Guard};
 use log::trace;
 
 use super::{
@@ -101,10 +101,9 @@ impl Tree {
     }
 
     fn init(self) -> Result<Self> {
-        let guard = unsafe { unprotected() };
         // Initializes the tree as root -> leaf.
-        let root_id = self.table.alloc(guard).unwrap();
-        let leaf_id = self.table.alloc(guard).unwrap();
+        let root_id = self.table.alloc().unwrap();
+        let leaf_id = self.table.alloc().unwrap();
         let leaf_page = DataPageBuilder::default().build(&self.cache)?;
         self.table.set(leaf_id, leaf_page.into());
         let mut root_iter = OptionIter::from(([].as_slice(), Index::with_id(leaf_id)));
@@ -235,8 +234,8 @@ impl Tree {
         });
     }
 
-    fn install_node<'a: 'g, 'g>(&'a self, new: impl Into<u64>, guard: &'g Guard) -> Result<u64> {
-        let id = self.table.alloc(guard).ok_or(Error::Alloc)?;
+    fn install_node<'a: 'g, 'g>(&'a self, new: impl Into<u64>) -> Result<u64> {
+        let id = self.table.alloc().ok_or(Error::Alloc)?;
         self.table.set(id, new.into());
         Ok(id)
     }
@@ -474,7 +473,7 @@ impl Tree {
         right_page: PagePtr,
         guard: &'g Guard,
     ) -> Result<SplitPageRef<'g>> {
-        let right_id = self.install_node(right_page, guard)?;
+        let right_id = self.install_node(right_page)?;
         let split = || -> Result<SplitPageRef<'_>> {
             let mut split_page = SplitPageBuilder::default().build_with_index(
                 &self.cache,
@@ -560,7 +559,7 @@ impl Tree {
         let root_addr = node.page.as_addr();
 
         // Builds a new root with the original root in the left and the split node in the right.
-        let left_id = self.install_node(root_addr, guard)?;
+        let left_id = self.install_node(root_addr)?;
         let left_index = Index::new(left_id, node.page.ver());
         let split_index = split.get();
         let root_data = [([].as_slice(), left_index), split_index];
