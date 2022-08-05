@@ -35,11 +35,11 @@ impl Default for Options {
 }
 
 #[derive(Clone)]
-pub struct Table {
+pub struct Map {
     tree: Arc<Tree>,
 }
 
-impl Table {
+impl Map {
     pub fn open(opts: Options) -> Result<Self> {
         let tree = Tree::open(opts)?;
         Ok(Self {

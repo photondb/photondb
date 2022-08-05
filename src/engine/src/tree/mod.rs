@@ -1,5 +1,5 @@
-mod table;
-pub use table::{Options, Table};
+mod map;
+pub use map::{Map, Options};
 
 mod error;
 pub use error::{Error, Result};
@@ -31,16 +31,16 @@ mod tests {
 
     static SEQUENCE: Counter = Counter::new(0);
 
-    fn open_table(opts: Options) -> Table {
+    fn open(opts: Options) -> Map {
         init();
-        Table::open(opts).unwrap()
+        Map::open(opts).unwrap()
     }
 
-    fn table_get(table: &Table, i: usize, should_exists: bool) {
+    fn get(map: &Map, i: usize, should_exists: bool) {
         let buf = i.to_be_bytes();
         let key = buf.as_slice();
         let lsn = SEQUENCE.get();
-        let got = table.get(key, lsn).unwrap();
+        let got = map.get(key, lsn).unwrap();
         if should_exists {
             assert_eq!(got.unwrap(), key);
         } else {
@@ -48,30 +48,30 @@ mod tests {
         }
     }
 
-    fn table_put(table: &Table, i: usize) {
+    fn put(map: &Map, i: usize) {
         let buf = i.to_be_bytes();
         let key = buf.as_slice();
         let lsn = SEQUENCE.inc();
-        table.put(key, lsn, key).unwrap();
-        let got = table.get(key, lsn).unwrap();
+        map.put(key, lsn, key).unwrap();
+        let got = map.get(key, lsn).unwrap();
         assert_eq!(got.unwrap(), key);
     }
 
-    fn table_delete(table: &Table, i: usize) {
+    fn delete(map: &Map, i: usize) {
         let buf = i.to_be_bytes();
         let key = buf.as_slice();
         let lsn = SEQUENCE.inc();
-        table.delete(key, lsn).unwrap();
-        let got = table.get(key, lsn).unwrap();
+        map.delete(key, lsn).unwrap();
+        let got = map.get(key, lsn).unwrap();
         assert_eq!(got, None);
     }
 
     #[test]
     fn crud() {
-        let table = open_table(OPTIONS);
-        table_get(&table, 0, false);
-        table_put(&table, 0);
-        table_delete(&table, 0);
+        let map = open(OPTIONS);
+        get(&map, 0, false);
+        put(&map, 0);
+        delete(&map, 0);
     }
 
     const N: usize = 1 << 10;
@@ -79,25 +79,25 @@ mod tests {
 
     #[test]
     fn crud_repeated() {
-        let table = open_table(OPTIONS);
+        let map = open(OPTIONS);
         for _ in 0..2 {
             for i in 0..N {
-                table_put(&table, i);
+                put(&map, i);
             }
             for i in 0..N {
-                table_get(&table, i, true);
+                get(&map, i, true);
             }
             for i in (0..N).step_by(M) {
-                table_delete(&table, i);
+                delete(&map, i);
             }
             for i in (0..N).rev() {
-                table_put(&table, i);
+                put(&map, i);
             }
             for i in (0..N).rev() {
-                table_get(&table, i, true);
+                get(&map, i, true);
             }
             for i in (0..N).rev().step_by(M) {
-                table_delete(&table, i);
+                delete(&map, i);
             }
         }
     }
