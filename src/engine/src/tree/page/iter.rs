@@ -415,7 +415,16 @@ where
     I: ForwardIter,
     I::Item: Comparable<I::Item>,
 {
-    pub fn with_exact(len: usize) -> Self {
+    pub fn with(children: Vec<I>) -> Self {
+        let children = children
+            .into_iter()
+            .enumerate()
+            .map(|(rank, iter)| ReverseIter { iter, rank })
+            .collect();
+        Self { children }
+    }
+
+    pub fn with_len(len: usize) -> Self {
         let mut children = Vec::new();
         children.reserve_exact(len);
         Self { children }

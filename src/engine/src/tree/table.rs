@@ -54,6 +54,10 @@ impl Table {
         Ok(value.map(|v| v.to_vec()))
     }
 
+    pub fn iter(&self) -> Iter {
+        Iter::new(self.tree.clone())
+    }
+
     pub fn put<'g>(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
         let guard = &pin();
         let key = Key::new(key, lsn);
@@ -369,6 +373,39 @@ impl Tree {
         Ok((left_index, right_index))
     }
 
+    fn data_node_iter<'a: 'g, 'g>(
+        &'a self,
+        node: Node<'g>,
+        guard: &'g Guard,
+    ) -> Result<DataNodeIter<'g>> {
+        let mut size = 0;
+        let mut next = 0;
+        let mut highest = None;
+        let mut children = Vec::with_capacity(node.view.rank() as usize + 1);
+        self.walk_node(node, guard, |page| {
+            match TypedPage::from(page) {
+                TypedPage::Data(page) => {
+                    // TODO: explores other strategies here.
+                    if size < page.size() && highest.is_none() && children.len() >= 2 {
+                        return true;
+                    }
+                    size += page.size();
+                    next = page.next();
+                    children.push(page.into());
+                }
+                TypedPage::Split(page) => {
+                    if highest == None {
+                        let index = page.get();
+                        highest = Some(index.0);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            false
+        })?;
+        Ok(DataNodeIter::new(next.into(), highest, children))
+    }
+
     fn data_iter_chain<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
@@ -580,9 +617,10 @@ impl Tree {
         node: Node<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
-        let mut chain = self.data_iter_chain(node, guard)?;
-        let mut iter = chain.iter();
-        let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
+        //let mut chain = self.data_iter_chain(node, guard)?;
+        // let mut iter = chain.iter();
+        let mut chain = self.data_node_iter(node, guard)?;
+        let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut chain)?;
         page.set_ver(node.view.ver());
         page.set_next(chain.next().into());
 
@@ -623,9 +661,15 @@ impl Tree {
     }
 }
 
-pub struct Iter {}
+pub struct Iter {
+    tree: Arc<Tree>,
+}
 
 impl Iter {
+    fn new(tree: Arc<Tree>) -> Self {
+        Self { tree }
+    }
+
     pub fn next(&mut self) -> Option<(&[u8], &[u8])> {
         todo!()
     }

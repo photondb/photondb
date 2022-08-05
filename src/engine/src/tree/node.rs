@@ -107,7 +107,7 @@ impl<'a> DataIterChain<'a> {
     }
 
     pub fn iter(&mut self) -> MergingDataIter<'a, '_> {
-        let mut merger = MergingIterBuilder::with_exact(self.children.len());
+        let mut merger = MergingIterBuilder::with_len(self.children.len());
         for iter in self.children.iter_mut() {
             merger.add(iter);
         }
@@ -173,7 +173,7 @@ impl<'a> IndexIterChain<'a> {
     }
 
     pub fn iter(&mut self) -> MergingIndexIter<'a, '_> {
-        let mut merger = MergingIterBuilder::with_exact(self.children.len());
+        let mut merger = MergingIterBuilder::with_len(self.children.len());
         for iter in self.children.iter_mut() {
             merger.add(iter);
         }
@@ -235,6 +235,64 @@ impl<'a, 'i> RewindableIter for MergingIndexIter<'a, 'i> {
 
 impl<'a, 'i> SeekableIter<[u8]> for MergingIndexIter<'a, 'i> {
     fn seek(&mut self, target: &[u8]) {
+        self.iter.seek(target);
+    }
+}
+
+pub struct DataNodeIter<'a> {
+    //iter: MergingIter<DataPageIter<'a>>,
+    iter: MergingIter2<DataPageIter<'a>>,
+    next: PageAddr,
+    highest: Option<&'a [u8]>,
+}
+
+impl<'a> DataNodeIter<'a> {
+    pub fn new(next: PageAddr, highest: Option<&'a [u8]>, children: Vec<DataPageIter<'a>>) -> Self {
+        //let iter = MergingIterBuilder::with(children).build();
+        let iter = MergingIter2::new(children);
+        Self {
+            iter,
+            next,
+            highest,
+        }
+    }
+
+    pub const fn next(&self) -> PageAddr {
+        self.next
+    }
+}
+
+impl<'a> ForwardIter for DataNodeIter<'a> {
+    type Item = DataItem<'a>;
+
+    fn last(&self) -> Option<&Self::Item> {
+        self.iter.last()
+    }
+
+    fn next(&mut self) -> Option<&Self::Item> {
+        if let Some((key, _)) = self.iter.next() {
+            if let Some(highest) = self.highest {
+                if key.raw >= highest {
+                    self.iter.skip_all();
+                }
+            }
+        }
+        self.iter.last()
+    }
+
+    fn skip_all(&mut self) {
+        self.iter.skip_all()
+    }
+}
+
+impl<'a> RewindableIter for DataNodeIter<'a> {
+    fn rewind(&mut self) {
+        self.iter.rewind();
+    }
+}
+
+impl<'a> SeekableIter<Key<'_>> for DataNodeIter<'a> {
+    fn seek(&mut self, target: &Key<'_>) {
         self.iter.seek(target);
     }
 }
