@@ -1,3 +1,4 @@
+use crossbeam_epoch::{unprotected, Guard};
 use log::trace;
 
 use super::{
@@ -7,7 +8,7 @@ use super::{
     pagestore::PageStore,
     pagetable::PageTable,
     stats::{AtomicStats, Stats},
-    Error, Ghost, Options, Result,
+    Error, Options, Result,
 };
 
 pub struct BTree {
@@ -43,39 +44,39 @@ impl BTree {
         &'a self,
         key: &[u8],
         lsn: u64,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<Option<&'g [u8]>> {
         let key = Key::new(key, lsn);
         loop {
-            match self.try_get(&key, ghost) {
+            match self.try_get(&key, guard) {
                 Err(Error::Again) => continue,
                 other => return other,
             }
         }
     }
 
-    fn try_get<'a: 'g, 'g>(&'a self, key: &Key<'_>, ghost: &'g Ghost) -> Result<Option<&'g [u8]>> {
-        let node = self.find_leaf(key.raw, ghost)?;
-        self.lookup_value(key, node, ghost)
+    fn try_get<'a: 'g, 'g>(&'a self, key: &Key<'_>, guard: &'g Guard) -> Result<Option<&'g [u8]>> {
+        let node = self.find_leaf(key.raw, guard)?;
+        self.lookup_value(key, node, guard)
     }
 
-    pub fn put<'g>(&self, key: &[u8], lsn: u64, value: &[u8], ghost: &'g Ghost) -> Result<()> {
+    pub fn put<'g>(&self, key: &[u8], lsn: u64, value: &[u8], guard: &'g Guard) -> Result<()> {
         let key = Key::new(key, lsn);
         let value = Value::Put(value);
-        self.update(key, value, ghost)
+        self.update(key, value, guard)
     }
 
-    pub fn delete<'g>(&self, key: &[u8], lsn: u64, ghost: &'g Ghost) -> Result<()> {
+    pub fn delete<'g>(&self, key: &[u8], lsn: u64, guard: &'g Guard) -> Result<()> {
         let key = Key::new(key, lsn);
         let value = Value::Delete;
-        self.update(key, value, ghost)
+        self.update(key, value, guard)
     }
 
-    fn update<'g>(&self, key: Key<'_>, value: Value<'_>, ghost: &'g Ghost) -> Result<()> {
+    fn update<'g>(&self, key: Key<'_>, value: Value<'_>, guard: &'g Guard) -> Result<()> {
         let mut iter = OptionIter::from((key, value));
         let page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         loop {
-            match self.try_update(key.raw, page, ghost) {
+            match self.try_update(key.raw, page, guard) {
                 Ok(_) => return Ok(()),
                 Err(Error::Again) => continue,
                 Err(err) => {
@@ -88,8 +89,8 @@ impl BTree {
         }
     }
 
-    fn try_update<'g>(&self, key: &[u8], mut page: PagePtr, ghost: &'g Ghost) -> Result<()> {
-        let mut node = self.find_leaf(key, ghost)?;
+    fn try_update<'g>(&self, key: &[u8], mut page: PagePtr, guard: &'g Guard) -> Result<()> {
+        let mut node = self.find_leaf(key, guard)?;
         loop {
             page.set_ver(node.view.ver());
             page.set_rank(node.view.rank() + 1);
@@ -98,12 +99,12 @@ impl BTree {
                 Ok(_) => {
                     if page.rank() as usize >= self.opts.data_delta_length {
                         node.view = page.into();
-                        let _ = self.consolidate_data_node(node, ghost);
+                        let _ = self.consolidate_data_node(node, guard);
                     }
                     return Ok(());
                 }
                 Err(addr) => {
-                    if let Some(view) = self.page_view(addr.into(), ghost) {
+                    if let Some(view) = self.page_view(addr.into(), guard) {
                         // We can keep retrying as long as the page version doesn't change.
                         if view.ver() == node.view.ver() {
                             node.view = view;
@@ -119,10 +120,10 @@ impl BTree {
 
 impl BTree {
     fn init(self) -> Result<Self> {
-        let ghost = Ghost::pin();
+        let guard = unsafe { unprotected() };
         // Initializes the tree as root -> leaf.
-        let root_id = self.table.alloc(ghost.guard()).unwrap();
-        let leaf_id = self.table.alloc(ghost.guard()).unwrap();
+        let root_id = self.table.alloc(guard).unwrap();
+        let leaf_id = self.table.alloc(guard).unwrap();
         let leaf_page = DataPageBuilder::default().build(&self.cache)?;
         self.table.set(leaf_id, leaf_page.into());
         let mut root_iter = OptionIter::from(([].as_slice(), Index::with_id(leaf_id)));
@@ -131,12 +132,12 @@ impl BTree {
         Ok(self)
     }
 
-    fn node<'a: 'g, 'g>(&'a self, id: u64, ghost: &'g Ghost) -> Option<Node<'g>> {
+    fn node<'a: 'g, 'g>(&'a self, id: u64, guard: &'g Guard) -> Option<Node<'g>> {
         let addr = self.table.get(id).into();
-        self.page_view(addr, ghost).map(|view| Node::new(id, view))
+        self.page_view(addr, guard).map(|view| Node::new(id, view))
     }
 
-    fn page_view<'a: 'g, 'g>(&'a self, addr: PageAddr, _: &'g Ghost) -> Option<PageView<'g>> {
+    fn page_view<'a: 'g, 'g>(&'a self, addr: PageAddr, _: &'g Guard) -> Option<PageView<'g>> {
         match addr {
             PageAddr::Mem(addr) => {
                 let page = unsafe { PageRef::new(addr as *mut u8) };
@@ -154,7 +155,7 @@ impl BTree {
         id: u64,
         old: impl Into<u64>,
         new: PagePtr,
-        _: &'g Ghost,
+        _: &'g Guard,
     ) -> Result<PageRef<'g>> {
         self.table
             .cas(id, old.into(), new.into())
@@ -165,9 +166,9 @@ impl BTree {
             })
     }
 
-    fn dealloc_node<'a: 'g, 'g>(&'a self, addr: PageAddr, until: PageAddr, ghost: &'g Ghost) {
+    fn dealloc_node<'a: 'g, 'g>(&'a self, addr: PageAddr, until: PageAddr, guard: &'g Guard) {
         let cache = self.cache.clone();
-        ghost.guard().defer(move || unsafe {
+        guard.defer(move || unsafe {
             let mut next = addr;
             while next != until {
                 if let PageAddr::Mem(addr) = next {
@@ -182,8 +183,8 @@ impl BTree {
         });
     }
 
-    fn install_node<'a: 'g, 'g>(&'a self, new: impl Into<u64>, ghost: &'g Ghost) -> Result<u64> {
-        let id = self.table.alloc(ghost.guard()).ok_or(Error::Alloc)?;
+    fn install_node<'a: 'g, 'g>(&'a self, new: impl Into<u64>, guard: &'g Guard) -> Result<u64> {
+        let id = self.table.alloc(guard).ok_or(Error::Alloc)?;
         self.table.set(id, new.into());
         Ok(id)
     }
@@ -192,7 +193,7 @@ impl BTree {
         &'a self,
         _: u64,
         view: PageView<'g>,
-        _: &'g Ghost,
+        _: &'g Guard,
     ) -> Result<PageRef<'g>> {
         match view {
             PageView::Mem(page) => Ok(page),
@@ -207,7 +208,7 @@ impl BTree {
         &'a self,
         _: u64,
         addr: PageAddr,
-        _: &'g Ghost,
+        _: &'g Guard,
     ) -> Result<Option<PageRef<'g>>> {
         match addr {
             PageAddr::Mem(addr) => Ok(unsafe { PageRef::new(addr as *mut u8) }),
@@ -220,35 +221,35 @@ impl BTree {
 }
 
 impl BTree {
-    fn find_leaf<'a: 'g, 'g>(&'a self, key: &[u8], ghost: &'g Ghost) -> Result<Node<'g>> {
+    fn find_leaf<'a: 'g, 'g>(&'a self, key: &[u8], guard: &'g Guard) -> Result<Node<'g>> {
         let mut cursor = ROOT_INDEX;
         let mut parent = None;
         loop {
-            let node = self.node(cursor.id, ghost).expect("the node must be valid");
+            let node = self.node(cursor.id, guard).expect("the node must be valid");
             if node.view.ver() != cursor.ver {
-                self.reconcile_node(node, parent, ghost)?;
+                self.reconcile_node(node, parent, guard)?;
                 return Err(Error::Again);
             }
             if node.view.is_data() {
                 return Ok(node);
             }
             cursor = self
-                .lookup_index(key, node, ghost)?
+                .lookup_index(key, node, guard)?
                 .expect("the index must be found");
             parent = Some(node);
         }
     }
 
-    fn walk_node<'a: 'g, 'g, F>(&'a self, node: Node<'g>, ghost: &'g Ghost, mut f: F) -> Result<()>
+    fn walk_node<'a: 'g, 'g, F>(&'a self, node: Node<'g>, guard: &'g Guard, mut f: F) -> Result<()>
     where
         F: FnMut(PageRef<'g>) -> bool,
     {
-        let mut page = self.load_page_with_view(node.id, node.view, ghost)?;
+        let mut page = self.load_page_with_view(node.id, node.view, guard)?;
         loop {
             if f(page) {
                 break;
             }
-            match self.load_page_with_addr(node.id, page.next().into(), ghost)? {
+            match self.load_page_with_addr(node.id, page.next().into(), guard)? {
                 Some(next) => page = next,
                 None => break,
             }
@@ -260,10 +261,10 @@ impl BTree {
         &'a self,
         key: &Key<'_>,
         node: Node<'g>,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
-        self.walk_node(node, ghost, |page| {
+        self.walk_node(node, guard, |page| {
             if let TypedPage::Data(page) = page.into() {
                 if let Some((_, v)) = page.find(key) {
                     value = v.into();
@@ -279,10 +280,10 @@ impl BTree {
         &'a self,
         key: &[u8],
         node: Node<'g>,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<Option<Index>> {
         let mut value = None;
-        self.walk_node(node, ghost, |page| {
+        self.walk_node(node, guard, |page| {
             if let TypedPage::Index(page) = page.into() {
                 if let Some((_, v)) = page.find(key) {
                     if v != NULL_INDEX {
@@ -300,11 +301,11 @@ impl BTree {
         &'a self,
         key: &[u8],
         node: Node<'g>,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<(Option<IndexItem<'g>>, Option<IndexItem<'g>>)> {
         let mut left_index = None;
         let mut right_index = None;
-        self.walk_node(node, ghost, |page| {
+        self.walk_node(node, guard, |page| {
             if let TypedPage::Index(page) = page.into() {
                 let (left, right) = page.find_range(key);
                 if let Some(left) = left {
@@ -323,13 +324,13 @@ impl BTree {
     fn data_iter_chain<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<DataIterChain<'g>> {
         let mut size = 0;
         let mut next = 0;
         let mut highest = None;
         let mut children = Vec::with_capacity(node.view.rank() as usize + 1);
-        self.walk_node(node, ghost, |page| {
+        self.walk_node(node, guard, |page| {
             match TypedPage::from(page) {
                 TypedPage::Data(page) => {
                     // TODO: explores other strategies here.
@@ -356,11 +357,11 @@ impl BTree {
     fn index_iter_chain<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<IndexIterChain<'g>> {
         let mut highest = None;
         let mut children = Vec::with_capacity(node.view.rank() as usize + 1);
-        self.walk_node(node, ghost, |page| {
+        self.walk_node(node, guard, |page| {
             match TypedPage::from(page) {
                 TypedPage::Index(page) => {
                     children.push(page.into());
@@ -382,12 +383,12 @@ impl BTree {
         &'a self,
         id: u64,
         page: PageRef<'g>,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
         let data_page = DataPageRef::from(page);
         if let Some((sep, mut iter)) = data_page.split() {
             let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-            let split_page = self.install_split_page(id, page, sep, right_page, ghost)?;
+            let split_page = self.install_split_page(id, page, sep, right_page, guard)?;
             trace!("split data node {} {:?}", id, split_page.get());
             self.stats.num_data_splits.inc();
             Ok(split_page.into())
@@ -400,12 +401,12 @@ impl BTree {
         &'a self,
         id: u64,
         page: PageRef<'g>,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
         let index_page = IndexPageRef::from(page);
         if let Some((sep, mut iter)) = index_page.split() {
             let right_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-            let split_page = self.install_split_page(id, page, sep, right_page, ghost)?;
+            let split_page = self.install_split_page(id, page, sep, right_page, guard)?;
             self.stats.num_index_splits.inc();
             trace!("split index node {} {:?}", id, split_page.get());
             Ok(split_page.into())
@@ -420,9 +421,9 @@ impl BTree {
         left_page: PageRef<'g>,
         split_key: &[u8],
         right_page: PagePtr,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<SplitPageRef<'g>> {
-        let right_id = self.install_node(right_page, ghost)?;
+        let right_id = self.install_node(right_page, guard)?;
         let split = || -> Result<SplitPageRef<'_>> {
             let mut split_page = SplitPageBuilder::default().build_with_index(
                 &self.cache,
@@ -433,11 +434,11 @@ impl BTree {
             split_page.set_rank(left_page.rank() + 1);
             split_page.set_next(left_page.into());
             split_page.set_data(left_page.is_data());
-            self.update_node(left_id, left_page, split_page, ghost)
+            self.update_node(left_id, left_page, split_page, guard)
                 .map(SplitPageRef::from)
         };
         split().map_err(|err| unsafe {
-            self.table.dealloc(right_id, ghost.guard());
+            self.table.dealloc(right_id, guard);
             self.cache.dealloc(right_page);
             err
         })
@@ -447,14 +448,14 @@ impl BTree {
         &'a self,
         node: Node<'g>,
         parent: Option<Node<'g>>,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<()> {
-        let page = self.load_page_with_view(node.id, node.view, ghost)?;
+        let page = self.load_page_with_view(node.id, node.view, guard)?;
         if let TypedPage::Split(page) = page.into() {
             if let Some(node) = parent {
-                self.reconcile_split_node(node, page, ghost)?;
+                self.reconcile_split_node(node, page, guard)?;
             } else {
-                self.reconcile_split_root(node, page, ghost)?;
+                self.reconcile_split_root(node, page, guard)?;
             }
         }
         Ok(())
@@ -464,10 +465,10 @@ impl BTree {
         &'a self,
         mut node: Node<'g>,
         split: SplitPageRef<'g>,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
         let split_index = split.get();
-        let (left_index, right_index) = self.lookup_index_range(split_index.0, node, ghost)?;
+        let (left_index, right_index) = self.lookup_index_range(split_index.0, node, guard)?;
         let mut left_index = left_index.expect("the left index must exists when split");
         left_index.1.ver = split.ver();
 
@@ -487,12 +488,12 @@ impl BTree {
         index_page.set_ver(node.view.ver());
         index_page.set_rank(node.view.rank() + 1);
         index_page.set_next(node.view.as_addr().into());
-        let page = self.update_node(node.id, index_page.next(), index_page, ghost)?;
+        let page = self.update_node(node.id, index_page.next(), index_page, guard)?;
         trace!("reconcile split node {} {:?}", node.id, page);
 
         if page.rank() as usize >= self.opts.index_delta_length {
             node.view = page.into();
-            self.consolidate_index_node(node, ghost)
+            self.consolidate_index_node(node, guard)
         } else {
             Ok(page)
         }
@@ -502,26 +503,26 @@ impl BTree {
         &'a self,
         node: Node<'g>,
         split: SplitPageRef<'g>,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
         assert_eq!(node.id, ROOT_INDEX.id);
         let root_addr = node.view.as_addr();
 
         // Builds a new root with the original root in the left and the split node in the right.
-        let left_id = self.install_node(root_addr, ghost)?;
+        let left_id = self.install_node(root_addr, guard)?;
         let left_index = Index::new(left_id, node.view.ver());
         let split_index = split.get();
         let root_data = [([].as_slice(), left_index), split_index];
         let mut root_iter = SliceIter::from(&root_data);
         let root_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
 
-        self.update_node(node.id, root_addr, root_page, ghost)
+        self.update_node(node.id, root_addr, root_page, guard)
             .map(|page| {
                 trace!("reconcile split root {} {:?}", node.id, page);
                 page
             })
             .map_err(|err| {
-                self.table.dealloc(left_id, ghost.guard());
+                self.table.dealloc(left_id, guard);
                 err
             })
     }
@@ -529,22 +530,22 @@ impl BTree {
     fn consolidate_data_node<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
-        let mut chain = self.data_iter_chain(node, ghost)?;
+        let mut chain = self.data_iter_chain(node, guard)?;
         let mut iter = chain.iter();
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
         page.set_next(chain.next.into());
 
         let addr = node.view.as_addr();
-        let page = self.update_node(node.id, addr, page, ghost)?;
-        self.dealloc_node(addr, chain.next, ghost);
+        let page = self.update_node(node.id, addr, page, guard)?;
+        self.dealloc_node(addr, chain.next, guard);
         self.stats.num_data_consolidations.inc();
         trace!("consolidate data node {} {:?}", node.id, page);
 
         if page.size() >= self.opts.data_node_size {
-            self.split_data_node(node.id, page, ghost)
+            self.split_data_node(node.id, page, guard)
         } else {
             Ok(page)
         }
@@ -553,21 +554,21 @@ impl BTree {
     fn consolidate_index_node<'a: 'g, 'g>(
         &'a self,
         node: Node<'g>,
-        ghost: &'g Ghost,
+        guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
-        let mut chain = self.index_iter_chain(node, ghost)?;
+        let mut chain = self.index_iter_chain(node, guard)?;
         let mut iter = chain.iter();
         let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.view.ver());
 
         let addr = node.view.as_addr();
-        let page = self.update_node(node.id, addr, page, ghost)?;
-        self.dealloc_node(addr, page.next().into(), ghost);
+        let page = self.update_node(node.id, addr, page, guard)?;
+        self.dealloc_node(addr, page.next().into(), guard);
         self.stats.num_index_consolidations.inc();
         trace!("consolidate index node {} {:?}", node.id, page);
 
         if page.size() >= self.opts.index_node_size {
-            self.split_index_node(node.id, page, ghost)
+            self.split_index_node(node.id, page, guard)
         } else {
             Ok(page)
         }

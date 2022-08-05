@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use super::Guard;
+use crossbeam_epoch::Guard;
 
 const NAN: u64 = 0;
 const MIN: u64 = 1;

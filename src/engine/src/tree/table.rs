@@ -1,4 +1,18 @@
-use super::{BTree, Ghost, Options, Result, Stats};
+use crossbeam_epoch::pin;
+
+use super::{BTree, Options, Result, Stats};
+
+pub struct Iter {}
+
+impl Iter {
+    pub fn next(&mut self) -> Option<(&[u8], &[u8])> {
+        todo!()
+    }
+
+    pub fn seek(&mut self, _target: &[u8]) {
+        todo!()
+    }
+}
 
 pub struct Table {
     tree: BTree,
@@ -15,20 +29,24 @@ impl Table {
     }
 
     pub fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>> {
-        let ghost = &Ghost::pin();
-        let value = self.tree.get(key, lsn, ghost)?;
+        let guard = &pin();
+        let value = self.tree.get(key, lsn, guard)?;
         Ok(value.map(|v| v.to_vec()))
     }
 
+    pub fn iter(&self) -> Iter {
+        Iter {}
+    }
+
     pub fn put(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
-        let ghost = &Ghost::pin();
-        self.tree.put(key, lsn, value, ghost)?;
+        let guard = &pin();
+        self.tree.put(key, lsn, value, guard)?;
         Ok(())
     }
 
     pub fn delete(&self, key: &[u8], lsn: u64) -> Result<()> {
-        let ghost = &Ghost::pin();
-        self.tree.delete(key, lsn, ghost)?;
+        let guard = &pin();
+        self.tree.delete(key, lsn, guard)?;
         Ok(())
     }
 }

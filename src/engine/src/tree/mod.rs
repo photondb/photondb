@@ -10,9 +10,6 @@ pub use stats::Stats;
 mod btree;
 use btree::BTree;
 
-mod ghost;
-use ghost::{Ghost, Guard};
-
 mod node;
 mod page;
 mod pagecache;
