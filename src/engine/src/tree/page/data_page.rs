@@ -49,8 +49,8 @@ impl<'a> DataPageRef<'a> {
     }
 
     /// Returns the entry that matches `target`.
-    pub fn find(&self, target: &Key<'_>) -> Option<DataItem<'a>> {
-        if let Some((k, v)) = self.0.seek(target) {
+    pub fn find(&self, target: Key<'_>) -> Option<DataItem<'a>> {
+        if let Some((k, v)) = self.0.seek(&target) {
             if k.raw == target.raw {
                 return Some((k, v));
             }

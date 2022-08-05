@@ -88,9 +88,9 @@ where
 }
 
 pub struct DataIterChain<'a> {
-    pub next: PageAddr,
-    pub highest: Option<&'a [u8]>,
-    pub children: Vec<DataPageIter<'a>>,
+    next: PageAddr,
+    highest: Option<&'a [u8]>,
+    children: Vec<DataPageIter<'a>>,
 }
 
 impl<'a> DataIterChain<'a> {
@@ -100,6 +100,10 @@ impl<'a> DataIterChain<'a> {
             highest,
             children,
         }
+    }
+
+    pub const fn next(&self) -> PageAddr {
+        self.next
     }
 
     pub fn iter(&mut self) -> MergingDataIter<'a, '_> {
