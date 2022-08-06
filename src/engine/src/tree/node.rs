@@ -106,28 +106,46 @@ impl<'a> DataNodeView<'a> {
         self.next
     }
 
-    pub fn iter(&mut self) -> DataNodeIter<'a, '_> {
+    pub fn iter(&mut self) -> DataIter<'a, &mut DataPageIter<'a>> {
         let mut merger = MergingIterBuilder::with_len(self.children.len());
-        for iter in self.children.iter_mut() {
-            merger.add(iter);
+        for child in self.children.iter_mut() {
+            merger.add(child);
         }
         let iter = merger.build();
-        DataNodeIter::new(iter, self.highest)
+        DataIter::new(iter, self.highest)
+    }
+
+    pub fn into_iter(self) -> DataIter<'a, DataPageIter<'a>> {
+        let mut merger = MergingIterBuilder::with_len(self.children.len());
+        for child in self.children {
+            merger.add(child);
+        }
+        let iter = merger.build();
+        DataIter::new(iter, self.highest)
     }
 }
 
-pub struct DataNodeIter<'a, 'v> {
-    iter: MergingIter<&'v mut DataPageIter<'a>>,
+pub struct DataIter<'a, T>
+where
+    T: ForwardIter<Item = DataItem<'a>>,
+{
+    iter: MergingIter<T>,
     highest: Option<&'a [u8]>,
 }
 
-impl<'a, 'v> DataNodeIter<'a, 'v> {
-    pub fn new(iter: MergingIter<&'v mut DataPageIter<'a>>, highest: Option<&'a [u8]>) -> Self {
+impl<'a, T> DataIter<'a, T>
+where
+    T: ForwardIter<Item = DataItem<'a>>,
+{
+    pub fn new(iter: MergingIter<T>, highest: Option<&'a [u8]>) -> Self {
         Self { iter, highest }
     }
 }
 
-impl<'a, 'v> ForwardIter for DataNodeIter<'a, 'v> {
+impl<'a, T> ForwardIter for DataIter<'a, T>
+where
+    T: ForwardIter<Item = DataItem<'a>>,
+{
     type Item = DataItem<'a>;
 
     fn last(&self) -> Option<&Self::Item> {
@@ -150,13 +168,19 @@ impl<'a, 'v> ForwardIter for DataNodeIter<'a, 'v> {
     }
 }
 
-impl<'a, 'v> RewindableIter for DataNodeIter<'a, 'v> {
+impl<'a, T> RewindableIter for DataIter<'a, T>
+where
+    T: RewindableIter<Item = DataItem<'a>>,
+{
     fn rewind(&mut self) {
         self.iter.rewind();
     }
 }
 
-impl<'a, 'v> SeekableIter<Key<'_>> for DataNodeIter<'a, 'v> {
+impl<'a, T> SeekableIter<Key<'_>> for DataIter<'a, T>
+where
+    for<'k> T: SeekableIter<Key<'k>, Item = DataItem<'a>>,
+{
     fn seek(&mut self, target: &Key<'_>) {
         self.iter.seek(target);
     }

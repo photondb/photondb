@@ -54,10 +54,6 @@ impl Map {
         Ok(value.map(|v| v.to_vec()))
     }
 
-    pub fn iter(&self) -> Iter {
-        Iter::new(self.tree.clone())
-    }
-
     pub fn put<'g>(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
         let guard = &pin();
         let key = Key::new(key, lsn);
@@ -625,20 +621,62 @@ impl Tree {
     }
 }
 
-pub struct Iter {
+/*
+pub struct View {
     tree: Arc<Tree>,
+    guard: Guard,
 }
 
-impl Iter {
-    fn new(tree: Arc<Tree>) -> Self {
-        Self { tree }
+impl View {
+    pub fn iter(&self) -> Iter {
+        Iter::new(&self.tree, &self.guard)
+    }
+}
+
+type DataNodeIter<'a> = DataIter<'a, DataPageIter<'a>>;
+
+pub struct NodeIter<'a> {
+    tree: &'a Tree,
+    cursor: Option<Vec<u8>>,
+    current: Option<DataNodeIter<'a>>,
+}
+
+impl<'a> Iter<'a> {
+    fn new(tree: &'a Tree, guard: &'a Guard) -> Self {
+        Self {
+            tree,
+            guard,
+            cursor: Some(Vec::new()),
+            current: None,
+        }
     }
 
-    pub fn next(&mut self) -> Option<(&[u8], &[u8])> {
-        todo!()
+    fn next_node(&mut self) -> Result<()> {
+        if let Some(cursor) = self.cursor.as_ref() {
+            let node = self.tree.find_leaf(cursor, self.guard)?;
+            let view = self.tree.data_node_view(node, self.guard)?;
+            self.current = Some(view.into_iter());
+        }
+        Ok(())
+    }
+
+    pub fn next(&mut self) -> Result<Option<(&'a [u8], &'a [u8])>> {
+        if self.current.is_none() {
+            self.next_node()?;
+        }
+        while let Some(iter) = self.current.as_mut() {
+            while let Some((k, v)) = iter.next() {
+                if let Value::Put(value) = v {
+                    return Ok(Some((k.raw, value)));
+                }
+            }
+            self.next_node()?;
+        }
+        Ok(None)
     }
 
     pub fn seek(&mut self, _target: &[u8]) {
         todo!()
     }
 }
+*/
