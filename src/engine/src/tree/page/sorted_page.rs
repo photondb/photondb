@@ -22,8 +22,8 @@ impl SortedPageBuilder {
 
     fn add<K, V>(&mut self, key: &K, value: &V)
     where
-        K: Encodable,
-        V: Encodable,
+        K: EncodeTo,
+        V: EncodeTo,
     {
         self.offsets_size += size_of::<u32>();
         self.payload_size += key.encode_size() + value.encode_size();
@@ -54,8 +54,8 @@ impl SortedPageBuilder {
     where
         A: PageAlloc,
         I: RewindableIter<Item = (K, V)>,
-        K: Encodable,
-        V: Encodable,
+        K: EncodeTo,
+        V: EncodeTo,
     {
         iter.rewind();
         while let Some((k, v)) = iter.next() {
@@ -93,8 +93,8 @@ impl SortedPageBuf {
 
     unsafe fn add<K, V>(&mut self, key: &K, value: &V)
     where
-        K: Encodable,
-        V: Encodable,
+        K: EncodeTo,
+        V: EncodeTo,
     {
         let offset = self.content.pos() as u32;
         self.offsets.add(self.current).write(offset.to_le());
@@ -113,8 +113,8 @@ pub struct SortedPageRef<'a, K, V> {
 
 impl<'a, K, V> SortedPageRef<'a, K, V>
 where
-    K: Decodable + Ord,
-    V: Decodable,
+    K: DecodeFrom + Ord,
+    V: DecodeFrom,
 {
     pub unsafe fn new(base: PageRef<'a>) -> Self {
         let offsets_ptr = base.content() as *const u32;
@@ -239,8 +239,8 @@ pub struct SortedPageIter<'a, K, V> {
 
 impl<'a, K, V> SortedPageIter<'a, K, V>
 where
-    K: Decodable + Ord,
-    V: Decodable,
+    K: DecodeFrom + Ord,
+    V: DecodeFrom,
 {
     pub fn new(page: SortedPageRef<'a, K, V>) -> Self {
         Self {
@@ -253,8 +253,8 @@ where
 
 impl<'a, K, V> ForwardIter for SortedPageIter<'a, K, V>
 where
-    K: Decodable + Ord,
-    V: Decodable,
+    K: DecodeFrom + Ord,
+    V: DecodeFrom,
 {
     type Item = (K, V);
 
@@ -281,8 +281,8 @@ where
 
 impl<'a, K, V> RewindableIter for SortedPageIter<'a, K, V>
 where
-    K: Decodable + Ord,
-    V: Decodable,
+    K: DecodeFrom + Ord,
+    V: DecodeFrom,
 {
     fn rewind(&mut self) {
         self.next = 0;
@@ -292,8 +292,8 @@ where
 
 impl<'a, K, V, T> SeekableIter<T> for SortedPageIter<'a, K, V>
 where
-    K: Decodable + Ord,
-    V: Decodable,
+    K: DecodeFrom + Ord,
+    V: DecodeFrom,
     T: Compare<K> + ?Sized,
 {
     fn seek(&mut self, target: &T) {

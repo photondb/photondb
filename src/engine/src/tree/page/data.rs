@@ -10,8 +10,8 @@ pub trait Compare<T: ?Sized> {
     fn compare(&self, other: &T) -> Ordering;
 }
 
-/// An interface to encode data.
-pub trait Encodable {
+/// An interface to encode data to a buffer.
+pub trait EncodeTo {
     /// Returns the exact size to encode this object.
     fn encode_size(&self) -> usize;
 
@@ -23,8 +23,8 @@ pub trait Encodable {
     unsafe fn encode_to(&self, w: &mut BufWriter);
 }
 
-/// An interface to decode data.
-pub trait Decodable {
+/// An interface to decode data from a buffer.
+pub trait DecodeFrom {
     /// Decodes an object from a `BufReader`.
     ///
     /// # Safety
@@ -39,7 +39,7 @@ impl Compare<u64> for u64 {
     }
 }
 
-impl Encodable for u64 {
+impl EncodeTo for u64 {
     fn encode_size(&self) -> usize {
         size_of::<u64>()
     }
@@ -49,7 +49,7 @@ impl Encodable for u64 {
     }
 }
 
-impl Decodable for u64 {
+impl DecodeFrom for u64 {
     unsafe fn decode_from(r: &mut BufReader) -> Self {
         r.get_u64()
     }
@@ -61,7 +61,7 @@ impl<T: Borrow<[u8]> + ?Sized> Compare<&[u8]> for T {
     }
 }
 
-impl Encodable for &[u8] {
+impl EncodeTo for &[u8] {
     fn encode_size(&self) -> usize {
         BufWriter::length_prefixed_slice_size(self)
     }
@@ -71,7 +71,7 @@ impl Encodable for &[u8] {
     }
 }
 
-impl Decodable for &[u8] {
+impl DecodeFrom for &[u8] {
     unsafe fn decode_from(r: &mut BufReader) -> Self {
         r.get_length_prefixed_slice()
     }
@@ -104,7 +104,7 @@ impl PartialOrd for Key<'_> {
     }
 }
 
-impl Encodable for Key<'_> {
+impl EncodeTo for Key<'_> {
     fn encode_size(&self) -> usize {
         BufWriter::length_prefixed_slice_size(self.raw) + size_of::<u64>()
     }
@@ -115,7 +115,7 @@ impl Encodable for Key<'_> {
     }
 }
 
-impl Decodable for Key<'_> {
+impl DecodeFrom for Key<'_> {
     unsafe fn decode_from(r: &mut BufReader) -> Self {
         let raw = r.get_length_prefixed_slice();
         let lsn = r.get_u64();
@@ -152,7 +152,7 @@ pub enum Value<'a> {
     Delete,
 }
 
-impl Encodable for Value<'_> {
+impl EncodeTo for Value<'_> {
     fn encode_size(&self) -> usize {
         1 + match self {
             Value::Put(value) => BufWriter::length_prefixed_slice_size(value),
@@ -171,7 +171,7 @@ impl Encodable for Value<'_> {
     }
 }
 
-impl Decodable for Value<'_> {
+impl DecodeFrom for Value<'_> {
     unsafe fn decode_from(r: &mut BufReader) -> Self {
         let kind = ValueKind::from(r.get_u8());
         match kind {
@@ -210,7 +210,7 @@ impl Index {
     }
 }
 
-impl Encodable for Index {
+impl EncodeTo for Index {
     fn encode_size(&self) -> usize {
         size_of::<u64>() * 2
     }
@@ -221,7 +221,7 @@ impl Encodable for Index {
     }
 }
 
-impl Decodable for Index {
+impl DecodeFrom for Index {
     unsafe fn decode_from(r: &mut BufReader) -> Self {
         let id = r.get_u64();
         let ver = r.get_u64();
