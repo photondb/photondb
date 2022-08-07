@@ -7,7 +7,7 @@ const M: usize = 1 << 16;
 fn get(map: &Map, i: usize) {
     let buf = i.to_be_bytes();
     let key = buf.as_slice();
-    map.get(key, 0).unwrap().unwrap();
+    map.get(key, 0, |_| {}).unwrap();
 }
 
 fn put(map: &Map, i: usize) {

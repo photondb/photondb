@@ -41,12 +41,11 @@ mod tests {
         let buf = i.to_be_bytes();
         let key = buf.as_slice();
         let lsn = SEQUENCE.get();
-        let got = map.get(key, lsn).unwrap();
-        if should_exists {
-            assert_eq!(got.unwrap(), key);
-        } else {
-            assert_eq!(got, None);
-        }
+        let expect = if should_exists { Some(key) } else { None };
+        map.get(key, lsn, |got| {
+            assert_eq!(got, expect);
+        })
+        .unwrap();
     }
 
     fn put(map: &Map, i: usize) {
@@ -54,8 +53,10 @@ mod tests {
         let key = buf.as_slice();
         let lsn = SEQUENCE.inc();
         map.put(key, lsn, key).unwrap();
-        let got = map.get(key, lsn).unwrap();
-        assert_eq!(got.unwrap(), key);
+        map.get(key, lsn, |got| {
+            assert_eq!(got.unwrap(), key);
+        })
+        .unwrap();
     }
 
     fn delete(map: &Map, i: usize) {
@@ -63,8 +64,10 @@ mod tests {
         let key = buf.as_slice();
         let lsn = SEQUENCE.inc();
         map.delete(key, lsn).unwrap();
-        let got = map.get(key, lsn).unwrap();
-        assert_eq!(got, None);
+        map.get(key, lsn, |got| {
+            assert_eq!(got, None);
+        })
+        .unwrap();
     }
 
     #[test]
@@ -109,20 +112,15 @@ mod tests {
         for i in 0..N {
             put(&map, i);
         }
-        let mut map_iter = map.iter();
-        let mut i = 0;
-        while i < N {
-            let mut iter = map_iter.next().unwrap().unwrap();
-            while i < N {
-                let buf = i.to_be_bytes();
-                let key = buf.as_slice();
-                if let Some(got) = iter.next() {
-                    assert_eq!(got, (key, key));
-                    i += 1;
-                } else {
-                    break;
-                }
-            }
-        }
+        let mut i = 0usize;
+        let mut iter = map.iter();
+        iter.next_with(|item| {
+            let buf = i.to_be_bytes();
+            let key = buf.as_slice();
+            assert_eq!(item, (key, key));
+            i += 1;
+        })
+        .unwrap();
+        assert_eq!(i, N);
     }
 }

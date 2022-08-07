@@ -47,11 +47,13 @@ impl Map {
         })
     }
 
-    pub fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>> {
+    pub fn get<F>(&self, key: &[u8], lsn: u64, f: F) -> Result<()>
+    where
+        F: FnMut(Option<&[u8]>),
+    {
         let guard = &pin();
         let key = Key::new(key, lsn);
-        let value = self.tree.get(key, guard)?;
-        Ok(value.map(|v| v.to_vec()))
+        self.tree.get(key, guard).map(f)
     }
 
     pub fn iter(&self) -> Iter {
@@ -628,7 +630,19 @@ impl Iter {
         }
     }
 
-    pub fn next(&mut self) -> Result<Option<NodeIter<'_>>> {
+    pub fn next_with<F>(&mut self, mut f: F) -> Result<()>
+    where
+        F: FnMut((&[u8], &[u8])),
+    {
+        while let Some(mut iter) = self.next_node()? {
+            while let Some(item) = iter.next() {
+                f(item);
+            }
+        }
+        Ok(())
+    }
+
+    fn next_node(&mut self) -> Result<Option<NodeIter<'_>>> {
         let cursor = self.cursor.take();
         if let Some(cursor) = cursor.as_ref() {
             self.guard.repin();
@@ -643,10 +657,10 @@ impl Iter {
     }
 }
 
-pub struct NodeIter<'a>(DataIter<'a, DataPageIter<'a>>);
+struct NodeIter<'a>(DataIter<'a, DataPageIter<'a>>);
 
 impl NodeIter<'_> {
-    pub fn next(&mut self) -> Option<(&[u8], &[u8])> {
+    fn next(&mut self) -> Option<(&[u8], &[u8])> {
         while let Some((k, v)) = self.0.next() {
             if let Value::Put(value) = v {
                 return Some((k.raw, value));
