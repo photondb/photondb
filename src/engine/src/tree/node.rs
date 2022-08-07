@@ -3,24 +3,21 @@ use super::{page::*, pagestore::PageInfo, pagetable::PageTable};
 pub const NULL_INDEX: Index = Index::with_id(PageTable::NAN);
 pub const ROOT_INDEX: Index = Index::with_id(PageTable::MIN);
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct Node<'a> {
     pub id: u64,
     pub page: PageView<'a>,
+    pub range: Range<'a>,
+    pub right: Option<Index>,
 }
 
-impl<'a> Node<'a> {
-    pub fn new(id: u64, page: PageView<'a>) -> Self {
-        Self { id, page }
-    }
-}
-
-pub struct NodeRange<'a> {
+#[derive(Clone, Debug)]
+pub struct Range<'a> {
     pub start: &'a [u8],
     pub end: Option<&'a [u8]>,
 }
 
-impl Default for NodeRange<'_> {
+impl Default for Range<'_> {
     fn default() -> Self {
         Self {
             start: &[],
@@ -29,10 +26,15 @@ impl Default for NodeRange<'_> {
     }
 }
 
-impl<'a> NodeRange<'a> {
+impl<'a> Range<'a> {
     pub fn new(start: &'a [u8], end: Option<&'a [u8]>) -> Self {
         Self { start, end }
     }
+}
+
+pub struct NodePath<'a> {
+    pub node: Node<'a>,
+    pub parent: Option<Node<'a>>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

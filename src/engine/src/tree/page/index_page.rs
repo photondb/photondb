@@ -40,13 +40,8 @@ impl<'a> IndexPageRef<'a> {
         Self(unsafe { SortedPageRef::new(base) })
     }
 
-    /// Returns the entry that contains `target`.
-    pub fn find(&self, target: &[u8]) -> Option<IndexItem<'a>> {
-        self.0.seek_back(&target)
-    }
-
     /// Returns the two entries that enclose `target`.
-    pub fn find_range(&self, target: &[u8]) -> (Option<IndexItem<'a>>, Option<IndexItem<'a>>) {
+    pub fn find(&self, target: &[u8]) -> (Option<IndexItem<'a>>, Option<IndexItem<'a>>) {
         match self.0.search(&target) {
             Ok(i) => (self.0.get(i), i.checked_add(1).and_then(|i| self.0.get(i))),
             Err(i) => (i.checked_sub(1).and_then(|i| self.0.get(i)), self.0.get(i)),

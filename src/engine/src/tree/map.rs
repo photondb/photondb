@@ -122,8 +122,8 @@ impl Tree {
     }
 
     fn try_get<'a: 'g, 'g>(&'a self, key: Key<'_>, guard: &'g Guard) -> Result<Option<&'g [u8]>> {
-        let (node, _) = self.find_leaf(key.raw, guard)?;
-        self.lookup_value(key, node, guard)
+        let NodePath { node, .. } = self.find_leaf(key.raw, guard)?;
+        self.lookup_value(key, &node, guard)
     }
 
     fn insert<'g>(&self, key: Key<'_>, value: Value<'_>, guard: &'g Guard) -> Result<()> {
@@ -144,7 +144,7 @@ impl Tree {
     }
 
     fn try_insert<'g>(&self, key: &[u8], mut page: PagePtr, guard: &'g Guard) -> Result<()> {
-        let (mut node, _) = self.find_leaf(key, guard)?;
+        let NodePath { mut node, .. } = self.find_leaf(key, guard)?;
         loop {
             page.set_ver(node.page.ver());
             page.set_rank(node.page.rank() + 1);
@@ -153,7 +153,7 @@ impl Tree {
                 Ok(_) => {
                     if page.rank() as usize >= self.opts.data_delta_length {
                         node.page = page.into();
-                        let _ = self.consolidate_data_node(node, guard);
+                        let _ = self.consolidate_data_node(&node, guard);
                     }
                     return Ok(());
                 }
@@ -183,9 +183,8 @@ impl Tree {
 }
 
 impl Tree {
-    fn node<'a: 'g, 'g>(&'a self, id: u64, guard: &'g Guard) -> Option<Node<'g>> {
-        let addr = self.table.get(id).into();
-        self.page_view(addr, guard).map(|page| Node::new(id, page))
+    fn page_addr(&self, id: u64) -> PageAddr {
+        self.table.get(id).into()
     }
 
     fn page_view<'a: 'g, 'g>(&'a self, addr: PageAddr, _: &'g Guard) -> Option<PageView<'g>> {
@@ -272,32 +271,39 @@ impl Tree {
 }
 
 impl Tree {
-    fn find_leaf<'a: 'g, 'g>(
-        &'a self,
-        key: &[u8],
-        guard: &'g Guard,
-    ) -> Result<(Node<'g>, NodeRange<'g>)> {
-        let mut range = NodeRange::default();
-        let mut cursor = ROOT_INDEX;
+    fn find_leaf<'a: 'g, 'g>(&'a self, key: &[u8], guard: &'g Guard) -> Result<NodePath<'g>> {
+        let mut index = ROOT_INDEX;
+        let mut range = Range::default();
+        let mut right = None;
         let mut parent = None;
         loop {
-            let node = self.node(cursor.id, guard).expect("the node must be valid");
-            if node.page.ver() != cursor.ver {
-                self.reconcile_node(node, parent, guard)?;
+            let addr = self.page_addr(index.id);
+            let page = self.page_view(addr, guard).expect("the node must be valid");
+            let node = Node {
+                id: index.id,
+                page,
+                range,
+                right,
+            };
+            if node.page.ver() != index.ver {
+                let path = NodePath { node, parent };
+                self.reconcile_node(path, guard)?;
                 return Err(Error::Again);
             }
             if node.page.is_data() {
-                return Ok((node, range));
+                let path = NodePath { node, parent };
+                return Ok(path);
             }
-            let (child, right) = self.lookup_index_range(key, node, guard)?;
+            let (child, right_child) = self.lookup_index(key, &node, guard)?;
             let child = child.expect("the index must exists");
-            range = NodeRange::new(child.0, right.map(|r| r.0));
-            cursor = child.1;
+            index = child.1;
+            range = Range::new(child.0, right_child.map(|r| r.0));
+            right = right_child.map(|r| r.1);
             parent = Some(node);
         }
     }
 
-    fn walk_node<'a: 'g, 'g, F>(&'a self, node: Node<'g>, guard: &'g Guard, mut f: F) -> Result<()>
+    fn walk_node<'a: 'g, 'g, F>(&'a self, node: &Node<'g>, guard: &'g Guard, mut f: F) -> Result<()>
     where
         F: FnMut(PageRef<'g>) -> bool,
     {
@@ -317,7 +323,7 @@ impl Tree {
     fn lookup_value<'a: 'g, 'g>(
         &'a self,
         key: Key<'_>,
-        node: Node<'g>,
+        node: &Node<'g>,
         guard: &'g Guard,
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
@@ -336,35 +342,14 @@ impl Tree {
     fn lookup_index<'a: 'g, 'g>(
         &'a self,
         key: &[u8],
-        node: Node<'g>,
-        guard: &'g Guard,
-    ) -> Result<Option<Index>> {
-        let mut value = None;
-        self.walk_node(node, guard, |page| {
-            if let TypedPage::Index(page) = page.into() {
-                if let Some((_, v)) = page.find(key) {
-                    if v != NULL_INDEX {
-                        value = v.into();
-                        return true;
-                    }
-                }
-            }
-            false
-        })?;
-        Ok(value)
-    }
-
-    fn lookup_index_range<'a: 'g, 'g>(
-        &'a self,
-        key: &[u8],
-        node: Node<'g>,
+        node: &Node<'g>,
         guard: &'g Guard,
     ) -> Result<(Option<IndexItem<'g>>, Option<IndexItem<'g>>)> {
         let mut left_index = None;
         let mut right_index = None;
         self.walk_node(node, guard, |page| {
             if let TypedPage::Index(page) = page.into() {
-                let (left, right) = page.find_range(key);
+                let (left, right) = page.find(key);
                 if let Some(left) = left {
                     if left.1 != NULL_INDEX {
                         left_index = Some(left);
@@ -380,7 +365,7 @@ impl Tree {
 
     fn data_node_view<'a: 'g, 'g>(
         &'a self,
-        node: Node<'g>,
+        node: &Node<'g>,
         guard: &'g Guard,
     ) -> Result<DataNodeView<'g>> {
         let mut size = 0;
@@ -412,7 +397,7 @@ impl Tree {
 
     fn index_iter_view<'a: 'g, 'g>(
         &'a self,
-        node: Node<'g>,
+        node: &Node<'g>,
         guard: &'g Guard,
     ) -> Result<IndexNodeView<'g>> {
         let mut highest = None;
@@ -500,18 +485,13 @@ impl Tree {
         })
     }
 
-    fn reconcile_node<'a: 'g, 'g>(
-        &'a self,
-        node: Node<'g>,
-        parent: Option<Node<'g>>,
-        guard: &'g Guard,
-    ) -> Result<()> {
-        let page = self.load_page_with_view(node.id, node.page, guard)?;
+    fn reconcile_node<'a: 'g, 'g>(&'a self, path: NodePath<'a>, guard: &'g Guard) -> Result<()> {
+        let page = self.load_page_with_view(path.node.id, path.node.page, guard)?;
         if let TypedPage::Split(page) = page.into() {
-            if let Some(node) = parent {
-                self.reconcile_split_node(node, page, guard)?;
+            if let Some(mut node) = path.parent {
+                self.reconcile_split_node(&mut node, page, guard)?;
             } else {
-                self.reconcile_split_root(node, page, guard)?;
+                self.reconcile_split_root(&path.node, page, guard)?;
             }
         }
         Ok(())
@@ -519,12 +499,12 @@ impl Tree {
 
     fn reconcile_split_node<'a: 'g, 'g>(
         &'a self,
-        mut node: Node<'g>,
+        node: &mut Node<'g>,
         split: SplitPageRef<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
         let split_index = split.get();
-        let (left_index, right_index) = self.lookup_index_range(split_index.0, node, guard)?;
+        let (left_index, right_index) = self.lookup_index(split_index.0, node, guard)?;
         let mut left_index = left_index.expect("the left index must exists when split");
         left_index.1.ver = split.ver();
 
@@ -557,7 +537,7 @@ impl Tree {
 
     fn reconcile_split_root<'a: 'g, 'g>(
         &'a self,
-        node: Node<'g>,
+        node: &Node<'g>,
         split: SplitPageRef<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
@@ -585,7 +565,7 @@ impl Tree {
 
     fn consolidate_data_node<'a: 'g, 'g>(
         &'a self,
-        node: Node<'g>,
+        node: &Node<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
         let mut view = self.data_node_view(node, guard)?;
@@ -609,7 +589,7 @@ impl Tree {
 
     fn consolidate_index_node<'a: 'g, 'g>(
         &'a self,
-        node: Node<'g>,
+        node: &Node<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
         let mut view = self.index_iter_view(node, guard)?;
@@ -650,9 +630,9 @@ impl Iter {
         let cursor = self.cursor.take();
         if let Some(cursor) = cursor.as_ref() {
             self.guard.repin();
-            let (node, range) = self.tree.find_leaf(cursor, &self.guard)?;
-            self.cursor = range.end.map(|end| end.to_vec());
-            let view = self.tree.data_node_view(node, &self.guard)?;
+            let path = self.tree.find_leaf(cursor, &self.guard)?;
+            self.cursor = path.node.range.end.map(|end| end.to_vec());
+            let view = self.tree.data_node_view(&path.node, &self.guard)?;
             let iter = NodeIter(view.into_iter());
             Ok(Some(iter))
         } else {
