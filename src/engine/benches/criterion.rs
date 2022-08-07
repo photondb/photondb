@@ -1,8 +1,9 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use photondb_engine::tree::*;
 
-const N: usize = 1 << 20;
-const M: usize = 1 << 16;
+const N: usize = 10_000_000;
+const M: usize = 10;
+const STEP: usize = N / M;
 
 fn get(map: &Map, i: usize) {
     let buf = i.to_be_bytes();
@@ -23,19 +24,19 @@ fn delete(map: &Map, i: usize) {
 }
 
 fn bench_get(map: &Map) {
-    for i in (0..N).step_by(M) {
+    for i in (0..N).step_by(STEP) {
         get(map, i);
     }
 }
 
 fn bench_put(map: &Map) {
-    for i in (0..N).step_by(M) {
+    for i in (0..N).step_by(STEP) {
         put(map, i);
     }
 }
 
 fn bench_delete(map: &Map) {
-    for i in (0..N).step_by(M) {
+    for i in (0..N).step_by(STEP) {
         delete(map, i);
     }
 }
@@ -50,7 +51,7 @@ fn bench(c: &mut Criterion) {
     let mut num_gets = 0;
     c.bench_function("get", |b| {
         b.iter(|| {
-            num_gets += N / M;
+            num_gets += M;
             bench_get(&map);
         })
     });
@@ -58,7 +59,7 @@ fn bench(c: &mut Criterion) {
     let mut num_puts = 0;
     c.bench_function("put", |b| {
         b.iter(|| {
-            num_puts += N / M;
+            num_puts += M;
             bench_put(&map);
         })
     });
@@ -66,7 +67,7 @@ fn bench(c: &mut Criterion) {
     let mut num_deletes = 0;
     c.bench_function("delete", |b| {
         b.iter(|| {
-            num_deletes += N / M;
+            num_deletes += M;
             bench_delete(&map);
         })
     });

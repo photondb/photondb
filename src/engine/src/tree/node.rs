@@ -125,7 +125,7 @@ pub struct DataIter<'a, T>
 where
     T: ForwardIter<Item = DataItem<'a>>,
 {
-    iter: MergingIter<T>,
+    iter: MergingIter<OrderedIter<T>>,
     limit: Option<&'a [u8]>,
 }
 
@@ -133,7 +133,7 @@ impl<'a, T> DataIter<'a, T>
 where
     T: ForwardIter<Item = DataItem<'a>>,
 {
-    pub fn new(iter: MergingIter<T>, limit: Option<&'a [u8]>) -> Self {
+    pub fn new(iter: MergingIter<OrderedIter<T>>, limit: Option<&'a [u8]>) -> Self {
         Self { iter, limit }
     }
 }
@@ -164,21 +164,21 @@ where
     }
 }
 
-impl<'a, T> SeekableIter<Key<'_>> for DataIter<'a, T>
-where
-    for<'k> T: SeekableIter<Key<'k>, Item = DataItem<'a>>,
-{
-    fn seek(&mut self, target: &Key<'_>) {
-        self.iter.seek(target);
-    }
-}
-
 impl<'a, T> RewindableIter for DataIter<'a, T>
 where
     T: RewindableIter<Item = DataItem<'a>>,
 {
     fn rewind(&mut self) {
         self.iter.rewind();
+    }
+}
+
+impl<'a, T> SeekableIter<Key<'_>> for DataIter<'a, T>
+where
+    for<'k> T: SeekableIter<Key<'k>, Item = DataItem<'a>>,
+{
+    fn seek(&mut self, target: &Key<'_>) {
+        self.iter.seek(target);
     }
 }
 
@@ -206,7 +206,7 @@ pub struct IndexIter<'a, T>
 where
     T: ForwardIter<Item = IndexItem<'a>>,
 {
-    iter: MergingIter<T>,
+    iter: MergingIter<OrderedIter<T>>,
     limit: Option<&'a [u8]>,
     last_index: Index,
 }
@@ -215,7 +215,7 @@ impl<'a, T> IndexIter<'a, T>
 where
     T: ForwardIter<Item = IndexItem<'a>>,
 {
-    pub fn new(iter: MergingIter<T>, limit: Option<&'a [u8]>) -> Self {
+    pub fn new(iter: MergingIter<OrderedIter<T>>, limit: Option<&'a [u8]>) -> Self {
         Self {
             iter,
             limit,
@@ -256,20 +256,20 @@ where
     }
 }
 
-impl<'a, T> SeekableIter<[u8]> for IndexIter<'a, T>
-where
-    for<'k> T: SeekableIter<[u8], Item = IndexItem<'a>>,
-{
-    fn seek(&mut self, target: &[u8]) {
-        self.iter.seek(target);
-    }
-}
-
 impl<'a, T> RewindableIter for IndexIter<'a, T>
 where
     T: RewindableIter<Item = IndexItem<'a>>,
 {
     fn rewind(&mut self) {
         self.iter.rewind();
+    }
+}
+
+impl<'a, T> SeekableIter<[u8]> for IndexIter<'a, T>
+where
+    for<'k> T: SeekableIter<[u8], Item = IndexItem<'a>>,
+{
+    fn seek(&mut self, target: &[u8]) {
+        self.iter.seek(target);
     }
 }

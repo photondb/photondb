@@ -116,31 +116,37 @@ where
 impl<'a> ForwardIter for DataPageIter<'a> {
     type Item = DataItem<'a>;
 
+    #[inline]
     fn last(&self) -> Option<&Self::Item> {
         self.0.last()
     }
 
+    #[inline]
     fn next(&mut self) -> Option<&Self::Item> {
         self.0.next()
     }
 
+    #[inline]
     fn skip(&mut self, n: usize) {
         self.0.skip(n)
     }
 
+    #[inline]
     fn skip_all(&mut self) {
         self.0.skip_all()
     }
 }
 
-impl<'a> SeekableIter<Key<'_>> for DataPageIter<'a> {
-    fn seek(&mut self, target: &Key<'_>) {
-        self.0.seek(target);
+impl<'a> RewindableIter for DataPageIter<'a> {
+    #[inline]
+    fn rewind(&mut self) {
+        self.0.rewind();
     }
 }
 
-impl<'a> RewindableIter for DataPageIter<'a> {
-    fn rewind(&mut self) {
-        self.0.rewind();
+impl<'a> SeekableIter<Key<'_>> for DataPageIter<'a> {
+    #[inline]
+    fn seek(&mut self, target: &Key<'_>) {
+        self.0.seek(target);
     }
 }
