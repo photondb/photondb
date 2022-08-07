@@ -159,21 +159,21 @@ where
     }
 }
 
-impl<'a, T> RewindableIter for DataIter<'a, T>
-where
-    T: RewindableIter<Item = DataItem<'a>>,
-{
-    fn rewind(&mut self) {
-        self.iter.rewind();
-    }
-}
-
 impl<'a, T> SeekableIter<Key<'_>> for DataIter<'a, T>
 where
     for<'k> T: SeekableIter<Key<'k>, Item = DataItem<'a>>,
 {
     fn seek(&mut self, target: &Key<'_>) {
         self.iter.seek(target);
+    }
+}
+
+impl<'a, T> RewindableIter for DataIter<'a, T>
+where
+    T: RewindableIter<Item = DataItem<'a>>,
+{
+    fn rewind(&mut self) {
+        self.iter.rewind();
     }
 }
 
@@ -187,24 +187,30 @@ impl<'a> IndexNodeView<'a> {
         Self { highest, children }
     }
 
-    pub fn iter(&mut self) -> IndexNodeIter<'a, '_> {
+    pub fn iter(&mut self) -> IndexIter<'a, &mut IndexPageIter<'a>> {
         let mut merger = MergingIterBuilder::with_len(self.children.len());
         for iter in self.children.iter_mut() {
             merger.add(iter);
         }
         let iter = merger.build();
-        IndexNodeIter::new(iter, self.highest)
+        IndexIter::new(iter, self.highest)
     }
 }
 
-pub struct IndexNodeIter<'a, 'v> {
-    iter: MergingIter<&'v mut IndexPageIter<'a>>,
+pub struct IndexIter<'a, T>
+where
+    T: ForwardIter<Item = IndexItem<'a>>,
+{
+    iter: MergingIter<T>,
     highest: Option<&'a [u8]>,
     last_index: Index,
 }
 
-impl<'a, 'v> IndexNodeIter<'a, 'v> {
-    pub fn new(iter: MergingIter<&'v mut IndexPageIter<'a>>, highest: Option<&'a [u8]>) -> Self {
+impl<'a, T> IndexIter<'a, T>
+where
+    T: ForwardIter<Item = IndexItem<'a>>,
+{
+    pub fn new(iter: MergingIter<T>, highest: Option<&'a [u8]>) -> Self {
         Self {
             iter,
             highest,
@@ -213,7 +219,10 @@ impl<'a, 'v> IndexNodeIter<'a, 'v> {
     }
 }
 
-impl<'a, 'v> ForwardIter for IndexNodeIter<'a, 'v> {
+impl<'a, T> ForwardIter for IndexIter<'a, T>
+where
+    T: ForwardIter<Item = IndexItem<'a>>,
+{
     type Item = IndexItem<'a>;
 
     fn last(&self) -> Option<&Self::Item> {
@@ -242,14 +251,20 @@ impl<'a, 'v> ForwardIter for IndexNodeIter<'a, 'v> {
     }
 }
 
-impl<'a, 'v> RewindableIter for IndexNodeIter<'a, 'v> {
-    fn rewind(&mut self) {
-        self.iter.rewind();
+impl<'a, T> SeekableIter<[u8]> for IndexIter<'a, T>
+where
+    for<'k> T: SeekableIter<[u8], Item = IndexItem<'a>>,
+{
+    fn seek(&mut self, target: &[u8]) {
+        self.iter.seek(target);
     }
 }
 
-impl<'a, 'v> SeekableIter<[u8]> for IndexNodeIter<'a, 'v> {
-    fn seek(&mut self, target: &[u8]) {
-        self.iter.seek(target);
+impl<'a, T> RewindableIter for IndexIter<'a, T>
+where
+    T: RewindableIter<Item = IndexItem<'a>>,
+{
+    fn rewind(&mut self) {
+        self.iter.rewind();
     }
 }

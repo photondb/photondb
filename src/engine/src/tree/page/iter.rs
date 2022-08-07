@@ -341,6 +341,7 @@ where
         std::mem::swap(&mut self.children, &mut children);
     }
 
+    #[cold]
     fn init_heap(&mut self) {
         let mut children = std::mem::take(&mut self.children);
         for iter in children.iter_mut() {
