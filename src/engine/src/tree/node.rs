@@ -7,34 +7,8 @@ pub const ROOT_INDEX: Index = Index::with_id(PageTable::MIN);
 pub struct Node<'a> {
     pub id: u64,
     pub page: PageView<'a>,
-    pub range: Range<'a>,
-    pub right: Option<Index>,
-}
-
-#[derive(Clone, Debug)]
-pub struct Range<'a> {
     pub start: &'a [u8],
-    pub end: Option<&'a [u8]>,
-}
-
-impl Default for Range<'_> {
-    fn default() -> Self {
-        Self {
-            start: &[],
-            end: None,
-        }
-    }
-}
-
-impl<'a> Range<'a> {
-    pub fn new(start: &'a [u8], end: Option<&'a [u8]>) -> Self {
-        Self { start, end }
-    }
-}
-
-pub struct NodePath<'a> {
-    pub node: Node<'a>,
-    pub parent: Option<Node<'a>>,
+    pub right: Option<IndexItem<'a>>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -111,15 +85,15 @@ where
 
 pub struct DataNodeView<'a> {
     next: PageAddr,
-    highest: Option<&'a [u8]>,
+    limit: Option<&'a [u8]>,
     children: Vec<DataPageIter<'a>>,
 }
 
 impl<'a> DataNodeView<'a> {
-    pub fn new(next: PageAddr, highest: Option<&'a [u8]>, children: Vec<DataPageIter<'a>>) -> Self {
+    pub fn new(next: PageAddr, limit: Option<&'a [u8]>, children: Vec<DataPageIter<'a>>) -> Self {
         Self {
             next,
-            highest,
+            limit,
             children,
         }
     }
@@ -134,7 +108,7 @@ impl<'a> DataNodeView<'a> {
             merger.add(child);
         }
         let iter = merger.build();
-        DataIter::new(iter, self.highest)
+        DataIter::new(iter, self.limit)
     }
 
     pub fn into_iter(self) -> DataIter<'a, DataPageIter<'a>> {
@@ -143,7 +117,7 @@ impl<'a> DataNodeView<'a> {
             merger.add(child);
         }
         let iter = merger.build();
-        DataIter::new(iter, self.highest)
+        DataIter::new(iter, self.limit)
     }
 }
 
@@ -152,15 +126,15 @@ where
     T: ForwardIter<Item = DataItem<'a>>,
 {
     iter: MergingIter<T>,
-    highest: Option<&'a [u8]>,
+    limit: Option<&'a [u8]>,
 }
 
 impl<'a, T> DataIter<'a, T>
 where
     T: ForwardIter<Item = DataItem<'a>>,
 {
-    pub fn new(iter: MergingIter<T>, highest: Option<&'a [u8]>) -> Self {
-        Self { iter, highest }
+    pub fn new(iter: MergingIter<T>, limit: Option<&'a [u8]>) -> Self {
+        Self { iter, limit }
     }
 }
 
@@ -176,8 +150,8 @@ where
 
     fn next(&mut self) -> Option<&Self::Item> {
         if let Some((key, _)) = self.iter.next() {
-            if let Some(highest) = self.highest {
-                if key.raw >= highest {
+            if let Some(limit) = self.limit {
+                if key.raw >= limit {
                     self.iter.skip_all();
                 }
             }
@@ -209,13 +183,13 @@ where
 }
 
 pub struct IndexNodeView<'a> {
-    pub highest: Option<&'a [u8]>,
+    pub limit: Option<&'a [u8]>,
     pub children: Vec<IndexPageIter<'a>>,
 }
 
 impl<'a> IndexNodeView<'a> {
-    pub fn new(highest: Option<&'a [u8]>, children: Vec<IndexPageIter<'a>>) -> Self {
-        Self { highest, children }
+    pub fn new(limit: Option<&'a [u8]>, children: Vec<IndexPageIter<'a>>) -> Self {
+        Self { limit, children }
     }
 
     pub fn iter(&mut self) -> IndexIter<'a, &mut IndexPageIter<'a>> {
@@ -224,7 +198,7 @@ impl<'a> IndexNodeView<'a> {
             merger.add(iter);
         }
         let iter = merger.build();
-        IndexIter::new(iter, self.highest)
+        IndexIter::new(iter, self.limit)
     }
 }
 
@@ -233,7 +207,7 @@ where
     T: ForwardIter<Item = IndexItem<'a>>,
 {
     iter: MergingIter<T>,
-    highest: Option<&'a [u8]>,
+    limit: Option<&'a [u8]>,
     last_index: Index,
 }
 
@@ -241,10 +215,10 @@ impl<'a, T> IndexIter<'a, T>
 where
     T: ForwardIter<Item = IndexItem<'a>>,
 {
-    pub fn new(iter: MergingIter<T>, highest: Option<&'a [u8]>) -> Self {
+    pub fn new(iter: MergingIter<T>, limit: Option<&'a [u8]>) -> Self {
         Self {
             iter,
-            highest,
+            limit,
             last_index: NULL_INDEX,
         }
     }
@@ -262,8 +236,8 @@ where
 
     fn next(&mut self) -> Option<&Self::Item> {
         while let Some(&(key, index)) = self.iter.next() {
-            if let Some(highest) = self.highest {
-                if key >= highest {
+            if let Some(limit) = self.limit {
+                if key >= limit {
                     self.iter.skip_all();
                     break;
                 }

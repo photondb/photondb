@@ -122,7 +122,7 @@ impl Tree {
     }
 
     fn try_get<'a: 'g, 'g>(&'a self, key: Key<'_>, guard: &'g Guard) -> Result<Option<&'g [u8]>> {
-        let NodePath { node, .. } = self.find_leaf(key.raw, guard)?;
+        let (node, _) = self.find_leaf(key.raw, guard)?;
         self.lookup_value(key, &node, guard)
     }
 
@@ -144,7 +144,7 @@ impl Tree {
     }
 
     fn try_insert<'g>(&self, key: &[u8], mut page: PagePtr, guard: &'g Guard) -> Result<()> {
-        let NodePath { mut node, .. } = self.find_leaf(key, guard)?;
+        let (mut node, _) = self.find_leaf(key, guard)?;
         loop {
             page.set_ver(node.page.ver());
             page.set_rank(node.page.rank() + 1);
@@ -271,9 +271,13 @@ impl Tree {
 }
 
 impl Tree {
-    fn find_leaf<'a: 'g, 'g>(&'a self, key: &[u8], guard: &'g Guard) -> Result<NodePath<'g>> {
+    fn find_leaf<'a: 'g, 'g>(
+        &'a self,
+        key: &[u8],
+        guard: &'g Guard,
+    ) -> Result<(Node<'g>, Option<Node<'g>>)> {
         let mut index = ROOT_INDEX;
-        let mut range = Range::default();
+        let mut start = [].as_slice();
         let mut right = None;
         let mut parent = None;
         loop {
@@ -282,23 +286,21 @@ impl Tree {
             let node = Node {
                 id: index.id,
                 page,
-                range,
+                start,
                 right,
             };
             if node.page.ver() != index.ver {
-                let path = NodePath { node, parent };
-                self.reconcile_node(path, guard)?;
+                self.reconcile_node(node, parent, guard)?;
                 return Err(Error::Again);
             }
             if node.page.is_data() {
-                let path = NodePath { node, parent };
-                return Ok(path);
+                return Ok((node, parent));
             }
             let (child, right_child) = self.lookup_index(key, &node, guard)?;
             let child = child.expect("the index must exists");
             index = child.1;
-            range = Range::new(child.0, right_child.map(|r| r.0));
-            right = right_child.map(|r| r.1);
+            start = child.0;
+            right = right_child;
             parent = Some(node);
         }
     }
@@ -485,13 +487,19 @@ impl Tree {
         })
     }
 
-    fn reconcile_node<'a: 'g, 'g>(&'a self, path: NodePath<'a>, guard: &'g Guard) -> Result<()> {
-        let page = self.load_page_with_view(path.node.id, path.node.page, guard)?;
+    fn reconcile_node<'a: 'g, 'g>(
+        &'a self,
+        node: Node<'a>,
+        parent: Option<Node<'a>>,
+        guard: &'g Guard,
+    ) -> Result<()> {
+        let page = self.load_page_with_view(node.id, node.page, guard)?;
         if let TypedPage::Split(page) = page.into() {
-            if let Some(mut node) = path.parent {
-                self.reconcile_split_node(&mut node, page, guard)?;
+            let split_index = page.get();
+            if let Some(mut parent) = parent {
+                self.reconcile_split_node(&node, &mut parent, split_index, guard)?;
             } else {
-                self.reconcile_split_root(&path.node, page, guard)?;
+                self.reconcile_split_root(&node, split_index, guard)?;
             }
         }
         Ok(())
@@ -499,37 +507,32 @@ impl Tree {
 
     fn reconcile_split_node<'a: 'g, 'g>(
         &'a self,
-        node: &mut Node<'g>,
-        split: SplitPageRef<'g>,
+        node: &Node<'g>,
+        parent: &mut Node<'g>,
+        split_index: IndexItem<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
-        let split_index = split.get();
-        let (left_index, right_index) = self.lookup_index(split_index.0, node, guard)?;
-        let mut left_index = left_index.expect("the left index must exists when split");
-        left_index.1.ver = split.ver();
-
-        let mut index_page = if let Some(right_index) = right_index {
+        let left_index = (node.start, Index::new(node.id, node.page.ver()));
+        let mut index_page = if let Some(right_index) = node.right {
             assert!(right_index.0 > split_index.0);
             let delta_data = [left_index, split_index, (right_index.0, NULL_INDEX)];
-            trace!("reconcile split node {} with {:?}", node.id, delta_data);
             let mut delta_iter = SliceIter::from(&delta_data);
             IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
         } else {
             let delta_data = [left_index, split_index];
-            trace!("reconcile split node {} with {:?}", node.id, delta_data);
             let mut delta_iter = SliceIter::from(&delta_data);
             IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
         };
 
-        index_page.set_ver(node.page.ver());
-        index_page.set_rank(node.page.rank() + 1);
-        index_page.set_next(node.page.as_addr().into());
-        let page = self.update_node(node.id, index_page.next(), index_page, guard)?;
-        trace!("reconcile split node {} {:?}", node.id, page);
+        index_page.set_ver(parent.page.ver());
+        index_page.set_rank(parent.page.rank() + 1);
+        index_page.set_next(parent.page.as_addr().into());
+        let page = self.update_node(parent.id, index_page.next(), index_page, guard)?;
+        trace!("reconcile split node {} parent {}", node.id, parent.id);
 
         if page.rank() as usize >= self.opts.index_delta_length {
-            node.page = page.into();
-            self.consolidate_index_node(node, guard)
+            parent.page = page.into();
+            self.consolidate_index_node(parent, guard)
         } else {
             Ok(page)
         }
@@ -538,7 +541,7 @@ impl Tree {
     fn reconcile_split_root<'a: 'g, 'g>(
         &'a self,
         node: &Node<'g>,
-        split: SplitPageRef<'g>,
+        split_index: IndexItem<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
         assert_eq!(node.id, ROOT_INDEX.id);
@@ -547,7 +550,6 @@ impl Tree {
         // Builds a new root with the original root in the left and the split node in the right.
         let left_id = self.install_node(root_addr)?;
         let left_index = Index::new(left_id, node.page.ver());
-        let split_index = split.get();
         let root_data = [([].as_slice(), left_index), split_index];
         let mut root_iter = SliceIter::from(&root_data);
         let root_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
@@ -630,9 +632,9 @@ impl Iter {
         let cursor = self.cursor.take();
         if let Some(cursor) = cursor.as_ref() {
             self.guard.repin();
-            let path = self.tree.find_leaf(cursor, &self.guard)?;
-            self.cursor = path.node.range.end.map(|end| end.to_vec());
-            let view = self.tree.data_node_view(&path.node, &self.guard)?;
+            let (node, _) = self.tree.find_leaf(cursor, &self.guard)?;
+            self.cursor = node.right.map(|r| r.0.to_vec());
+            let view = self.tree.data_node_view(&node, &self.guard)?;
             let iter = NodeIter(view.into_iter());
             Ok(Some(iter))
         } else {
