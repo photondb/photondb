@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use bumpalo::Bump;
 use crossbeam_epoch::{pin, Guard};
 use log::trace;
 
@@ -367,61 +368,90 @@ impl Tree {
         Ok((left_index, right_index))
     }
 
-    fn data_node_view<'a: 'g, 'g>(
+    fn data_node_iter<'a: 'g, 'b, 'g>(
         &'a self,
         node: &Node<'g>,
+        bump: &'b Bump,
         guard: &'g Guard,
-    ) -> Result<DataNodeView<'g>> {
-        let mut size = 0;
-        let mut next = 0;
-        let mut highest = None;
-        let mut children = Vec::with_capacity(node.page.rank() as usize + 1);
+    ) -> Result<DataNodeIter<'g, 'b>> {
+        let mut limit = None;
+        let mut merger = MergingIterBuilder::with_len(node.page.rank() as usize + 1);
         self.walk_node(node, guard, |page| {
             match TypedPage::from(page) {
                 TypedPage::Data(page) => {
-                    if size < page.size() && highest.is_none() && children.len() >= 2 {
-                        return true;
-                    }
-                    size += page.size();
-                    next = page.next();
-                    children.push(page.into());
+                    merger.add(bump.alloc(page.into()));
                 }
                 TypedPage::Split(page) => {
-                    if highest == None {
+                    if limit == None {
                         let index = page.get();
-                        highest = Some(index.0);
+                        limit = Some(index.0);
                     }
                 }
                 _ => unreachable!(),
             }
             false
         })?;
-        Ok(DataNodeView::new(next.into(), highest, children))
+        Ok(DataNodeIter::new(merger.build(), limit))
     }
 
-    fn index_iter_view<'a: 'g, 'g>(
+    fn delta_data_iter<'a: 'g, 'b, 'g>(
         &'a self,
         node: &Node<'g>,
+        bump: &'b Bump,
         guard: &'g Guard,
-    ) -> Result<IndexNodeView<'g>> {
-        let mut highest = None;
-        let mut children = Vec::with_capacity(node.page.rank() as usize + 1);
+    ) -> Result<(DataNodeIter<'g, 'b>, PageAddr)> {
+        let mut next = 0;
+        let mut size = 0;
+        let mut limit = None;
+        let mut merger = MergingIterBuilder::with_len(node.page.rank() as usize + 1);
+        self.walk_node(node, guard, |page| {
+            match TypedPage::from(page) {
+                TypedPage::Data(page) => {
+                    if size < page.size() && limit.is_none() && merger.len() >= 2 {
+                        return true;
+                    }
+                    next = page.next();
+                    size += page.size();
+                    merger.add(bump.alloc(page.into()));
+                }
+                TypedPage::Split(page) => {
+                    if limit == None {
+                        let index = page.get();
+                        limit = Some(index.0);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            false
+        })?;
+        Ok((DataNodeIter::new(merger.build(), limit), next.into()))
+    }
+
+    fn index_node_iter<'a: 'g, 'b, 'g>(
+        &'a self,
+        node: &Node<'g>,
+        bump: &'b Bump,
+        guard: &'g Guard,
+    ) -> Result<IndexNodeIter<'g, 'b>> {
+        let mut limit = None;
+        let mut merger = MergingIterBuilder::with_len(node.page.rank() as usize + 1);
         self.walk_node(node, guard, |page| {
             match TypedPage::from(page) {
                 TypedPage::Index(page) => {
-                    children.push(page.into());
+                    merger.add(bump.alloc(page.into()));
                 }
                 TypedPage::Split(page) => {
-                    if highest == None {
+                    if limit == None {
                         let index = page.get();
-                        highest = Some(index.0);
+                        limit = Some(index.0);
                     }
                 }
                 _ => unreachable!(),
             }
             false
         })?;
-        Ok(IndexNodeView::new(highest, children))
+        let iter = merger.build();
+        Ok(IndexNodeIter::new(iter, limit))
     }
 
     fn split_data_node<'a: 'g, 'g>(
@@ -572,11 +602,11 @@ impl Tree {
         node: &Node<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
-        let mut view = self.data_node_view(node, guard)?;
-        let mut iter = view.iter();
+        let mut bump = Bump::new();
+        let (mut iter, next) = self.delta_data_iter(node, &mut bump, guard)?;
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.page.ver());
-        page.set_next(view.next().into());
+        page.set_next(next.into());
 
         let addr = node.page.as_addr();
         let page = self.update_node(node.id, addr, page, guard)?;
@@ -596,8 +626,8 @@ impl Tree {
         node: &Node<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
-        let mut view = self.index_iter_view(node, guard)?;
-        let mut iter = view.iter();
+        let mut bump = Bump::new();
+        let mut iter = self.index_node_iter(node, &mut bump, guard)?;
         let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.page.ver());
 
@@ -617,6 +647,7 @@ impl Tree {
 
 pub struct Iter {
     tree: Arc<Tree>,
+    bump: Bump,
     guard: Guard,
     cursor: Option<Vec<u8>>,
 }
@@ -625,6 +656,7 @@ impl Iter {
     fn new(tree: Arc<Tree>) -> Self {
         Self {
             tree,
+            bump: Bump::new(),
             guard: pin(),
             cursor: Some(Vec::new()),
         }
@@ -643,21 +675,20 @@ impl Iter {
     }
 
     fn next_node(&mut self) -> Result<Option<NodeIter<'_>>> {
-        let cursor = self.cursor.take();
-        if let Some(cursor) = cursor.as_ref() {
+        if let Some(cursor) = self.cursor.take() {
+            self.bump.reset();
             self.guard.repin();
-            let (node, _) = self.tree.find_leaf(cursor, &self.guard)?;
+            let (node, _) = self.tree.find_leaf(&cursor, &self.guard)?;
             self.cursor = node.right.map(|r| r.0.to_vec());
-            let view = self.tree.data_node_view(&node, &self.guard)?;
-            let iter = NodeIter(view.into_iter());
-            Ok(Some(iter))
+            let iter = self.tree.data_node_iter(&node, &self.bump, &self.guard)?;
+            Ok(Some(NodeIter(iter)))
         } else {
             Ok(None)
         }
     }
 }
 
-struct NodeIter<'a>(DataIter<'a, DataPageIter<'a>>);
+struct NodeIter<'a>(DataNodeIter<'a, 'a>);
 
 impl NodeIter<'_> {
     fn next(&mut self) -> Option<(&[u8], &[u8])> {

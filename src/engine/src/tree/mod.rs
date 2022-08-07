@@ -20,10 +20,10 @@ mod tests {
 
     const OPTIONS: Options = Options {
         cache_size: usize::MAX,
-        data_node_size: 256,
-        data_delta_length: 4,
-        index_node_size: 128,
-        index_delta_length: 4,
+        data_node_size: 64,
+        data_delta_length: 2,
+        index_node_size: 32,
+        index_delta_length: 2,
     };
 
     static SEQUENCE: RelaxedCounter = RelaxedCounter::new(0);
@@ -78,8 +78,10 @@ mod tests {
         delete(&map, 0);
     }
 
+    #[cfg(miri)]
+    const N: usize = 1 << 4;
+    #[cfg(not(miri))]
     const N: usize = 1 << 10;
-    const M: usize = 1 << 4;
 
     #[test]
     fn crud_repeated() {
@@ -91,7 +93,7 @@ mod tests {
             for i in 0..N {
                 get(&map, i, true);
             }
-            for i in (0..N).step_by(M) {
+            for i in (0..N).step_by(1) {
                 delete(&map, i);
             }
             for i in (0..N).rev() {
@@ -100,7 +102,7 @@ mod tests {
             for i in (0..N).rev() {
                 get(&map, i, true);
             }
-            for i in (0..N).rev().step_by(M) {
+            for i in (0..N).rev().step_by(1) {
                 delete(&map, i);
             }
         }

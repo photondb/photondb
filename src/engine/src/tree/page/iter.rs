@@ -482,6 +482,10 @@ where
         Self { children }
     }
 
+    pub fn len(&self) -> usize {
+        self.children.len()
+    }
+
     pub fn add(&mut self, iter: I) {
         let rank = self.children.len();
         let iter = OrderedIter::new(iter, rank);

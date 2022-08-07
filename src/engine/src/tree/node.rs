@@ -83,49 +83,11 @@ where
     }
 }
 
-pub struct DataNodeView<'a> {
-    next: PageAddr,
-    limit: Option<&'a [u8]>,
-    children: Vec<DataPageIter<'a>>,
-}
-
-impl<'a> DataNodeView<'a> {
-    pub fn new(next: PageAddr, limit: Option<&'a [u8]>, children: Vec<DataPageIter<'a>>) -> Self {
-        Self {
-            next,
-            limit,
-            children,
-        }
-    }
-
-    pub const fn next(&self) -> PageAddr {
-        self.next
-    }
-
-    pub fn iter(&mut self) -> DataIter<'a, &mut DataPageIter<'a>> {
-        let mut merger = MergingIterBuilder::with_len(self.children.len());
-        for child in self.children.iter_mut() {
-            merger.add(child);
-        }
-        let iter = merger.build();
-        DataIter::new(iter, self.limit)
-    }
-
-    pub fn into_iter(self) -> DataIter<'a, DataPageIter<'a>> {
-        let mut merger = MergingIterBuilder::with_len(self.children.len());
-        for child in self.children {
-            merger.add(child);
-        }
-        let iter = merger.build();
-        DataIter::new(iter, self.limit)
-    }
-}
-
 pub struct DataIter<'a, T>
 where
     T: ForwardIter<Item = DataItem<'a>>,
 {
-    iter: MergingIter<OrderedIter<T>>,
+    iter: T,
     limit: Option<&'a [u8]>,
 }
 
@@ -133,7 +95,7 @@ impl<'a, T> DataIter<'a, T>
 where
     T: ForwardIter<Item = DataItem<'a>>,
 {
-    pub fn new(iter: MergingIter<OrderedIter<T>>, limit: Option<&'a [u8]>) -> Self {
+    pub fn new(iter: T, limit: Option<&'a [u8]>) -> Self {
         Self { iter, limit }
     }
 }
@@ -182,31 +144,11 @@ where
     }
 }
 
-pub struct IndexNodeView<'a> {
-    pub limit: Option<&'a [u8]>,
-    pub children: Vec<IndexPageIter<'a>>,
-}
-
-impl<'a> IndexNodeView<'a> {
-    pub fn new(limit: Option<&'a [u8]>, children: Vec<IndexPageIter<'a>>) -> Self {
-        Self { limit, children }
-    }
-
-    pub fn iter(&mut self) -> IndexIter<'a, &mut IndexPageIter<'a>> {
-        let mut merger = MergingIterBuilder::with_len(self.children.len());
-        for iter in self.children.iter_mut() {
-            merger.add(iter);
-        }
-        let iter = merger.build();
-        IndexIter::new(iter, self.limit)
-    }
-}
-
 pub struct IndexIter<'a, T>
 where
     T: ForwardIter<Item = IndexItem<'a>>,
 {
-    iter: MergingIter<OrderedIter<T>>,
+    iter: T,
     limit: Option<&'a [u8]>,
     last_index: Index,
 }
@@ -215,7 +157,7 @@ impl<'a, T> IndexIter<'a, T>
 where
     T: ForwardIter<Item = IndexItem<'a>>,
 {
-    pub fn new(iter: MergingIter<OrderedIter<T>>, limit: Option<&'a [u8]>) -> Self {
+    pub fn new(iter: T, limit: Option<&'a [u8]>) -> Self {
         Self {
             iter,
             limit,
@@ -273,3 +215,6 @@ where
         self.iter.seek(target);
     }
 }
+
+pub type DataNodeIter<'a, 'b> = DataIter<'a, MergingIter<OrderedIter<&'b mut DataPageIter<'a>>>>;
+pub type IndexNodeIter<'a, 'b> = IndexIter<'a, MergingIter<OrderedIter<&'b mut IndexPageIter<'a>>>>;
