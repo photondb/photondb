@@ -18,6 +18,7 @@ unsafe impl SizedAlloc for Sysalloc {
 
 unsafe impl GlobalAlloc for Sysalloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        assert_eq!(layout.align(), size_of::<usize>());
         let size = size_of::<usize>() + layout.size();
         let layout = Layout::from_size_align_unchecked(size, layout.align());
         let ptr = alloc::alloc(layout) as *mut usize;
@@ -26,8 +27,9 @@ unsafe impl GlobalAlloc for Sysalloc {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        assert_eq!(layout.align(), size_of::<usize>());
         let ptr = (ptr as *mut usize).sub(1);
-        let size = ptr.read() + layout.size();
+        let size = ptr.read();
         let layout = Layout::from_size_align_unchecked(size, layout.align());
         alloc::dealloc(ptr as *mut u8, layout);
     }
