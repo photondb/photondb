@@ -15,11 +15,8 @@ mod pagetable;
 
 #[cfg(test)]
 mod tests {
-    use super::{stats::Counter, *};
-
-    fn init() {
-        let _ = env_logger::builder().try_init();
-    }
+    use super::*;
+    use crate::util::RelaxedCounter;
 
     const OPTIONS: Options = Options {
         cache_size: usize::MAX,
@@ -29,7 +26,11 @@ mod tests {
         index_delta_length: 4,
     };
 
-    static SEQUENCE: Counter = Counter::new(0);
+    static SEQUENCE: RelaxedCounter = RelaxedCounter::new(0);
+
+    fn init() {
+        let _ = env_logger::builder().try_init();
+    }
 
     fn open(opts: Options) -> Map {
         init();
