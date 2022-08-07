@@ -126,14 +126,14 @@ impl<'a> ForwardIter for IndexPageIter<'a> {
     }
 }
 
-impl<'a> RewindableIter for IndexPageIter<'a> {
-    fn rewind(&mut self) {
-        self.0.rewind();
-    }
-}
-
 impl<'a> SeekableIter<[u8]> for IndexPageIter<'a> {
     fn seek(&mut self, target: &[u8]) {
         self.0.seek(target);
+    }
+}
+
+impl<'a> RewindableIter for IndexPageIter<'a> {
+    fn rewind(&mut self) {
+        self.0.rewind();
     }
 }

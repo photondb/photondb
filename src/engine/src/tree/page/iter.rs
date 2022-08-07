@@ -53,10 +53,10 @@ pub trait SeekableIter<T: ?Sized>: ForwardIter {
     fn seek(&mut self, target: &T);
 }
 
-impl<T, I> SeekableIter<T> for &mut I
+impl<I, T> SeekableIter<T> for &mut I
 where
-    T: ?Sized,
     I: SeekableIter<T>,
+    T: ?Sized,
 {
     fn seek(&mut self, target: &T) {
         (**self).seek(target)
@@ -384,11 +384,11 @@ where
     }
 }
 
-impl<T, I> SeekableIter<T> for MergingIter<I>
+impl<I, T> SeekableIter<T> for MergingIter<I>
 where
-    T: ?Sized,
     I: SeekableIter<T>,
     I::Item: Compare<I::Item>,
+    T: ?Sized,
 {
     fn seek(&mut self, target: &T) {
         self.reset(|iter| iter.seek(target));
