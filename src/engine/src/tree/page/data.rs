@@ -4,7 +4,7 @@ use std::{
     mem::size_of,
 };
 
-use super::{BufReader, BufWriter};
+use crate::util::{BufReader, BufWriter};
 
 pub trait Compare<T: ?Sized> {
     fn compare(&self, other: &T) -> Ordering;

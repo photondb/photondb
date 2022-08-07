@@ -114,15 +114,6 @@ impl<'a> DataNodeView<'a> {
         let iter = merger.build();
         DataIter::new(iter, self.highest)
     }
-
-    pub fn into_iter(self) -> DataIter<'a, DataPageIter<'a>> {
-        let mut merger = MergingIterBuilder::with_len(self.children.len());
-        for child in self.children {
-            merger.add(child);
-        }
-        let iter = merger.build();
-        DataIter::new(iter, self.highest)
-    }
 }
 
 pub struct DataIter<'a, T>

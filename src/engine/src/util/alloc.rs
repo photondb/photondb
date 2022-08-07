@@ -1,0 +1,53 @@
+use std::{
+    alloc::{self, GlobalAlloc, Layout},
+    mem::size_of,
+};
+
+pub unsafe trait SizedAlloc: GlobalAlloc {
+    unsafe fn alloc_size(&self, ptr: *mut u8) -> usize;
+}
+
+#[derive(Copy, Clone)]
+pub struct Sysalloc;
+
+unsafe impl SizedAlloc for Sysalloc {
+    unsafe fn alloc_size(&self, ptr: *mut u8) -> usize {
+        (ptr as *mut usize).sub(1).read()
+    }
+}
+
+unsafe impl GlobalAlloc for Sysalloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let size = size_of::<usize>() + layout.size();
+        let layout = Layout::from_size_align_unchecked(size, layout.align());
+        let ptr = alloc::alloc(layout) as *mut usize;
+        ptr.write(size);
+        ptr.add(1) as *mut u8
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        let ptr = (ptr as *mut usize).sub(1);
+        let size = ptr.read() + layout.size();
+        let layout = Layout::from_size_align_unchecked(size, layout.align());
+        alloc::dealloc(ptr as *mut u8, layout);
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct Jemalloc;
+
+unsafe impl SizedAlloc for Jemalloc {
+    unsafe fn alloc_size(&self, ptr: *mut u8) -> usize {
+        jemallocator::usable_size(ptr)
+    }
+}
+
+unsafe impl GlobalAlloc for Jemalloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        jemallocator::Jemalloc.alloc(layout)
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        jemallocator::Jemalloc.dealloc(ptr, layout)
+    }
+}

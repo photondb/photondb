@@ -131,7 +131,7 @@ impl Tree {
                 Err(Error::Again) => continue,
                 Err(err) => {
                     unsafe {
-                        self.cache.dealloc(page);
+                        self.cache.dealloc_page(page);
                     }
                     return Err(err);
                 }
@@ -208,7 +208,7 @@ impl Tree {
             .cas(id, old.into(), new.into())
             .map(|_| new.into())
             .map_err(|_| unsafe {
-                self.cache.dealloc(new);
+                self.cache.dealloc_page(new);
                 Error::Again
             })
     }
@@ -221,7 +221,7 @@ impl Tree {
                 if let PageAddr::Mem(addr) = next {
                     if let Some(page) = PagePtr::new(addr as *mut u8) {
                         next = page.next().into();
-                        cache.dealloc(page);
+                        cache.dealloc_page(page);
                         continue;
                     }
                 }
@@ -485,7 +485,7 @@ impl Tree {
         };
         split().map_err(|err| unsafe {
             self.table.dealloc(right_id, guard);
-            self.cache.dealloc(right_page);
+            self.cache.dealloc_page(right_page);
             err
         })
     }

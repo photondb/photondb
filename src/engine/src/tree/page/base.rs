@@ -1,11 +1,4 @@
-use std::{
-    alloc::{alloc, dealloc, Layout},
-    fmt,
-    marker::PhantomData,
-    mem::size_of,
-    ops::Deref,
-    ptr::NonNull,
-};
+use std::{alloc::Layout, fmt, marker::PhantomData, ops::Deref, ptr::NonNull};
 
 // Page header: ver (6B) | rank (1B) | tags (1B) | next (8B) | content_size (4B) |
 const PAGE_ALIGNMENT: usize = 8;
@@ -303,38 +296,32 @@ impl From<PageKind> for u8 {
 pub unsafe trait PageAlloc {
     type Error;
 
-    fn alloc(&self, size: usize) -> Result<PagePtr, Self::Error>;
+    fn alloc_page(&self, size: usize) -> Result<PagePtr, Self::Error>;
 
-    unsafe fn dealloc(&self, page: PagePtr);
+    unsafe fn dealloc_page(&self, page: PagePtr);
 
-    fn alloc_layout(size: usize) -> Layout {
+    fn page_layout(size: usize) -> Layout {
         unsafe { Layout::from_size_align_unchecked(size, PAGE_ALIGNMENT) }
     }
 }
 
-pub struct BuiltinAlloc;
-
-impl BuiltinAlloc {
-    pub unsafe fn usable_size(ptr: *mut u8) -> usize {
-        (ptr as *mut usize).sub(1).read()
-    }
-}
-
-unsafe impl PageAlloc for BuiltinAlloc {
+unsafe impl<T> PageAlloc for T
+where
+    T: crate::util::SizedAlloc,
+{
     type Error = ();
 
-    fn alloc(&self, size: usize) -> Result<PagePtr, Self::Error> {
+    fn alloc_page(&self, size: usize) -> Result<PagePtr, Self::Error> {
         unsafe {
-            let ptr = alloc(Self::alloc_layout(size + size_of::<usize>()));
-            (ptr as *mut usize).write(size);
-            PagePtr::new(ptr.add(size_of::<usize>())).ok_or(())
+            let ptr = self.alloc(Self::page_layout(size));
+            PagePtr::new(ptr).ok_or(())
         }
     }
 
-    unsafe fn dealloc(&self, page: PagePtr) {
+    unsafe fn dealloc_page(&self, page: PagePtr) {
         let ptr = page.as_raw();
-        let size = Self::usable_size(ptr) + size_of::<usize>();
-        dealloc(ptr.sub(size_of::<usize>()), Self::alloc_layout(size));
+        let size = self.alloc_size(ptr);
+        self.dealloc(ptr, Self::page_layout(size));
     }
 }
 
@@ -353,7 +340,7 @@ impl PageBuilder {
     where
         A: PageAlloc,
     {
-        let ptr = alloc.alloc(PAGE_HEADER_SIZE + content_size);
+        let ptr = alloc.alloc_page(PAGE_HEADER_SIZE + content_size);
         ptr.map(|mut ptr| {
             ptr.set_default();
             ptr.set_kind(self.kind);
@@ -367,10 +354,11 @@ impl PageBuilder {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::util::Sysalloc;
 
     #[test]
     fn page() {
-        let mut ptr = BuiltinAlloc.alloc(PAGE_HEADER_SIZE).unwrap();
+        let mut ptr = Sysalloc.alloc_page(PAGE_HEADER_SIZE).unwrap();
         ptr.set_default();
 
         assert_eq!(ptr.ver(), 0);

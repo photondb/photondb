@@ -1,5 +1,5 @@
 mod base;
-pub use base::{BuiltinAlloc, PageAlloc, PageBuilder, PageKind, PagePtr, PageRef};
+pub use base::{PageAlloc, PageBuilder, PageKind, PagePtr, PageRef};
 
 mod data;
 pub use data::{Compare, DecodeFrom, EncodeTo, Index, Key, Value};
@@ -21,9 +21,6 @@ pub use split_page::{SplitPageBuilder, SplitPageRef};
 
 mod sorted_page;
 pub use sorted_page::{SortedPageBuilder, SortedPageIter, SortedPageRef};
-
-mod util;
-use util::{BufReader, BufWriter};
 
 pub enum TypedPage<'a> {
     Data(DataPageRef<'a>),

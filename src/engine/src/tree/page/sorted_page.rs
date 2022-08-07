@@ -1,6 +1,7 @@
 use std::{cmp::Ordering, marker::PhantomData, mem::size_of, ops::Deref};
 
 use super::*;
+use crate::util::{BufReader, BufWriter};
 
 /// A builder to create pages with sorted entries.
 pub struct SortedPageBuilder {
@@ -75,18 +76,18 @@ impl SortedPageBuilder {
 
 struct SortedPageBuf {
     offsets: *mut u32,
-    content: BufWriter,
+    payload: BufWriter,
     current: usize,
 }
 
 impl SortedPageBuf {
     unsafe fn new(mut base: PagePtr, builder: SortedPageBuilder) -> Self {
         let offsets = base.content_mut() as *mut u32;
-        let mut content = BufWriter::new(base.content_mut());
-        content.skip(builder.offsets_size);
+        let mut payload = BufWriter::new(base.content_mut());
+        payload.skip(builder.offsets_size);
         Self {
             offsets,
-            content,
+            payload,
             current: 0,
         }
     }
@@ -96,11 +97,11 @@ impl SortedPageBuf {
         K: EncodeTo,
         V: EncodeTo,
     {
-        let offset = self.content.pos() as u32;
+        let offset = self.payload.offset_from(self.offsets as *mut u8) as u32;
         self.offsets.add(self.current).write(offset.to_le());
         self.current += 1;
-        key.encode_to(&mut self.content);
-        value.encode_to(&mut self.content);
+        key.encode_to(&mut self.payload);
+        value.encode_to(&mut self.payload);
     }
 }
 
@@ -308,13 +309,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::Sysalloc;
 
     #[test]
     fn data_page() {
         let data = [(1, 0), (2, 0), (4, 0), (7, 0), (8, 0)];
         let mut iter = SliceIter::from(&data);
         let page = SortedPageBuilder::new(PageKind::Data, true)
-            .build_from_iter(&BuiltinAlloc, &mut iter)
+            .build_from_iter(&Sysalloc, &mut iter)
             .unwrap();
         assert_eq!(page.kind(), PageKind::Data);
         assert_eq!(page.is_data(), true);
