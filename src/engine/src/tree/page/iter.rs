@@ -1,5 +1,5 @@
 use std::{
-    cmp::{Ord, Ordering},
+    cmp::{Ord, Ordering, Reverse},
     collections::BinaryHeap,
     ops::{Deref, DerefMut},
 };
@@ -12,7 +12,7 @@ pub trait ForwardIter {
     /// Returns the last item.
     fn last(&self) -> Option<&Self::Item>;
 
-    /// Advances to the next item and returns it.
+    /// Moves to the next item and returns it.
     fn next(&mut self) -> Option<&Self::Item>;
 
     /// Skips the next `n` items.
@@ -22,7 +22,7 @@ pub trait ForwardIter {
         }
     }
 
-    /// Skips all items to the end.
+    /// Skips all items until the end.
     fn skip_all(&mut self) {
         while self.next().is_some() {}
     }
@@ -48,6 +48,21 @@ impl<I: ForwardIter> ForwardIter for &mut I {
     }
 }
 
+pub trait SeekableIter<T: ?Sized>: ForwardIter {
+    /// Positions the next item at or after `target`.
+    fn seek(&mut self, target: &T);
+}
+
+impl<T, I> SeekableIter<T> for &mut I
+where
+    T: ?Sized,
+    I: SeekableIter<T>,
+{
+    fn seek(&mut self, target: &T) {
+        (**self).seek(target)
+    }
+}
+
 pub trait RewindableIter: ForwardIter {
     /// Positions the next item at the front.
     fn rewind(&mut self);
@@ -56,21 +71,6 @@ pub trait RewindableIter: ForwardIter {
 impl<I: RewindableIter> RewindableIter for &mut I {
     fn rewind(&mut self) {
         (**self).rewind()
-    }
-}
-
-pub trait SeekableIter<T: ?Sized>: ForwardIter {
-    /// Positions the next item at or after `target`.
-    fn seek(&mut self, target: &T);
-}
-
-impl<I, T> SeekableIter<T> for &mut I
-where
-    I: SeekableIter<T>,
-    T: ?Sized,
-{
-    fn seek(&mut self, target: &T) {
-        (**self).seek(target)
     }
 }
 
@@ -104,13 +104,6 @@ impl<'a, I> ForwardIter for SliceIter<'a, I> {
     }
 }
 
-impl<'a, I> RewindableIter for SliceIter<'a, I> {
-    fn rewind(&mut self) {
-        self.iter = self.data.iter();
-        self.last = None;
-    }
-}
-
 impl<'a, I> SeekableIter<I> for SliceIter<'a, I>
 where
     I: Ord,
@@ -121,6 +114,13 @@ where
             Err(i) => i,
         };
         self.iter = self.data[index..].iter();
+        self.last = None;
+    }
+}
+
+impl<'a, I> RewindableIter for SliceIter<'a, I> {
+    fn rewind(&mut self) {
+        self.iter = self.data.iter();
         self.last = None;
     }
 }
@@ -234,13 +234,19 @@ where
     }
 }
 
-/// A wrapper to sorts iterators by their last entries in reverse order.
-struct ReverseIter<I> {
+/// A wrapper to order iterators by their last items and ranks.
+struct OrderedIter<I> {
     iter: I,
     rank: usize,
 }
 
-impl<I> Deref for ReverseIter<I> {
+impl<I> OrderedIter<I> {
+    fn new(iter: I, rank: usize) -> Self {
+        Self { iter, rank }
+    }
+}
+
+impl<I> Deref for OrderedIter<I> {
     type Target = I;
 
     fn deref(&self) -> &Self::Target {
@@ -248,20 +254,20 @@ impl<I> Deref for ReverseIter<I> {
     }
 }
 
-impl<I> DerefMut for ReverseIter<I> {
+impl<I> DerefMut for OrderedIter<I> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.iter
     }
 }
 
-impl<I> Eq for ReverseIter<I>
+impl<I> Eq for OrderedIter<I>
 where
     I: ForwardIter,
     I::Item: Compare<I::Item>,
 {
 }
 
-impl<I> PartialEq for ReverseIter<I>
+impl<I> PartialEq for OrderedIter<I>
 where
     I: ForwardIter,
     I::Item: Compare<I::Item>,
@@ -271,26 +277,26 @@ where
     }
 }
 
-impl<I> Ord for ReverseIter<I>
+impl<I> Ord for OrderedIter<I>
 where
     I: ForwardIter,
     I::Item: Compare<I::Item>,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         let mut ord = match (self.last(), other.last()) {
-            (Some(a), Some(b)) => b.compare(a),
-            (Some(_), None) => Ordering::Greater,
-            (None, Some(_)) => Ordering::Less,
+            (Some(a), Some(b)) => a.compare(b),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
             (None, None) => Ordering::Equal,
         };
         if ord == Ordering::Equal {
-            ord = other.rank.cmp(&self.rank);
+            ord = self.rank.cmp(&other.rank);
         }
         ord
     }
 }
 
-impl<I> PartialOrd for ReverseIter<I>
+impl<I> PartialOrd for OrderedIter<I>
 where
     I: ForwardIter,
     I::Item: Compare<I::Item>,
@@ -300,14 +306,16 @@ where
     }
 }
 
+type MinHeapIter<I> = Reverse<OrderedIter<I>>;
+
 /// An iterator that merges entries from multiple iterators in ascending order.
 pub struct MergingIter<I>
 where
     I: ForwardIter,
     I::Item: Compare<I::Item>,
 {
-    heap: BinaryHeap<ReverseIter<I>>,
-    children: Vec<ReverseIter<I>>,
+    heap: BinaryHeap<MinHeapIter<I>>,
+    children: Vec<MinHeapIter<I>>,
 }
 
 impl<I> MergingIter<I>
@@ -315,7 +323,7 @@ where
     I: ForwardIter,
     I::Item: Compare<I::Item>,
 {
-    fn new(children: Vec<ReverseIter<I>>) -> Self {
+    fn new(children: Vec<MinHeapIter<I>>) -> Self {
         Self {
             heap: BinaryHeap::default(),
             children,
@@ -328,7 +336,7 @@ where
     {
         let mut children = self.take_children();
         for iter in children.iter_mut() {
-            f(iter);
+            f(&mut iter.0);
         }
         std::mem::swap(&mut self.children, &mut children);
     }
@@ -336,13 +344,13 @@ where
     fn init_heap(&mut self) {
         let mut children = std::mem::take(&mut self.children);
         for iter in children.iter_mut() {
-            iter.next();
+            iter.0.next();
         }
         let mut heap = BinaryHeap::from(children);
         std::mem::swap(&mut self.heap, &mut heap);
     }
 
-    fn take_children(&mut self) -> Vec<ReverseIter<I>> {
+    fn take_children(&mut self) -> Vec<MinHeapIter<I>> {
         if self.heap.is_empty() {
             std::mem::take(&mut self.children)
         } else {
@@ -359,30 +367,20 @@ where
     type Item = I::Item;
 
     fn last(&self) -> Option<&Self::Item> {
-        self.heap.peek().and_then(|iter| iter.last())
+        self.heap.peek().and_then(|iter| iter.0.last())
     }
 
     fn next(&mut self) -> Option<&Self::Item> {
         if self.heap.is_empty() {
             self.init_heap();
         } else if let Some(mut iter) = self.heap.peek_mut() {
-            iter.next();
+            iter.0.next();
         }
-        self.heap.peek().and_then(|iter| iter.last())
+        self.heap.peek().and_then(|iter| iter.0.last())
     }
 
     fn skip_all(&mut self) {
         self.reset(|iter| iter.skip_all());
-    }
-}
-
-impl<I> RewindableIter for MergingIter<I>
-where
-    I: RewindableIter,
-    I::Item: Compare<I::Item>,
-{
-    fn rewind(&mut self) {
-        self.reset(|iter| iter.rewind());
     }
 }
 
@@ -397,9 +395,19 @@ where
     }
 }
 
+impl<I> RewindableIter for MergingIter<I>
+where
+    I: RewindableIter,
+    I::Item: Compare<I::Item>,
+{
+    fn rewind(&mut self) {
+        self.reset(|iter| iter.rewind());
+    }
+}
+
 /// A builder to create `MergingIter`.
 pub struct MergingIterBuilder<I> {
-    children: Vec<ReverseIter<I>>,
+    children: Vec<MinHeapIter<I>>,
 }
 
 impl<I> Default for MergingIterBuilder<I> {
@@ -423,7 +431,8 @@ where
 
     pub fn add(&mut self, iter: I) {
         let rank = self.children.len();
-        self.children.push(ReverseIter { iter, rank });
+        let iter = OrderedIter::new(iter, rank);
+        self.children.push(Reverse(iter));
     }
 
     pub fn build(self) -> MergingIter<I> {
