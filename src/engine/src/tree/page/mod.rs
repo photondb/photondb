@@ -2,7 +2,7 @@ mod base;
 pub use base::{BuiltinAlloc, PageAlloc, PageBuilder, PageKind, PagePtr, PageRef};
 
 mod data;
-pub use data::{Comparable, Decodable, Encodable, Index, Key, Value};
+pub use data::{Compare, Decodable, Encodable, Index, Key, Value};
 
 mod iter;
 pub use iter::{

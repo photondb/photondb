@@ -4,7 +4,7 @@ use super::*;
 
 pub type DataItem<'a> = (Key<'a>, Value<'a>);
 
-impl<'a> Comparable<DataItem<'a>> for DataItem<'a> {
+impl<'a> Compare<DataItem<'a>> for DataItem<'a> {
     fn compare(&self, other: &Self) -> Ordering {
         self.0.cmp(&other.0)
     }

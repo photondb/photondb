@@ -1,9 +1,14 @@
 use std::{
+    borrow::Borrow,
     cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd},
     mem::size_of,
 };
 
 use super::{BufReader, BufWriter};
+
+pub trait Compare<T: ?Sized> {
+    fn compare(&self, other: &T) -> Ordering;
+}
 
 /// An interface to encode data.
 pub trait Encodable {
@@ -28,27 +33,9 @@ pub trait Decodable {
     unsafe fn decode_from(r: &mut BufReader) -> Self;
 }
 
-pub trait Comparable<T: ?Sized> {
-    fn compare(&self, other: &T) -> Ordering;
-
-    fn eq(&self, other: &T) -> bool {
-        self.compare(other) == Ordering::Equal
-    }
-
-    fn lt(&self, other: &T) -> bool {
-        self.compare(other) == Ordering::Less
-    }
-
-    fn le(&self, other: &T) -> bool {
-        self.compare(other) != Ordering::Greater
-    }
-
-    fn gt(&self, other: &T) -> bool {
-        self.compare(other) == Ordering::Greater
-    }
-
-    fn ge(&self, other: &T) -> bool {
-        self.compare(other) != Ordering::Less
+impl Compare<u64> for u64 {
+    fn compare(&self, other: &u64) -> Ordering {
+        self.cmp(other)
     }
 }
 
@@ -68,9 +55,9 @@ impl Decodable for u64 {
     }
 }
 
-impl Comparable<u64> for u64 {
-    fn compare(&self, other: &u64) -> Ordering {
-        self.cmp(other)
+impl<T: Borrow<[u8]> + ?Sized> Compare<&[u8]> for T {
+    fn compare(&self, other: &&[u8]) -> Ordering {
+        self.borrow().cmp(other)
     }
 }
 
@@ -87,18 +74,6 @@ impl Encodable for &[u8] {
 impl Decodable for &[u8] {
     unsafe fn decode_from(r: &mut BufReader) -> Self {
         r.get_length_prefixed_slice()
-    }
-}
-
-impl Comparable<&[u8]> for [u8] {
-    fn compare(&self, other: &&[u8]) -> Ordering {
-        self.cmp(other)
-    }
-}
-
-impl Comparable<&[u8]> for &[u8] {
-    fn compare(&self, other: &&[u8]) -> Ordering {
-        self.cmp(other)
     }
 }
 
@@ -148,7 +123,7 @@ impl Decodable for Key<'_> {
     }
 }
 
-impl Comparable<Key<'_>> for Key<'_> {
+impl Compare<Key<'_>> for Key<'_> {
     fn compare(&self, other: &Key<'_>) -> Ordering {
         self.cmp(other)
     }

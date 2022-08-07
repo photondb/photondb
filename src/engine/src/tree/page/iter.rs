@@ -4,7 +4,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use super::Comparable;
+use super::Compare;
 
 pub trait ForwardIter {
     type Item;
@@ -257,14 +257,14 @@ impl<I> DerefMut for ReverseIter<I> {
 impl<I> Eq for ReverseIter<I>
 where
     I: ForwardIter,
-    I::Item: Comparable<I::Item>,
+    I::Item: Compare<I::Item>,
 {
 }
 
 impl<I> PartialEq for ReverseIter<I>
 where
     I: ForwardIter,
-    I::Item: Comparable<I::Item>,
+    I::Item: Compare<I::Item>,
 {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
@@ -274,7 +274,7 @@ where
 impl<I> Ord for ReverseIter<I>
 where
     I: ForwardIter,
-    I::Item: Comparable<I::Item>,
+    I::Item: Compare<I::Item>,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         let mut ord = match (self.last(), other.last()) {
@@ -293,7 +293,7 @@ where
 impl<I> PartialOrd for ReverseIter<I>
 where
     I: ForwardIter,
-    I::Item: Comparable<I::Item>,
+    I::Item: Compare<I::Item>,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -304,7 +304,7 @@ where
 pub struct MergingIter<I>
 where
     I: ForwardIter,
-    I::Item: Comparable<I::Item>,
+    I::Item: Compare<I::Item>,
 {
     heap: BinaryHeap<ReverseIter<I>>,
     children: Vec<ReverseIter<I>>,
@@ -313,7 +313,7 @@ where
 impl<I> MergingIter<I>
 where
     I: ForwardIter,
-    I::Item: Comparable<I::Item>,
+    I::Item: Compare<I::Item>,
 {
     fn new(children: Vec<ReverseIter<I>>) -> Self {
         Self {
@@ -354,7 +354,7 @@ where
 impl<I> ForwardIter for MergingIter<I>
 where
     I: ForwardIter,
-    I::Item: Comparable<I::Item>,
+    I::Item: Compare<I::Item>,
 {
     type Item = I::Item;
 
@@ -379,7 +379,7 @@ where
 impl<I> RewindableIter for MergingIter<I>
 where
     I: RewindableIter,
-    I::Item: Comparable<I::Item>,
+    I::Item: Compare<I::Item>,
 {
     fn rewind(&mut self) {
         self.reset(|iter| iter.rewind());
@@ -390,7 +390,7 @@ impl<T, I> SeekableIter<T> for MergingIter<I>
 where
     T: ?Sized,
     I: SeekableIter<T>,
-    I::Item: Comparable<I::Item>,
+    I::Item: Compare<I::Item>,
 {
     fn seek(&mut self, target: &T) {
         self.reset(|iter| iter.seek(target));
@@ -413,7 +413,7 @@ impl<I> Default for MergingIterBuilder<I> {
 impl<I> MergingIterBuilder<I>
 where
     I: ForwardIter,
-    I::Item: Comparable<I::Item>,
+    I::Item: Compare<I::Item>,
 {
     pub fn with_len(len: usize) -> Self {
         let mut children = Vec::new();

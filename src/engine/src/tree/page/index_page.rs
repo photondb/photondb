@@ -4,7 +4,7 @@ use super::*;
 
 pub type IndexItem<'a> = (&'a [u8], Index);
 
-impl<'a> Comparable<IndexItem<'a>> for IndexItem<'a> {
+impl<'a> Compare<IndexItem<'a>> for IndexItem<'a> {
     fn compare(&self, other: &Self) -> Ordering {
         self.0.cmp(other.0)
     }

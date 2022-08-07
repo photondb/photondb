@@ -158,7 +158,7 @@ where
     /// inserted while maintaining the sorted order.
     pub fn search<T>(&self, target: &T) -> Result<usize, usize>
     where
-        T: Comparable<K> + ?Sized,
+        T: Compare<K> + ?Sized,
     {
         let mut left = 0;
         let mut right = self.len();
@@ -181,7 +181,7 @@ where
     /// Returns the first entry that is no less than `target`.
     pub fn seek<T>(&self, target: &T) -> Option<(K, V)>
     where
-        T: Comparable<K> + ?Sized,
+        T: Compare<K> + ?Sized,
     {
         let rank = match self.search(target) {
             Ok(i) => i,
@@ -193,7 +193,7 @@ where
     /// Returns the first entry that is no greater than `target`.
     pub fn seek_back<T>(&self, target: &T) -> Option<(K, V)>
     where
-        T: Comparable<K> + ?Sized,
+        T: Compare<K> + ?Sized,
     {
         match self.search(target) {
             Ok(i) => self.get(i),
@@ -294,7 +294,7 @@ impl<'a, K, V, T> SeekableIter<T> for SortedPageIter<'a, K, V>
 where
     K: Decodable + Ord,
     V: Decodable,
-    T: Comparable<K> + ?Sized,
+    T: Compare<K> + ?Sized,
 {
     fn seek(&mut self, target: &T) {
         self.next = match self.page.search(target) {
