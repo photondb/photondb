@@ -54,6 +54,10 @@ impl Map {
         Ok(value.map(|v| v.to_vec()))
     }
 
+    pub fn iter(&self) -> Iter {
+        Iter::new(self.tree.clone())
+    }
+
     pub fn put<'g>(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
         let guard = &pin();
         let key = Key::new(key, lsn);
@@ -118,7 +122,7 @@ impl Tree {
     }
 
     fn try_get<'a: 'g, 'g>(&'a self, key: Key<'_>, guard: &'g Guard) -> Result<Option<&'g [u8]>> {
-        let node = self.find_leaf(key.raw, guard)?;
+        let (node, _) = self.find_leaf(key.raw, guard)?;
         self.lookup_value(key, node, guard)
     }
 
@@ -140,7 +144,7 @@ impl Tree {
     }
 
     fn try_insert<'g>(&self, key: &[u8], mut page: PagePtr, guard: &'g Guard) -> Result<()> {
-        let mut node = self.find_leaf(key, guard)?;
+        let (mut node, _) = self.find_leaf(key, guard)?;
         loop {
             page.set_ver(node.page.ver());
             page.set_rank(node.page.rank() + 1);
@@ -268,7 +272,12 @@ impl Tree {
 }
 
 impl Tree {
-    fn find_leaf<'a: 'g, 'g>(&'a self, key: &[u8], guard: &'g Guard) -> Result<Node<'g>> {
+    fn find_leaf<'a: 'g, 'g>(
+        &'a self,
+        key: &[u8],
+        guard: &'g Guard,
+    ) -> Result<(Node<'g>, NodeRange<'g>)> {
+        let mut range = NodeRange::default();
         let mut cursor = ROOT_INDEX;
         let mut parent = None;
         loop {
@@ -278,11 +287,12 @@ impl Tree {
                 return Err(Error::Again);
             }
             if node.page.is_data() {
-                return Ok(node);
+                return Ok((node, range));
             }
-            cursor = self
-                .lookup_index(key, node, guard)?
-                .expect("the index must be found");
+            let (child, right) = self.lookup_index_range(key, node, guard)?;
+            let child = child.expect("the index must exists");
+            range = NodeRange::new(child.0, right.map(|r| r.0));
+            cursor = child.1;
             parent = Some(node);
         }
     }
@@ -435,8 +445,8 @@ impl Tree {
         if let Some((sep, mut iter)) = data_page.split() {
             let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
             let split_page = self.install_split_page(id, page, sep, right_page, guard)?;
-            trace!("split data node {} {:?}", id, split_page.get());
             self.stats.num_data_splits.inc();
+            trace!("split data node {} {:?}", id, split_page.get());
             Ok(split_page.into())
         } else {
             Ok(page)
@@ -621,62 +631,45 @@ impl Tree {
     }
 }
 
-/*
-pub struct View {
+pub struct Iter {
     tree: Arc<Tree>,
     guard: Guard,
-}
-
-impl View {
-    pub fn iter(&self) -> Iter {
-        Iter::new(&self.tree, &self.guard)
-    }
-}
-
-type DataNodeIter<'a> = DataIter<'a, DataPageIter<'a>>;
-
-pub struct NodeIter<'a> {
-    tree: &'a Tree,
     cursor: Option<Vec<u8>>,
-    current: Option<DataNodeIter<'a>>,
 }
 
-impl<'a> Iter<'a> {
-    fn new(tree: &'a Tree, guard: &'a Guard) -> Self {
+impl Iter {
+    fn new(tree: Arc<Tree>) -> Self {
         Self {
             tree,
-            guard,
+            guard: pin(),
             cursor: Some(Vec::new()),
-            current: None,
         }
     }
 
-    fn next_node(&mut self) -> Result<()> {
-        if let Some(cursor) = self.cursor.as_ref() {
-            let node = self.tree.find_leaf(cursor, self.guard)?;
-            let view = self.tree.data_node_view(node, self.guard)?;
-            self.current = Some(view.into_iter());
+    pub fn next(&mut self) -> Result<Option<NodeIter<'_>>> {
+        let cursor = self.cursor.take();
+        if let Some(cursor) = cursor.as_ref() {
+            self.guard.repin();
+            let (node, range) = self.tree.find_leaf(cursor, &self.guard)?;
+            self.cursor = range.end.map(|end| end.to_vec());
+            let view = self.tree.data_node_view(node, &self.guard)?;
+            let iter = NodeIter(view.into_iter());
+            Ok(Some(iter))
+        } else {
+            Ok(None)
         }
-        Ok(())
-    }
-
-    pub fn next(&mut self) -> Result<Option<(&'a [u8], &'a [u8])>> {
-        if self.current.is_none() {
-            self.next_node()?;
-        }
-        while let Some(iter) = self.current.as_mut() {
-            while let Some((k, v)) = iter.next() {
-                if let Value::Put(value) = v {
-                    return Ok(Some((k.raw, value)));
-                }
-            }
-            self.next_node()?;
-        }
-        Ok(None)
-    }
-
-    pub fn seek(&mut self, _target: &[u8]) {
-        todo!()
     }
 }
-*/
+
+pub struct NodeIter<'a>(DataIter<'a, DataPageIter<'a>>);
+
+impl NodeIter<'_> {
+    pub fn next(&mut self) -> Option<(&[u8], &[u8])> {
+        while let Some((k, v)) = self.0.next() {
+            if let Value::Put(value) = v {
+                return Some((k.raw, value));
+            }
+        }
+        None
+    }
+}

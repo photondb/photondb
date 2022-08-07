@@ -15,6 +15,26 @@ impl<'a> Node<'a> {
     }
 }
 
+pub struct NodeRange<'a> {
+    pub start: &'a [u8],
+    pub end: Option<&'a [u8]>,
+}
+
+impl Default for NodeRange<'_> {
+    fn default() -> Self {
+        Self {
+            start: &[],
+            end: None,
+        }
+    }
+}
+
+impl<'a> NodeRange<'a> {
+    pub fn new(start: &'a [u8], end: Option<&'a [u8]>) -> Self {
+        Self { start, end }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum PageAddr {
     Mem(u64),
@@ -109,6 +129,15 @@ impl<'a> DataNodeView<'a> {
     pub fn iter(&mut self) -> DataIter<'a, &mut DataPageIter<'a>> {
         let mut merger = MergingIterBuilder::with_len(self.children.len());
         for child in self.children.iter_mut() {
+            merger.add(child);
+        }
+        let iter = merger.build();
+        DataIter::new(iter, self.highest)
+    }
+
+    pub fn into_iter(self) -> DataIter<'a, DataPageIter<'a>> {
+        let mut merger = MergingIterBuilder::with_len(self.children.len());
+        for child in self.children {
             merger.add(child);
         }
         let iter = merger.build();

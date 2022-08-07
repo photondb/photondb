@@ -102,4 +102,27 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn iter() {
+        let map = open(OPTIONS);
+        for i in 0..N {
+            put(&map, i);
+        }
+        let mut map_iter = map.iter();
+        let mut i = 0;
+        while i < N {
+            let mut iter = map_iter.next().unwrap().unwrap();
+            while i < N {
+                let buf = i.to_be_bytes();
+                let key = buf.as_slice();
+                if let Some(got) = iter.next() {
+                    assert_eq!(got, (key, key));
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
 }
