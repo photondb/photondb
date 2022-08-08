@@ -5,67 +5,53 @@ const N: usize = 10_000_000;
 const M: usize = 10;
 const STEP: usize = N / M;
 
-fn get(map: &Map, i: usize) {
+fn get(table: &Table, i: usize) {
     let buf = i.to_be_bytes();
     let key = buf.as_slice();
-    map.get(key, 0, |_| {}).unwrap();
+    table.get(key, 0, |_| {}).unwrap();
 }
 
-fn put(map: &Map, i: usize) {
+fn put(table: &Table, i: usize) {
     let buf = i.to_be_bytes();
     let key = buf.as_slice();
-    map.put(key, 0, key).unwrap();
+    table.put(key, 0, key).unwrap();
 }
 
-fn delete(map: &Map, i: usize) {
+fn delete(table: &Table, i: usize) {
     let buf = i.to_be_bytes();
     let key = buf.as_slice();
-    map.delete(key, 0).unwrap();
+    table.delete(key, 0).unwrap();
 }
 
-fn bench_get(map: &Map) {
+fn bench_get(table: &Table) {
     for i in (0..N).step_by(STEP) {
-        get(map, i);
+        get(table, i);
     }
 }
 
-fn bench_put(map: &Map) {
+fn bench_put(table: &Table) {
     for i in (0..N).step_by(STEP) {
-        put(map, i);
+        put(table, i);
     }
 }
 
-fn bench_delete(map: &Map) {
+fn bench_delete(table: &Table) {
     for i in (0..N).step_by(STEP) {
-        delete(map, i);
+        delete(table, i);
     }
 }
 
 fn bench(c: &mut Criterion) {
-    let map = Map::open(Options::default()).unwrap();
+    let table = Table::open(Options::default()).unwrap();
     for i in 0..N {
-        put(&map, i);
+        put(&table, i);
     }
 
-    c.bench_function("get", |b| {
-        b.iter(|| {
-            bench_get(&map);
-        })
-    });
+    c.bench_function("get", |b| b.iter(|| bench_get(&table)));
+    c.bench_function("put", |b| b.iter(|| bench_put(&table)));
+    c.bench_function("delete", |b| b.iter(|| bench_delete(&table)));
 
-    c.bench_function("put", |b| {
-        b.iter(|| {
-            bench_put(&map);
-        })
-    });
-
-    c.bench_function("delete", |b| {
-        b.iter(|| {
-            bench_delete(&map);
-        })
-    });
-
-    println!("{:?}", map.stats());
+    println!("{:?}", table.stats());
 }
 
 criterion_main!(benches);

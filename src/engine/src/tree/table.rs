@@ -35,11 +35,11 @@ impl Default for Options {
 }
 
 #[derive(Clone)]
-pub struct Map {
+pub struct Table {
     tree: Arc<Tree>,
 }
 
-impl Map {
+impl Table {
     pub fn open(opts: Options) -> Result<Self> {
         let tree = Tree::open(opts)?;
         Ok(Self {
@@ -118,7 +118,7 @@ impl Tree {
         loop {
             match self.try_get(key, guard) {
                 Ok(value) => {
-                    self.stats.op.num_gets.inc();
+                    self.stats.op_succeed.num_gets.inc();
                     return Ok(value);
                 }
                 Err(Error::Again) => {
@@ -141,7 +141,7 @@ impl Tree {
         loop {
             match self.try_insert(key.raw, page, guard) {
                 Ok(_) => {
-                    self.stats.op.num_inserts.inc();
+                    self.stats.op_succeed.num_inserts.inc();
                     return Ok(());
                 }
                 Err(Error::Again) => {
@@ -194,9 +194,9 @@ impl Tree {
     fn stats(&self) -> Stats {
         Stats {
             cache_size: self.cache.size() as u64,
-            op: self.stats.op.snapshot(),
+            op_succeed: self.stats.op_succeed.snapshot(),
             op_conflict: self.stats.op_conflict.snapshot(),
-            smo: self.stats.smo.snapshot(),
+            smo_succeed: self.stats.smo_succeed.snapshot(),
             smo_conflict: self.stats.smo_conflict.snapshot(),
         }
     }
@@ -466,7 +466,7 @@ impl Tree {
             let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
             self.install_split_page(id, page, sep, right_page, guard)
                 .map(|page| {
-                    self.stats.smo.num_data_splits.inc();
+                    self.stats.smo_succeed.num_data_splits.inc();
                     page.into()
                 })
                 .map_err(|err| {
@@ -490,7 +490,7 @@ impl Tree {
             let right_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
             self.install_split_page(id, page, sep, right_page, guard)
                 .map(|page| {
-                    self.stats.smo.num_index_splits.inc();
+                    self.stats.smo_succeed.num_index_splits.inc();
                     page.into()
                 })
                 .map_err(|err| {
@@ -648,7 +648,7 @@ impl Tree {
             .update_node(node.id, addr, page, guard)
             .map(|page| {
                 self.dealloc_page_list(addr, page.next(), guard);
-                self.stats.smo.num_data_consolidates.inc();
+                self.stats.smo_succeed.num_data_consolidates.inc();
                 page
             })
             .map_err(|err| {
@@ -678,7 +678,7 @@ impl Tree {
             .update_node(node.id, addr, page, guard)
             .map(|page| {
                 self.dealloc_page_list(addr, page.next(), guard);
-                self.stats.smo.num_index_consolidates.inc();
+                self.stats.smo_succeed.num_index_consolidates.inc();
                 page
             })
             .map_err(|err| {

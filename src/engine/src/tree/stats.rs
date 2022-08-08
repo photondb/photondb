@@ -3,17 +3,17 @@ use crate::util::RelaxedCounter;
 #[derive(Default, Debug)]
 pub struct Stats {
     pub cache_size: u64,
-    pub op: OpStats,
+    pub op_succeed: OpStats,
     pub op_conflict: OpStats,
-    pub smo: SmoStats,
+    pub smo_succeed: SmoStats,
     pub smo_conflict: SmoStats,
 }
 
 #[derive(Default)]
 pub struct AtomicStats {
-    pub op: AtomicOpStats,
+    pub op_succeed: AtomicOpStats,
     pub op_conflict: AtomicOpStats,
-    pub smo: AtomicSmoStats,
+    pub smo_succeed: AtomicSmoStats,
     pub smo_conflict: AtomicSmoStats,
 }
 
