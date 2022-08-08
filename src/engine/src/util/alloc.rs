@@ -3,7 +3,17 @@ use std::{
     mem::size_of,
 };
 
+/// An allocator that knows the size of allocated objects.
+///
+/// # Safety
+///
+/// Check `std::alloc::GlobalAlloc` for more details.
 pub unsafe trait SizedAlloc: GlobalAlloc {
+    /// Returns the size allocated to the object.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the object was allocated via this allocator.
     unsafe fn alloc_size(&self, ptr: *mut u8) -> usize;
 }
 

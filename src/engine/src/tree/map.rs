@@ -61,14 +61,14 @@ impl Map {
         Iter::new(self.tree.clone())
     }
 
-    pub fn put<'g>(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
+    pub fn put(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
         let guard = &pin();
         let key = Key::new(key, lsn);
         let value = Value::Put(value);
         self.tree.insert(key, value, guard)
     }
 
-    pub fn delete<'g>(&self, key: &[u8], lsn: u64) -> Result<()> {
+    pub fn delete(&self, key: &[u8], lsn: u64) -> Result<()> {
         let guard = &pin();
         let key = Key::new(key, lsn);
         let value = Value::Delete;
@@ -602,8 +602,8 @@ impl Tree {
         node: &Node<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
-        let mut bump = Bump::new();
-        let (mut iter, next) = self.delta_data_iter(node, &mut bump, guard)?;
+        let bump = Bump::new();
+        let (mut iter, next) = self.delta_data_iter(node, &bump, guard)?;
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.page.ver());
         page.set_next(next.into());
@@ -626,8 +626,8 @@ impl Tree {
         node: &Node<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
-        let mut bump = Bump::new();
-        let mut iter = self.index_node_iter(node, &mut bump, guard)?;
+        let bump = Bump::new();
+        let mut iter = self.index_node_iter(node, &bump, guard)?;
         let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.page.ver());
 
