@@ -12,8 +12,11 @@ pub trait ForwardIter {
     /// Returns the last item.
     fn last(&self) -> Option<&Self::Item>;
 
-    /// Moves to the next item and returns it.
+    /// Advances to the next item.
     fn next(&mut self) -> Option<&Self::Item>;
+
+    /// Positions the next item at the front.
+    fn rewind(&mut self);
 
     /// Skips the next `n` items.
     fn skip(&mut self, mut n: usize) {
@@ -22,7 +25,7 @@ pub trait ForwardIter {
         }
     }
 
-    /// Skips all items until the end.
+    /// Skips all items to the end.
     fn skip_all(&mut self) {
         while self.next().is_some() {}
     }
@@ -42,6 +45,11 @@ impl<I: ForwardIter> ForwardIter for &mut I {
     }
 
     #[inline]
+    fn rewind(&mut self) {
+        (**self).rewind()
+    }
+
+    #[inline]
     fn skip(&mut self, n: usize) {
         (**self).skip(n)
     }
@@ -49,18 +57,6 @@ impl<I: ForwardIter> ForwardIter for &mut I {
     #[inline]
     fn skip_all(&mut self) {
         (**self).skip_all()
-    }
-}
-
-pub trait RewindableIter: ForwardIter {
-    /// Positions the next item at the front.
-    fn rewind(&mut self);
-}
-
-impl<I: RewindableIter> RewindableIter for &mut I {
-    #[inline]
-    fn rewind(&mut self) {
-        (**self).rewind()
     }
 }
 
@@ -80,7 +76,7 @@ where
     }
 }
 
-/// A wrapper that turns a slice into a `SeekableIter` and `RewindableIter`.
+/// A wrapper that turns a slice into a `SeekableIter`.
 pub struct SliceIter<'a, I> {
     data: &'a [I],
     iter: std::slice::Iter<'a, I>,
@@ -108,9 +104,7 @@ impl<'a, I> ForwardIter for SliceIter<'a, I> {
         self.last = self.iter.next();
         self.last
     }
-}
 
-impl<'a, I> RewindableIter for SliceIter<'a, I> {
     fn rewind(&mut self) {
         self.iter = self.data.iter();
         self.last = None;
@@ -143,7 +137,7 @@ impl<'a, I, const N: usize> From<&'a [I; N]> for SliceIter<'a, I> {
     }
 }
 
-/// A wrapper that turns an option into a `RewindableIter`.
+/// A wrapper that turns an option into a `ForwardIter`.
 pub struct OptionIter<I> {
     next: Option<I>,
     last: Option<I>,
@@ -170,9 +164,7 @@ impl<I> ForwardIter for OptionIter<I> {
             None
         }
     }
-}
 
-impl<I> RewindableIter for OptionIter<I> {
     fn rewind(&mut self) {
         if let Some(last) = self.last.take() {
             self.next = Some(last);
@@ -224,6 +216,12 @@ where
     }
 
     #[inline]
+    fn rewind(&mut self) {
+        self.iter.rewind();
+        self.iter.skip(self.start);
+    }
+
+    #[inline]
     fn skip(&mut self, n: usize) {
         self.iter.skip(n)
     }
@@ -231,17 +229,6 @@ where
     #[inline]
     fn skip_all(&mut self) {
         self.iter.skip_all()
-    }
-}
-
-impl<I> RewindableIter for BoundedIter<I>
-where
-    I: RewindableIter,
-{
-    #[inline]
-    fn rewind(&mut self) {
-        self.iter.rewind();
-        self.iter.skip(self.start);
     }
 }
 
@@ -334,6 +321,11 @@ where
     }
 
     #[inline]
+    fn rewind(&mut self) {
+        self.iter.rewind();
+    }
+
+    #[inline]
     fn skip(&mut self, n: usize) {
         self.iter.skip(n)
     }
@@ -341,16 +333,6 @@ where
     #[inline]
     fn skip_all(&mut self) {
         self.iter.skip_all()
-    }
-}
-
-impl<I> RewindableIter for OrderedIter<I>
-where
-    I: RewindableIter,
-{
-    #[inline]
-    fn rewind(&mut self) {
-        self.iter.rewind();
     }
 }
 
@@ -434,17 +416,12 @@ where
         self.heap.peek().and_then(|iter| iter.0.last())
     }
 
-    fn skip_all(&mut self) {
-        self.reset(|iter| iter.skip_all());
-    }
-}
-
-impl<I> RewindableIter for MergingIter<I>
-where
-    I: RewindableIter + Ord,
-{
     fn rewind(&mut self) {
         self.reset(|iter| iter.rewind());
+    }
+
+    fn skip_all(&mut self) {
+        self.reset(|iter| iter.skip_all());
     }
 }
 

@@ -24,7 +24,7 @@ impl IndexPageBuilder {
     pub fn build_from_iter<'a, A, I>(self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
-        I: RewindableIter<Item = IndexItem<'a>>,
+        I: ForwardIter<Item = IndexItem<'a>>,
     {
         self.0.build_from_iter(alloc, iter)
     }
@@ -115,6 +115,11 @@ impl<'a> ForwardIter for IndexPageIter<'a> {
     }
 
     #[inline]
+    fn rewind(&mut self) {
+        self.0.rewind();
+    }
+
+    #[inline]
     fn skip(&mut self, n: usize) {
         self.0.skip(n);
     }
@@ -122,13 +127,6 @@ impl<'a> ForwardIter for IndexPageIter<'a> {
     #[inline]
     fn skip_all(&mut self) {
         self.0.skip_all();
-    }
-}
-
-impl<'a> RewindableIter for IndexPageIter<'a> {
-    #[inline]
-    fn rewind(&mut self) {
-        self.0.rewind();
     }
 }
 

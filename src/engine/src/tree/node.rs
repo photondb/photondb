@@ -126,17 +126,12 @@ where
         self.iter.last()
     }
 
-    fn skip_all(&mut self) {
-        self.iter.skip_all()
-    }
-}
-
-impl<'a, T> RewindableIter for DataIter<'a, T>
-where
-    T: RewindableIter<Item = DataItem<'a>>,
-{
     fn rewind(&mut self) {
         self.iter.rewind();
+    }
+
+    fn skip_all(&mut self) {
+        self.iter.skip_all()
     }
 }
 
@@ -198,17 +193,12 @@ where
         self.iter.last()
     }
 
-    fn skip_all(&mut self) {
-        self.iter.skip_all()
-    }
-}
-
-impl<'a, T> RewindableIter for IndexIter<'a, T>
-where
-    T: RewindableIter<Item = IndexItem<'a>>,
-{
     fn rewind(&mut self) {
         self.iter.rewind();
+    }
+
+    fn skip_all(&mut self) {
+        self.iter.skip_all()
     }
 }
 

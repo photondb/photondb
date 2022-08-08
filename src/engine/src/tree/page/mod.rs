@@ -7,7 +7,7 @@ pub use data::{Compare, DecodeFrom, EncodeTo, Index, Key, Value};
 mod iter;
 pub use iter::{
     BoundedIter, ForwardIter, MergingIter, MergingIterBuilder, OptionIter, OrderedIter,
-    RewindableIter, SeekableIter, SliceIter,
+    SeekableIter, SliceIter,
 };
 
 mod data_page;

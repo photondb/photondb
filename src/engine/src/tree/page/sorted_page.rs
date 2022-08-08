@@ -54,7 +54,7 @@ impl SortedPageBuilder {
     ) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
-        I: RewindableIter<Item = (K, V)>,
+        I: ForwardIter<Item = (K, V)>,
         K: EncodeTo,
         V: EncodeTo,
     {
@@ -271,23 +271,17 @@ where
         self.last.as_ref()
     }
 
+    fn rewind(&mut self) {
+        self.next = 0;
+        self.last = None;
+    }
+
     fn skip(&mut self, n: usize) {
         self.next = self.next.saturating_add(n).min(self.page.len());
     }
 
     fn skip_all(&mut self) {
         self.next = self.page.len();
-    }
-}
-
-impl<'a, K, V> RewindableIter for SortedPageIter<'a, K, V>
-where
-    K: DecodeFrom + Ord,
-    V: DecodeFrom,
-{
-    fn rewind(&mut self) {
-        self.next = 0;
-        self.last = None;
     }
 }
 
