@@ -20,7 +20,7 @@ mod tests {
 
     const OPTIONS: Options = Options {
         cache_size: usize::MAX,
-        data_node_size: 64,
+        data_node_size: 128,
         data_delta_length: 2,
         index_node_size: 32,
         index_delta_length: 2,
@@ -67,7 +67,7 @@ mod tests {
         let lsn = SEQUENCE.inc();
         map.put(key, lsn, key).unwrap();
         map.get(key, lsn, |got| {
-            assert_eq!(got.unwrap(), key);
+            assert_eq!(got, Some(key));
         })
         .unwrap();
     }
@@ -83,24 +83,15 @@ mod tests {
         .unwrap();
     }
 
-    #[test]
-    fn crud() {
-        let map = open(OPTIONS);
-        get(&map, 0, false);
-        put(&map, 0);
-        delete(&map, 0);
-    }
-
     #[cfg(miri)]
     const N: usize = 1 << 4;
     #[cfg(not(miri))]
     const N: usize = 1 << 10;
 
     #[test]
-    fn repeated_crud() {
+    fn crud() {
         let map = open(OPTIONS);
         for _ in 0..2 {
-            // Forward
             for i in 0..N {
                 put(&map, i);
             }
@@ -112,18 +103,28 @@ mod tests {
                 delete(&map, i);
             }
             iter(&map, 0, N, 2);
-            // Backward
-            for i in (0..N).rev() {
-                put(&map, i);
-            }
-            for i in (0..N).rev() {
-                get(&map, i, true);
-            }
-            iter(&map, 0, N, 1);
-            for i in (1..N).rev().step_by(2) {
-                delete(&map, i);
-            }
-            iter(&map, 0, N, 2);
+        }
+    }
+
+    #[test]
+    fn concurrent_crud() {
+        let map = open(OPTIONS);
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let map = map.clone();
+            let handle = std::thread::spawn(move || {
+                for i in 0..N {
+                    put(&map, i);
+                }
+                for i in 0..N {
+                    get(&map, i, true);
+                }
+                iter(&map, 0, N, 1);
+            });
+            handles.push(handle);
+        }
+        for handle in handles {
+            handle.join().unwrap();
         }
     }
 }

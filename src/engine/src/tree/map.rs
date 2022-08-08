@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use bumpalo::Bump;
 use crossbeam_epoch::{pin, Guard};
-use log::trace;
 
 use super::{
     node::*,
@@ -149,6 +148,11 @@ impl Tree {
     fn try_insert<'g>(&self, key: &[u8], mut page: PagePtr, guard: &'g Guard) -> Result<()> {
         let (mut node, _) = self.find_leaf(key, guard)?;
         loop {
+            // TODO: This is a bit of a hack.
+            if node.page.rank() == u8::MAX {
+                let _ = self.consolidate_data_node(&node, guard);
+                return Err(Error::Again);
+            }
             page.set_ver(node.page.ver());
             page.set_rank(node.page.rank() + 1);
             page.set_next(node.page.as_addr().into());
@@ -178,9 +182,13 @@ impl Tree {
         Stats {
             cache_size: self.cache.size() as u64,
             num_data_splits: self.stats.num_data_splits.get(),
+            num_data_splits_failed: self.stats.num_data_splits_failed.get(),
             num_data_consolidations: self.stats.num_data_consolidations.get(),
+            num_data_consolidations_failed: self.stats.num_data_consolidations_failed.get(),
             num_index_splits: self.stats.num_index_splits.get(),
+            num_index_splits_failed: self.stats.num_index_splits_failed.get(),
             num_index_consolidations: self.stats.num_index_consolidations.get(),
+            num_index_consolidations_failed: self.stats.num_index_consolidations_failed.get(),
         }
     }
 }
@@ -460,13 +468,19 @@ impl Tree {
         page: PageRef<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
+        assert_eq!(page.next(), 0);
         let data_page = DataPageRef::from(page);
         if let Some((sep, mut iter)) = data_page.split() {
             let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-            let split_page = self.install_split_page(id, page, sep, right_page, guard)?;
-            self.stats.num_data_splits.inc();
-            trace!("split data node {} {:?}", id, split_page.get());
-            Ok(split_page.into())
+            self.install_split_page(id, page, sep, right_page, guard)
+                .map(|page| {
+                    self.stats.num_data_splits.inc();
+                    page.into()
+                })
+                .map_err(|err| {
+                    self.stats.num_data_splits_failed.inc();
+                    err
+                })
         } else {
             Ok(page)
         }
@@ -478,13 +492,19 @@ impl Tree {
         page: PageRef<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
+        assert_eq!(page.next(), 0);
         let index_page = IndexPageRef::from(page);
         if let Some((sep, mut iter)) = index_page.split() {
             let right_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-            let split_page = self.install_split_page(id, page, sep, right_page, guard)?;
-            self.stats.num_index_splits.inc();
-            trace!("split index node {} {:?}", id, split_page.get());
-            Ok(split_page.into())
+            self.install_split_page(id, page, sep, right_page, guard)
+                .map(|page| {
+                    self.stats.num_index_splits.inc();
+                    page.into()
+                })
+                .map_err(|err| {
+                    self.stats.num_index_splits_failed.inc();
+                    err
+                })
         } else {
             Ok(page)
         }
@@ -560,7 +580,6 @@ impl Tree {
         index_page.set_rank(parent.page.rank() + 1);
         index_page.set_next(parent.page.as_addr().into());
         let page = self.update_node(parent.id, index_page.next(), index_page, guard)?;
-        trace!("reconcile split node {} parent {}", node.id, parent.id);
 
         if page.rank() as usize >= self.opts.index_delta_length {
             parent.page = page.into();
@@ -587,10 +606,6 @@ impl Tree {
         let root_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
 
         self.update_node(node.id, root_addr, root_page, guard)
-            .map(|page| {
-                trace!("reconcile split root {} {:?}", node.id, page);
-                page
-            })
             .map_err(|err| {
                 self.table.dealloc(left_id, guard);
                 err
@@ -609,12 +624,19 @@ impl Tree {
         page.set_next(next.into());
 
         let addr = node.page.as_addr();
-        let page = self.update_node(node.id, addr, page, guard)?;
-        self.dealloc_node(addr, page.next().into(), guard);
-        self.stats.num_data_consolidations.inc();
-        trace!("consolidate data node {} {:?}", node.id, page);
+        let page = self
+            .update_node(node.id, addr, page, guard)
+            .map(|page| {
+                self.dealloc_node(addr, page.next().into(), guard);
+                self.stats.num_data_consolidations.inc();
+                page
+            })
+            .map_err(|err| {
+                self.stats.num_data_consolidations_failed.inc();
+                err
+            })?;
 
-        if page.size() >= self.opts.data_node_size {
+        if page.next() == 0 && page.size() >= self.opts.data_node_size {
             self.split_data_node(node.id, page, guard)
         } else {
             Ok(page)
@@ -632,12 +654,19 @@ impl Tree {
         page.set_ver(node.page.ver());
 
         let addr = node.page.as_addr();
-        let page = self.update_node(node.id, addr, page, guard)?;
-        self.dealloc_node(addr, page.next().into(), guard);
-        self.stats.num_index_consolidations.inc();
-        trace!("consolidate index node {} {:?}", node.id, page);
+        let page = self
+            .update_node(node.id, addr, page, guard)
+            .map(|page| {
+                self.dealloc_node(addr, page.next().into(), guard);
+                self.stats.num_index_consolidations.inc();
+                page
+            })
+            .map_err(|err| {
+                self.stats.num_index_consolidations_failed.inc();
+                err
+            })?;
 
-        if page.size() >= self.opts.index_node_size {
+        if page.next() == 0 && page.size() >= self.opts.index_node_size {
             self.split_index_node(node.id, page, guard)
         } else {
             Ok(page)
@@ -666,7 +695,7 @@ impl Iter {
     where
         F: FnMut((&[u8], &[u8])),
     {
-        while let Some(mut iter) = self.next_node()? {
+        while let Some(mut iter) = self.next_iter()? {
             while let Some(item) = iter.next() {
                 f(item);
             }
@@ -674,11 +703,18 @@ impl Iter {
         Ok(())
     }
 
-    fn next_node(&mut self) -> Result<Option<NodeIter<'_>>> {
+    fn next_iter(&mut self) -> Result<Option<NodeIter<'_>>> {
         if let Some(cursor) = self.cursor.take() {
             self.bump.reset();
             self.guard.repin();
-            let (node, _) = self.tree.find_leaf(&cursor, &self.guard)?;
+            let node = loop {
+                // TODO
+                match self.tree.find_leaf(&cursor, &self.guard) {
+                    Ok((node, _)) => break node,
+                    Err(Error::Again) => continue,
+                    Err(err) => return Err(err),
+                }
+            };
             self.cursor = node.range.end.map(|end| end.to_vec());
             let iter = self.tree.data_node_iter(&node, &self.bump, &self.guard)?;
             Ok(Some(NodeIter::new(iter)))
