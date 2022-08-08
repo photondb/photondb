@@ -15,5 +15,9 @@ env_logger = "0.9"
 criterion = "0.3"
 
 [[bench]]
-name = "criterion"
+name = "bench"
+harness = false
+
+[[bench]]
+name = "concurrent"
 harness = false

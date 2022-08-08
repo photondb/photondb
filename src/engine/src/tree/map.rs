@@ -117,8 +117,15 @@ impl Tree {
     fn get<'a: 'g, 'g>(&'a self, key: Key<'_>, guard: &'g Guard) -> Result<Option<&'g [u8]>> {
         loop {
             match self.try_get(key, guard) {
-                Err(Error::Again) => continue,
-                other => return other,
+                Ok(value) => {
+                    self.stats.op.num_gets.inc();
+                    return Ok(value);
+                }
+                Err(Error::Again) => {
+                    self.stats.op_conflict.num_gets.inc();
+                    continue;
+                }
+                Err(err) => return Err(err),
             }
         }
     }
@@ -133,8 +140,14 @@ impl Tree {
         let page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         loop {
             match self.try_insert(key.raw, page, guard) {
-                Ok(_) => return Ok(()),
-                Err(Error::Again) => continue,
+                Ok(_) => {
+                    self.stats.op.num_inserts.inc();
+                    return Ok(());
+                }
+                Err(Error::Again) => {
+                    self.stats.op_conflict.num_inserts.inc();
+                    continue;
+                }
                 Err(err) => {
                     unsafe {
                         self.cache.dealloc_page(page);
@@ -181,14 +194,10 @@ impl Tree {
     fn stats(&self) -> Stats {
         Stats {
             cache_size: self.cache.size() as u64,
-            num_data_splits: self.stats.num_data_splits.get(),
-            num_data_splits_failed: self.stats.num_data_splits_failed.get(),
-            num_data_consolidations: self.stats.num_data_consolidations.get(),
-            num_data_consolidations_failed: self.stats.num_data_consolidations_failed.get(),
-            num_index_splits: self.stats.num_index_splits.get(),
-            num_index_splits_failed: self.stats.num_index_splits_failed.get(),
-            num_index_consolidations: self.stats.num_index_consolidations.get(),
-            num_index_consolidations_failed: self.stats.num_index_consolidations_failed.get(),
+            op: self.stats.op.snapshot(),
+            op_conflict: self.stats.op_conflict.snapshot(),
+            smo: self.stats.smo.snapshot(),
+            smo_conflict: self.stats.smo_conflict.snapshot(),
         }
     }
 }
@@ -457,11 +466,11 @@ impl Tree {
             let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
             self.install_split_page(id, page, sep, right_page, guard)
                 .map(|page| {
-                    self.stats.num_data_splits.inc();
+                    self.stats.smo.num_data_splits.inc();
                     page.into()
                 })
                 .map_err(|err| {
-                    self.stats.num_data_splits_failed.inc();
+                    self.stats.smo_conflict.num_data_splits.inc();
                     err
                 })
         } else {
@@ -481,11 +490,11 @@ impl Tree {
             let right_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
             self.install_split_page(id, page, sep, right_page, guard)
                 .map(|page| {
-                    self.stats.num_index_splits.inc();
+                    self.stats.smo.num_index_splits.inc();
                     page.into()
                 })
                 .map_err(|err| {
-                    self.stats.num_index_splits_failed.inc();
+                    self.stats.smo_conflict.num_index_splits.inc();
                     err
                 })
         } else {
@@ -639,11 +648,11 @@ impl Tree {
             .update_node(node.id, addr, page, guard)
             .map(|page| {
                 self.dealloc_page_list(addr, page.next(), guard);
-                self.stats.num_data_consolidations.inc();
+                self.stats.smo.num_data_consolidates.inc();
                 page
             })
             .map_err(|err| {
-                self.stats.num_data_consolidations_failed.inc();
+                self.stats.smo_conflict.num_data_consolidates.inc();
                 err
             })?;
 
@@ -669,11 +678,11 @@ impl Tree {
             .update_node(node.id, addr, page, guard)
             .map(|page| {
                 self.dealloc_page_list(addr, page.next(), guard);
-                self.stats.num_index_consolidations.inc();
+                self.stats.smo.num_index_consolidates.inc();
                 page
             })
             .map_err(|err| {
-                self.stats.num_index_consolidations_failed.inc();
+                self.stats.smo_conflict.num_index_consolidates.inc();
                 err
             })?;
 
