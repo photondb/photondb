@@ -559,6 +559,11 @@ impl Tree {
             IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
         };
 
+        // TODO: This is a bit of a hack.
+        if parent.page.rank() == u8::MAX {
+            let _ = self.consolidate_index_node(&parent, guard);
+            return Err(Error::Again);
+        }
         index_page.set_ver(parent.page.ver());
         index_page.set_rank(parent.page.rank() + 1);
         index_page.set_next(parent.page.as_addr().into());
