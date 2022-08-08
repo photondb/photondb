@@ -48,6 +48,19 @@ mod tests {
         .unwrap();
     }
 
+    fn iter(map: &Map, start: usize, end: usize, step: usize) {
+        let mut i = start;
+        let mut iter = map.iter();
+        iter.next_with(|item| {
+            let buf = i.to_be_bytes();
+            let key = buf.as_slice();
+            assert_eq!(item, (key, key));
+            i += step;
+        })
+        .unwrap();
+        assert_eq!(i, end);
+    }
+
     fn put(map: &Map, i: usize) {
         let buf = i.to_be_bytes();
         let key = buf.as_slice();
@@ -84,45 +97,33 @@ mod tests {
     const N: usize = 1 << 10;
 
     #[test]
-    fn crud_repeated() {
+    fn repeated_crud() {
         let map = open(OPTIONS);
         for _ in 0..2 {
+            // Forward
             for i in 0..N {
                 put(&map, i);
             }
             for i in 0..N {
                 get(&map, i, true);
             }
-            for i in (0..N).step_by(1) {
+            iter(&map, 0, N, 1);
+            for i in (1..N).step_by(2) {
                 delete(&map, i);
             }
+            iter(&map, 0, N, 2);
+            // Backward
             for i in (0..N).rev() {
                 put(&map, i);
             }
             for i in (0..N).rev() {
                 get(&map, i, true);
             }
-            for i in (0..N).rev().step_by(1) {
+            iter(&map, 0, N, 1);
+            for i in (1..N).rev().step_by(2) {
                 delete(&map, i);
             }
+            iter(&map, 0, N, 2);
         }
-    }
-
-    #[test]
-    fn iter() {
-        let map = open(OPTIONS);
-        for i in 0..N {
-            put(&map, i);
-        }
-        let mut i = 0usize;
-        let mut iter = map.iter();
-        iter.next_with(|item| {
-            let buf = i.to_be_bytes();
-            let key = buf.as_slice();
-            assert_eq!(item, (key, key));
-            i += 1;
-        })
-        .unwrap();
-        assert_eq!(i, N);
     }
 }

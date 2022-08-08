@@ -7,8 +7,13 @@ pub const ROOT_INDEX: Index = Index::with_id(PageTable::MIN);
 pub struct Node<'a> {
     pub id: u64,
     pub page: PageView<'a>,
+    pub range: Range<'a>,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+pub struct Range<'a> {
     pub start: &'a [u8],
-    pub right: Option<IndexItem<'a>>,
+    pub end: Option<&'a [u8]>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

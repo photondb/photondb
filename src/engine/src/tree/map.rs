@@ -280,8 +280,7 @@ impl Tree {
         guard: &'g Guard,
     ) -> Result<(Node<'g>, Option<Node<'g>>)> {
         let mut index = ROOT_INDEX;
-        let mut start = [].as_slice();
-        let mut right = None;
+        let mut range = Range::default();
         let mut parent = None;
         loop {
             let addr = self.page_addr(index.id);
@@ -289,8 +288,7 @@ impl Tree {
             let node = Node {
                 id: index.id,
                 page,
-                start,
-                right,
+                range,
             };
             if node.page.ver() != index.ver {
                 self.reconcile_node(node, parent, guard)?;
@@ -299,11 +297,13 @@ impl Tree {
             if node.page.is_data() {
                 return Ok((node, parent));
             }
-            let (child, right_child) = self.lookup_index(key, &node, guard)?;
+            let (child, right) = self.lookup_index(key, &node, guard)?;
             let child = child.expect("the index must exists");
             index = child.1;
-            start = child.0;
-            right = right_child;
+            range.start = child.0;
+            if let Some(right) = right {
+                range.end = Some(right.0);
+            }
             parent = Some(node);
         }
     }
@@ -544,10 +544,10 @@ impl Tree {
         split_index: IndexItem<'g>,
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
-        let left_index = (node.start, Index::new(node.id, node.page.ver()));
-        let mut index_page = if let Some(right_index) = node.right {
-            assert!(right_index.0 > split_index.0);
-            let delta_data = [left_index, split_index, (right_index.0, NULL_INDEX)];
+        let left_index = (node.range.start, Index::new(node.id, node.page.ver()));
+        let mut index_page = if let Some(right_start) = node.range.end {
+            assert!(right_start > split_index.0);
+            let delta_data = [left_index, split_index, (right_start, NULL_INDEX)];
             let mut delta_iter = SliceIter::from(&delta_data);
             IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
         } else {
@@ -679,22 +679,35 @@ impl Iter {
             self.bump.reset();
             self.guard.repin();
             let (node, _) = self.tree.find_leaf(&cursor, &self.guard)?;
-            self.cursor = node.right.map(|r| r.0.to_vec());
+            self.cursor = node.range.end.map(|end| end.to_vec());
             let iter = self.tree.data_node_iter(&node, &self.bump, &self.guard)?;
-            Ok(Some(NodeIter(iter)))
+            Ok(Some(NodeIter::new(iter)))
         } else {
             Ok(None)
         }
     }
 }
 
-struct NodeIter<'a>(DataNodeIter<'a, 'a>);
+struct NodeIter<'a> {
+    iter: DataNodeIter<'a, 'a>,
+    last: &'a [u8],
+}
 
-impl NodeIter<'_> {
+impl<'a> NodeIter<'a> {
+    fn new(iter: DataNodeIter<'a, 'a>) -> Self {
+        Self {
+            iter,
+            last: [].as_slice(),
+        }
+    }
+
     fn next(&mut self) -> Option<(&[u8], &[u8])> {
-        while let Some((k, v)) = self.0.next() {
-            if let Value::Put(value) = v {
-                return Some((k.raw, value));
+        while let Some((k, v)) = self.iter.next() {
+            if self.last != k.raw {
+                self.last = k.raw;
+                if let Value::Put(value) = v {
+                    return Some((k.raw, value));
+                }
             }
         }
         None

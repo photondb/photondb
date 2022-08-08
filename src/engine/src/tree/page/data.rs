@@ -77,7 +77,7 @@ impl DecodeFrom for &[u8] {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct Key<'a> {
     pub raw: &'a [u8],
     pub lsn: u64,
