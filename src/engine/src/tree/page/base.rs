@@ -64,7 +64,7 @@ impl PagePtr {
         }
     }
 
-    /// Returns the rank of this page in the chain.
+    /// Returns the rank of this page in the list.
     pub fn rank(&self) -> u8 {
         unsafe { self.rank_ptr().read() }
     }
@@ -75,7 +75,7 @@ impl PagePtr {
         }
     }
 
-    /// Returns the address of the next page in the chain.
+    /// Returns the address of the next page in the list.
     pub fn next(&self) -> u64 {
         let next = unsafe { self.next_ptr().read() };
         u64::from_le(next)

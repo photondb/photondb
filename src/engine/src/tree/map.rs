@@ -227,23 +227,6 @@ impl Tree {
             })
     }
 
-    fn dealloc_node<'a: 'g, 'g>(&'a self, addr: PageAddr, until: PageAddr, guard: &'g Guard) {
-        let cache = self.cache.clone();
-        guard.defer(move || unsafe {
-            let mut next = addr;
-            while next != until {
-                if let PageAddr::Mem(addr) = next {
-                    if let Some(page) = PagePtr::new(addr as *mut u8) {
-                        next = page.next().into();
-                        cache.dealloc_page(page);
-                        continue;
-                    }
-                }
-                break;
-            }
-        });
-    }
-
     fn install_node<'a: 'g, 'g>(&'a self, new: impl Into<u64>) -> Result<u64> {
         let id = self.table.alloc().ok_or(Error::Alloc)?;
         self.table.set(id, new.into());
@@ -612,6 +595,29 @@ impl Tree {
             })
     }
 
+    fn dealloc_page_list<'a: 'g, 'g>(
+        &'a self,
+        head: impl Into<u64>,
+        until: impl Into<u64>,
+        guard: &'g Guard,
+    ) {
+        let mut next = head.into();
+        let until = until.into();
+        let cache = self.cache.clone();
+        guard.defer(move || unsafe {
+            while next != until {
+                if let PageAddr::Mem(addr) = next.into() {
+                    if let Some(page) = PagePtr::new(addr as *mut u8) {
+                        next = page.next();
+                        cache.dealloc_page(page);
+                        continue;
+                    }
+                }
+                break;
+            }
+        });
+    }
+
     fn consolidate_data_node<'a: 'g, 'g>(
         &'a self,
         node: &Node<'g>,
@@ -627,7 +633,7 @@ impl Tree {
         let page = self
             .update_node(node.id, addr, page, guard)
             .map(|page| {
-                self.dealloc_node(addr, page.next().into(), guard);
+                self.dealloc_page_list(addr, page.next(), guard);
                 self.stats.num_data_consolidations.inc();
                 page
             })
@@ -657,7 +663,7 @@ impl Tree {
         let page = self
             .update_node(node.id, addr, page, guard)
             .map(|page| {
-                self.dealloc_node(addr, page.next().into(), guard);
+                self.dealloc_page_list(addr, page.next(), guard);
                 self.stats.num_index_consolidations.inc();
                 page
             })
