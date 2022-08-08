@@ -42,7 +42,7 @@ impl<'a> IndexPageRef<'a> {
 
     /// Returns the two entries that enclose `target`.
     pub fn find(&self, target: &[u8]) -> (Option<IndexItem<'a>>, Option<IndexItem<'a>>) {
-        match self.0.search(&target) {
+        match self.0.rank(&target) {
             Ok(i) => (self.0.get(i), i.checked_add(1).and_then(|i| self.0.get(i))),
             Err(i) => (i.checked_sub(1).and_then(|i| self.0.get(i)), self.0.get(i)),
         }
@@ -56,7 +56,7 @@ impl<'a> IndexPageRef<'a> {
     /// Returns a split key and an iterator over the entries at or after the split key.
     pub fn split(&self) -> Option<(&'a [u8], BoundedIter<IndexPageIter<'a>>)> {
         if let Some((sep, _)) = self.0.get(self.0.len() / 2) {
-            let rank = match self.0.search(&sep) {
+            let rank = match self.0.rank(&sep) {
                 Ok(i) => i,
                 Err(i) => i,
             };

@@ -68,7 +68,7 @@ impl<'a> DataPageRef<'a> {
         if let Some((mut sep, _)) = self.0.get(self.0.len() / 2) {
             // Avoids splitting entries of the same raw key.
             sep.lsn = u64::MAX;
-            let rank = match self.0.search(&sep) {
+            let rank = match self.0.rank(&sep) {
                 Ok(i) => i,
                 Err(i) => i,
             };

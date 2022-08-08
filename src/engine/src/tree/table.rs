@@ -162,16 +162,16 @@ impl Tree {
         let (mut node, _) = self.find_leaf(key, guard)?;
         loop {
             // TODO: This is a bit of a hack.
-            if node.page.rank() == u8::MAX {
+            if node.page.len() == u8::MAX {
                 let _ = self.consolidate_data_node(&node, guard);
                 return Err(Error::Again);
             }
             page.set_ver(node.page.ver());
-            page.set_rank(node.page.rank() + 1);
+            page.set_len(node.page.len() + 1);
             page.set_next(node.page.as_addr().into());
             match self.table.cas(node.id, page.next(), page.into()) {
                 Ok(_) => {
-                    if page.rank() as usize >= self.opts.data_delta_length {
+                    if page.len() as usize >= self.opts.data_delta_length {
                         node.page = page.into();
                         let _ = self.consolidate_data_node(&node, guard);
                     }
@@ -375,7 +375,7 @@ impl Tree {
         guard: &'g Guard,
     ) -> Result<DataNodeIter<'g, 'b>> {
         let mut limit = None;
-        let mut merger = MergingIterBuilder::with_len(node.page.rank() as usize + 1);
+        let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
         self.walk_node(node, guard, |page| {
             match TypedPage::from(page) {
                 TypedPage::Data(page) => {
@@ -403,7 +403,7 @@ impl Tree {
         let mut next = 0;
         let mut size = 0;
         let mut limit = None;
-        let mut merger = MergingIterBuilder::with_len(node.page.rank() as usize + 1);
+        let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
         self.walk_node(node, guard, |page| {
             match TypedPage::from(page) {
                 TypedPage::Data(page) => {
@@ -434,7 +434,7 @@ impl Tree {
         guard: &'g Guard,
     ) -> Result<IndexNodeIter<'g, 'b>> {
         let mut limit = None;
-        let mut merger = MergingIterBuilder::with_len(node.page.rank() as usize + 1);
+        let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
         self.walk_node(node, guard, |page| {
             match TypedPage::from(page) {
                 TypedPage::Index(page) => {
@@ -518,7 +518,7 @@ impl Tree {
                 Index::with_id(right_id),
             )?;
             split_page.set_ver(left_page.ver() + 1);
-            split_page.set_rank(left_page.rank() + 1);
+            split_page.set_len(left_page.len() + 1);
             split_page.set_next(left_page.into());
             split_page.set_data(left_page.is_data());
             self.update_node(left_id, left_page, split_page, guard)
@@ -569,16 +569,16 @@ impl Tree {
         };
 
         // TODO: This is a bit of a hack.
-        if parent.page.rank() == u8::MAX {
+        if parent.page.len() == u8::MAX {
             let _ = self.consolidate_index_node(&parent, guard);
             return Err(Error::Again);
         }
         index_page.set_ver(parent.page.ver());
-        index_page.set_rank(parent.page.rank() + 1);
+        index_page.set_len(parent.page.len() + 1);
         index_page.set_next(parent.page.as_addr().into());
         let page = self.update_node(parent.id, index_page.next(), index_page, guard)?;
 
-        if page.rank() as usize >= self.opts.index_delta_length {
+        if page.len() as usize >= self.opts.index_delta_length {
             parent.page = page.into();
             self.consolidate_index_node(parent, guard)
         } else {

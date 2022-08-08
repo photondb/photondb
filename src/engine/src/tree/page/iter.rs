@@ -12,11 +12,8 @@ pub trait ForwardIter {
     /// Returns the last item.
     fn last(&self) -> Option<&Self::Item>;
 
-    /// Advances to the next item.
+    /// Moves to the next item.
     fn next(&mut self) -> Option<&Self::Item>;
-
-    /// Positions the next item at the front.
-    fn rewind(&mut self);
 
     /// Skips the next `n` items.
     fn skip(&mut self, mut n: usize) {
@@ -25,10 +22,13 @@ pub trait ForwardIter {
         }
     }
 
-    /// Skips all items to the end.
+    /// Skips all items until the end.
     fn skip_all(&mut self) {
         while self.next().is_some() {}
     }
+
+    /// Rewinds the iterator back to the front.
+    fn rewind(&mut self);
 }
 
 impl<I: ForwardIter> ForwardIter for &mut I {

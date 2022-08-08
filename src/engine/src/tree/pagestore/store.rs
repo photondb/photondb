@@ -3,7 +3,7 @@ use crate::tree::{page::PagePtr, Result};
 #[derive(Copy, Clone, Debug)]
 pub struct PageInfo {
     pub ver: u64,
-    pub rank: u8,
+    pub len: u8,
     pub is_data: bool,
 }
 

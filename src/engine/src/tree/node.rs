@@ -57,10 +57,10 @@ impl PageView<'_> {
         }
     }
 
-    pub fn rank(&self) -> u8 {
+    pub fn len(&self) -> u8 {
         match self {
-            Self::Mem(page) => page.rank(),
-            Self::Disk(info, _) => info.rank,
+            Self::Mem(page) => page.len(),
+            Self::Disk(info, _) => info.len,
         }
     }
 
@@ -193,12 +193,12 @@ where
         self.iter.last()
     }
 
-    fn rewind(&mut self) {
-        self.iter.rewind();
-    }
-
     fn skip_all(&mut self) {
         self.iter.skip_all()
+    }
+
+    fn rewind(&mut self) {
+        self.iter.rewind();
     }
 }
 

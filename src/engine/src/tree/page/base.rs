@@ -1,6 +1,6 @@
 use std::{alloc::Layout, fmt, marker::PhantomData, ops::Deref, ptr::NonNull};
 
-// Page header: ver (6B) | rank (1B) | tags (1B) | next (8B) | content_size (4B) |
+// Page header: ver (6B) | len (1B) | tags (1B) | next (8B) | content_size (4B) |
 const PAGE_ALIGNMENT: usize = 8;
 const PAGE_HEADER_SIZE: usize = 20;
 const PAGE_VERSION_MAX: u64 = (1 << 48) - 1;
@@ -29,7 +29,7 @@ impl PagePtr {
         self.as_raw()
     }
 
-    unsafe fn rank_ptr(self) -> *mut u8 {
+    unsafe fn len_ptr(self) -> *mut u8 {
         self.as_raw().add(PAGE_VERSION_SIZE)
     }
 
@@ -64,14 +64,14 @@ impl PagePtr {
         }
     }
 
-    /// Returns the rank of this page in the list.
-    pub fn rank(&self) -> u8 {
-        unsafe { self.rank_ptr().read() }
+    /// Returns the length of the list.
+    pub fn len(&self) -> u8 {
+        unsafe { self.len_ptr().read() }
     }
 
-    pub fn set_rank(&mut self, rank: u8) {
+    pub fn set_len(&mut self, len: u8) {
         unsafe {
-            self.rank_ptr().write(rank);
+            self.len_ptr().write(len);
         }
     }
 
@@ -159,7 +159,7 @@ impl fmt::Debug for PagePtr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Page")
             .field("ver", &self.ver())
-            .field("rank", &self.rank())
+            .field("len", &self.len())
             .field("next", &self.next())
             .field("kind", &self.kind())
             .field("is_data", &self.is_data())
@@ -365,9 +365,9 @@ pub mod tests {
         ptr.set_ver(1);
         assert_eq!(ptr.ver(), 1);
 
-        assert_eq!(ptr.rank(), 0);
-        ptr.set_rank(2);
-        assert_eq!(ptr.rank(), 2);
+        assert_eq!(ptr.len(), 0);
+        ptr.set_len(2);
+        assert_eq!(ptr.len(), 2);
 
         assert_eq!(ptr.next(), 0);
         ptr.set_next(3);

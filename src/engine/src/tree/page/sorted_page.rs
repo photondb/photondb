@@ -152,12 +152,12 @@ where
         }
     }
 
-    /// Searches `target` in the page.
+    /// Returns the rank of `target` in the page.
     ///
     /// If `target` is found, returns `Result::Ok` with its index.
     /// If `target is not found, returns `Result::Err` with the index where `target` could be
     /// inserted while maintaining the sorted order.
-    pub fn search<T>(&self, target: &T) -> Result<usize, usize>
+    pub fn rank<T>(&self, target: &T) -> Result<usize, usize>
     where
         T: Compare<K> + ?Sized,
     {
@@ -184,22 +184,11 @@ where
     where
         T: Compare<K> + ?Sized,
     {
-        let rank = match self.search(target) {
+        let rank = match self.rank(target) {
             Ok(i) => i,
             Err(i) => i,
         };
         self.get(rank)
-    }
-
-    /// Returns the first entry that is no greater than `target`.
-    pub fn seek_back<T>(&self, target: &T) -> Option<(K, V)>
-    where
-        T: Compare<K> + ?Sized,
-    {
-        match self.search(target) {
-            Ok(i) => self.get(i),
-            Err(i) => i.checked_sub(1).and_then(|i| self.get(i)),
-        }
     }
 
     fn content_at(&self, offset: u32) -> *const u8 {
@@ -292,7 +281,7 @@ where
     T: Compare<K> + ?Sized,
 {
     fn seek(&mut self, target: &T) {
-        self.next = match self.page.search(target) {
+        self.next = match self.page.rank(target) {
             Ok(i) => i,
             Err(i) => i,
         };
@@ -318,11 +307,8 @@ mod tests {
         let page = unsafe { SortedPageRef::new(page.into()) };
         assert_eq!(page.len(), data.len());
         assert_eq!(page.seek(&0), Some((1, 0)));
-        assert_eq!(page.seek_back(&0), None);
         assert_eq!(page.seek(&3), Some((4, 0)));
-        assert_eq!(page.seek_back(&3), Some((2, 0)));
         assert_eq!(page.seek(&9), None);
-        assert_eq!(page.seek_back(&9), Some((8, 0)));
 
         let mut iter = SortedPageIter::new(page);
         assert_eq!(iter.last(), None);
