@@ -223,3 +223,42 @@ impl DecodeFrom for Index {
         Self::new(id, ver)
     }
 }
+
+pub type DataItem<'a> = (Key<'a>, Value<'a>);
+pub type IndexItem<'a> = (&'a [u8], Index);
+
+impl<K, V> Compare<(K, V)> for (K, V)
+where
+    K: Ord,
+{
+    fn compare(&self, other: &(K, V)) -> Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+impl<K, V> EncodeTo for (K, V)
+where
+    K: EncodeTo,
+    V: EncodeTo,
+{
+    fn encode_size(&self) -> usize {
+        self.0.encode_size() + self.1.encode_size()
+    }
+
+    unsafe fn encode_to(&self, w: &mut BufWriter) {
+        self.0.encode_to(w);
+        self.1.encode_to(w);
+    }
+}
+
+impl<K, V> DecodeFrom for (K, V)
+where
+    K: DecodeFrom,
+    V: DecodeFrom,
+{
+    unsafe fn decode_from(r: &mut BufReader) -> Self {
+        let k = DecodeFrom::decode_from(r);
+        let v = DecodeFrom::decode_from(r);
+        (k, v)
+    }
+}
