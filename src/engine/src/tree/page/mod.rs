@@ -1,6 +1,3 @@
-mod base;
-pub use base::{PageAlloc, PageBuilder, PageKind, PagePtr, PageRef};
-
 mod data;
 pub use data::{Compare, DecodeFrom, EncodeTo, Index, Key, Value};
 
@@ -10,6 +7,10 @@ pub use iter::{
     SeekableIter, SliceIter,
 };
 
+mod base_page;
+pub use base_page::{PageAlloc, PageBuilder, PageKind, PagePtr, PageRef};
+
+/*
 mod data_page;
 pub use data_page::{DataItem, DataPageBuilder, DataPageIter, DataPageRef};
 
@@ -37,3 +38,4 @@ impl<'a> From<PageRef<'a>> for TypedPage<'a> {
         }
     }
 }
+*/

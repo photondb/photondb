@@ -203,11 +203,6 @@ impl Index {
     pub const fn new(id: u64, ver: u64) -> Self {
         Self { id, ver }
     }
-
-    /// Creates an index with the given id and a default version.
-    pub const fn with_id(id: u64) -> Self {
-        Self::new(id, 0)
-    }
 }
 
 impl EncodeTo for Index {

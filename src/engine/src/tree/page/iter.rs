@@ -1,7 +1,6 @@
 use std::{
     cmp::{Ord, Ordering, Reverse},
     collections::BinaryHeap,
-    ops::{Deref, DerefMut},
 };
 
 use super::Compare;
@@ -9,44 +8,47 @@ use super::Compare;
 pub trait ForwardIter {
     type Item;
 
-    /// Returns the last item.
-    fn last(&self) -> Option<&Self::Item>;
+    /// Returns the current item.
+    fn current(&self) -> Option<&Self::Item>;
 
-    /// Moves to the next item.
-    fn next(&mut self) -> Option<&Self::Item>;
+    /// Rewinds back to the first item.
+    fn rewind(&mut self);
+
+    /// Advances to the next item.
+    fn next(&mut self);
 
     /// Skips the next `n` items.
     fn skip(&mut self, mut n: usize) {
-        while n > 0 && self.next().is_some() {
+        while self.current().is_some() && n > 0 {
+            self.next();
             n -= 1;
         }
     }
 
     /// Skips all items until the end.
     fn skip_all(&mut self) {
-        while self.next().is_some() {}
+        while self.current().is_some() {
+            self.next();
+        }
     }
-
-    /// Rewinds the iterator back to the front.
-    fn rewind(&mut self);
 }
 
 impl<I: ForwardIter> ForwardIter for &mut I {
     type Item = I::Item;
 
     #[inline]
-    fn last(&self) -> Option<&Self::Item> {
-        (**self).last()
-    }
-
-    #[inline]
-    fn next(&mut self) -> Option<&Self::Item> {
-        (**self).next()
+    fn current(&self) -> Option<&Self::Item> {
+        (**self).current()
     }
 
     #[inline]
     fn rewind(&mut self) {
         (**self).rewind()
+    }
+
+    #[inline]
+    fn next(&mut self) {
+        (**self).next()
     }
 
     #[inline]
@@ -79,16 +81,16 @@ where
 /// A wrapper that turns a slice into a `SeekableIter`.
 pub struct SliceIter<'a, I> {
     data: &'a [I],
-    iter: std::slice::Iter<'a, I>,
-    last: Option<&'a I>,
+    index: usize,
+    current: Option<&'a I>,
 }
 
 impl<'a, I> SliceIter<'a, I> {
     pub fn new(data: &'a [I]) -> Self {
         SliceIter {
             data,
-            iter: data.iter(),
-            last: None,
+            index: data.len(),
+            current: None,
         }
     }
 }
@@ -96,18 +98,18 @@ impl<'a, I> SliceIter<'a, I> {
 impl<'a, I> ForwardIter for SliceIter<'a, I> {
     type Item = I;
 
-    fn last(&self) -> Option<&I> {
-        self.last
-    }
-
-    fn next(&mut self) -> Option<&I> {
-        self.last = self.iter.next();
-        self.last
+    fn current(&self) -> Option<&I> {
+        self.current
     }
 
     fn rewind(&mut self) {
-        self.iter = self.data.iter();
-        self.last = None;
+        self.index = 0;
+        self.current = self.data.get(0);
+    }
+
+    fn next(&mut self) {
+        self.index += 1;
+        self.current = self.data.get(self.index);
     }
 }
 
@@ -116,12 +118,11 @@ where
     I: Ord,
 {
     fn seek(&mut self, target: &I) {
-        let index = match self.data.binary_search_by(|item| item.cmp(target)) {
+        self.index = match self.data.binary_search_by(|item| item.cmp(target)) {
             Ok(i) => i,
             Err(i) => i,
         };
-        self.iter = self.data[index..].iter();
-        self.last = None;
+        self.current = self.data.get(self.index);
     }
 }
 
@@ -140,34 +141,34 @@ impl<'a, I, const N: usize> From<&'a [I; N]> for SliceIter<'a, I> {
 /// A wrapper that turns an option into a `ForwardIter`.
 pub struct OptionIter<I> {
     next: Option<I>,
-    last: Option<I>,
+    current: Option<I>,
 }
 
 impl<I> OptionIter<I> {
     pub fn new(next: Option<I>) -> Self {
-        OptionIter { next, last: None }
+        OptionIter {
+            next,
+            current: None,
+        }
     }
 }
 
 impl<I> ForwardIter for OptionIter<I> {
     type Item = I;
 
-    fn last(&self) -> Option<&I> {
-        self.last.as_ref()
-    }
-
-    fn next(&mut self) -> Option<&I> {
-        if let Some(next) = self.next.take() {
-            self.last = Some(next);
-            self.last.as_ref()
-        } else {
-            None
-        }
+    fn current(&self) -> Option<&I> {
+        self.current.as_ref()
     }
 
     fn rewind(&mut self) {
-        if let Some(last) = self.last.take() {
-            self.next = Some(last);
+        if let Some(item) = self.next.take() {
+            self.current = Some(item);
+        }
+    }
+
+    fn next(&mut self) {
+        if let Some(item) = self.current.take() {
+            self.next = Some(item);
         }
     }
 }
@@ -193,8 +194,7 @@ impl<I> BoundedIter<I>
 where
     I: ForwardIter,
 {
-    pub fn new(mut iter: I, start: usize) -> Self {
-        iter.skip(start);
+    pub fn new(iter: I, start: usize) -> Self {
         Self { iter, start }
     }
 }
@@ -206,19 +206,19 @@ where
     type Item = I::Item;
 
     #[inline]
-    fn last(&self) -> Option<&Self::Item> {
-        self.iter.last()
-    }
-
-    #[inline]
-    fn next(&mut self) -> Option<&Self::Item> {
-        self.iter.next()
+    fn current(&self) -> Option<&Self::Item> {
+        self.iter.current()
     }
 
     #[inline]
     fn rewind(&mut self) {
         self.iter.rewind();
         self.iter.skip(self.start);
+    }
+
+    #[inline]
+    fn next(&mut self) {
+        self.iter.next()
     }
 
     #[inline]
@@ -232,7 +232,7 @@ where
     }
 }
 
-/// A wrapper to order iterators by their last items and ranks.
+/// A wrapper to order iterators by their current items and ranks.
 pub struct OrderedIter<I> {
     iter: I,
     rank: usize,
@@ -241,20 +241,6 @@ pub struct OrderedIter<I> {
 impl<I> OrderedIter<I> {
     pub fn new(iter: I, rank: usize) -> Self {
         Self { iter, rank }
-    }
-}
-
-impl<I> Deref for OrderedIter<I> {
-    type Target = I;
-
-    fn deref(&self) -> &Self::Target {
-        &self.iter
-    }
-}
-
-impl<I> DerefMut for OrderedIter<I> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.iter
     }
 }
 
@@ -281,7 +267,7 @@ where
     I::Item: Compare<I::Item>,
 {
     fn cmp(&self, other: &Self) -> Ordering {
-        let mut ord = match (self.last(), other.last()) {
+        let mut ord = match (self.current(), other.current()) {
             (Some(a), Some(b)) => a.compare(b),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
@@ -311,18 +297,18 @@ where
     type Item = I::Item;
 
     #[inline]
-    fn last(&self) -> Option<&Self::Item> {
-        self.iter.last()
-    }
-
-    #[inline]
-    fn next(&mut self) -> Option<&Self::Item> {
-        self.iter.next()
+    fn current(&self) -> Option<&Self::Item> {
+        self.iter.current()
     }
 
     #[inline]
     fn rewind(&mut self) {
         self.iter.rewind();
+    }
+
+    #[inline]
+    fn next(&mut self) {
+        self.iter.next()
     }
 
     #[inline]
@@ -375,15 +361,6 @@ where
         for iter in children.iter_mut() {
             f(&mut iter.0);
         }
-        std::mem::swap(&mut self.children, &mut children);
-    }
-
-    #[cold]
-    fn init_heap(&mut self) {
-        let mut children = std::mem::take(&mut self.children);
-        for iter in children.iter_mut() {
-            iter.0.next();
-        }
         let mut heap = BinaryHeap::from(children);
         std::mem::swap(&mut self.heap, &mut heap);
     }
@@ -403,21 +380,18 @@ where
 {
     type Item = I::Item;
 
-    fn last(&self) -> Option<&Self::Item> {
-        self.heap.peek().and_then(|iter| iter.0.last())
-    }
-
-    fn next(&mut self) -> Option<&Self::Item> {
-        if self.heap.is_empty() {
-            self.init_heap();
-        } else if let Some(mut iter) = self.heap.peek_mut() {
-            iter.0.next();
-        }
-        self.heap.peek().and_then(|iter| iter.0.last())
+    fn current(&self) -> Option<&Self::Item> {
+        self.heap.peek().and_then(|iter| iter.0.current())
     }
 
     fn rewind(&mut self) {
         self.reset(|iter| iter.rewind());
+    }
+
+    fn next(&mut self) {
+        if let Some(mut iter) = self.heap.peek_mut() {
+            iter.0.next();
+        }
     }
 
     fn skip_all(&mut self) {
@@ -482,29 +456,29 @@ mod tests {
     fn slice_iter() {
         let mut iter = SliceIter::from(&[1, 2]);
         for _ in 0..2 {
-            assert_eq!(iter.last(), None);
-            assert_eq!(iter.next(), Some(&1));
-            assert_eq!(iter.last(), Some(&1));
-            assert_eq!(iter.next(), Some(&2));
-            assert_eq!(iter.last(), Some(&2));
-            assert_eq!(iter.next(), None);
+            assert_eq!(iter.current(), None);
             iter.rewind();
+            assert_eq!(iter.current(), Some(&1));
+            iter.next();
+            assert_eq!(iter.current(), Some(&2));
+            iter.next();
+            assert_eq!(iter.current(), None);
         }
 
         iter.rewind();
         iter.skip_all();
-        assert_eq!(iter.next(), None);
+        assert_eq!(iter.current(), None);
     }
 
     #[test]
     fn option_iter() {
         let mut iter = OptionIter::from(1);
         for _ in 0..2 {
-            assert_eq!(iter.last(), None);
-            assert_eq!(iter.next(), Some(&1));
-            assert_eq!(iter.last(), Some(&1));
-            assert_eq!(iter.next(), None);
+            assert_eq!(iter.current(), None);
             iter.rewind();
+            assert_eq!(iter.current(), Some(&1));
+            iter.next();
+            assert_eq!(iter.current(), None);
         }
     }
 
@@ -513,10 +487,13 @@ mod tests {
         let iter = SliceIter::from(&[1, 2, 3]);
         let mut iter = BoundedIter::new(iter, 1);
         for _ in 0..2 {
-            assert_eq!(iter.next(), Some(&2));
-            assert_eq!(iter.next(), Some(&3));
-            assert_eq!(iter.next(), None);
+            assert_eq!(iter.current(), None);
             iter.rewind();
+            assert_eq!(iter.current(), Some(&2));
+            iter.next();
+            assert_eq!(iter.current(), Some(&3));
+            iter.next();
+            assert_eq!(iter.current(), None);
         }
     }
 
@@ -531,32 +508,35 @@ mod tests {
         }
         let mut iter = merger.build();
 
-        // Tests next() and rewind()
         for _ in 0..2 {
-            assert_eq!(iter.last(), None);
-            for item in sorted_data.iter() {
-                assert_eq!(iter.next(), Some(item));
-                assert_eq!(iter.last(), Some(item));
-            }
-            assert_eq!(iter.next(), None);
+            assert_eq!(iter.current(), None);
             iter.rewind();
+            for item in sorted_data.iter() {
+                assert_eq!(iter.current(), Some(item));
+                iter.next();
+            }
+            assert_eq!(iter.current(), None);
         }
 
-        // Tests seek()
         iter.seek(&0);
-        assert_eq!(iter.next(), Some(&1));
+        assert_eq!(iter.current(), Some(&1));
+        iter.next();
+        assert_eq!(iter.current(), Some(&1));
         iter.seek(&9);
-        assert_eq!(iter.next(), None);
+        assert_eq!(iter.current(), None);
         iter.seek(&1);
-        assert_eq!(iter.next(), Some(&1));
+        assert_eq!(iter.current(), Some(&1));
         iter.seek(&3);
-        assert_eq!(iter.next(), Some(&3));
+        assert_eq!(iter.current(), Some(&3));
+        iter.next();
+        assert_eq!(iter.current(), Some(&3));
         iter.seek(&5);
-        assert_eq!(iter.next(), Some(&7));
+        assert_eq!(iter.current(), Some(&7));
+        iter.next();
+        assert_eq!(iter.current(), Some(&8));
 
-        // Tests skip_all()
         iter.rewind();
         iter.skip_all();
-        assert_eq!(iter.next(), None);
+        assert_eq!(iter.current(), None);
     }
 }

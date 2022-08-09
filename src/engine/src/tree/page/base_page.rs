@@ -1,7 +1,7 @@
 use std::{alloc::Layout, fmt, marker::PhantomData, ops::Deref, ptr::NonNull};
 
 // Page header: ver (6B) | len (1B) | tags (1B) | next (8B) | content_size (4B) |
-const PAGE_ALIGNMENT: usize = 8;
+// TODO: maybe we can split `ver` into two halves.
 const PAGE_HEADER_SIZE: usize = 20;
 const PAGE_VERSION_MAX: u64 = (1 << 48) - 1;
 const PAGE_VERSION_SIZE: usize = 6;
@@ -11,6 +11,13 @@ const PAGE_VERSION_SIZE: usize = 6;
 pub struct PagePtr(NonNull<u8>);
 
 impl PagePtr {
+    pub const ALIGNMENT: usize = 8;
+
+    /// Returns a `Layout` for a page with the given size.
+    pub const unsafe fn layout(size: usize) -> Layout {
+        Layout::from_size_align_unchecked(size, Self::ALIGNMENT)
+    }
+
     /// Creates a new `PagePtr` if `ptr` is non-null.
     ///
     /// # Safety
@@ -299,10 +306,6 @@ pub unsafe trait PageAlloc {
     fn alloc_page(&self, size: usize) -> Result<PagePtr, Self::Error>;
 
     unsafe fn dealloc_page(&self, page: PagePtr);
-
-    fn page_layout(size: usize) -> Layout {
-        unsafe { Layout::from_size_align_unchecked(size, PAGE_ALIGNMENT) }
-    }
 }
 
 unsafe impl<T> PageAlloc for T
@@ -313,7 +316,7 @@ where
 
     fn alloc_page(&self, size: usize) -> Result<PagePtr, Self::Error> {
         unsafe {
-            let ptr = self.alloc(Self::page_layout(size));
+            let ptr = self.alloc(PagePtr::layout(size));
             PagePtr::new(ptr).ok_or(())
         }
     }
@@ -321,7 +324,7 @@ where
     unsafe fn dealloc_page(&self, page: PagePtr) {
         let ptr = page.as_raw();
         let size = self.alloc_size(ptr);
-        self.dealloc(ptr, Self::page_layout(size));
+        self.dealloc(ptr, PagePtr::layout(size));
     }
 }
 
