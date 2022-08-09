@@ -81,6 +81,12 @@ impl<'a> From<PageRef<'a>> for IndexPageRef<'a> {
     }
 }
 
+impl<'a> From<IndexPageRef<'a>> for PageRef<'a> {
+    fn from(page: IndexPageRef<'a>) -> Self {
+        page.0.into()
+    }
+}
+
 impl<'a> From<IndexPageRef<'a>> for SortedPageRef<'a, &'a [u8], Index> {
     fn from(page: IndexPageRef<'a>) -> Self {
         page.0

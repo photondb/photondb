@@ -198,6 +198,7 @@ impl Inner {
             op_conflicted: self.stats.op_conflicted.snapshot(),
             smo_succeeded: self.stats.smo_succeeded.snapshot(),
             smo_conflicted: self.stats.smo_conflicted.snapshot(),
+            num_visit_pages: self.stats.num_visit_pages.get(),
         }
     }
 }
@@ -314,6 +315,7 @@ impl Inner {
     {
         let mut page = self.load_page_with_view(node.id, node.page, guard)?;
         loop {
+            self.stats.num_visit_pages.inc();
             if f(page) {
                 break;
             }
@@ -399,9 +401,9 @@ impl Inner {
         node: &Node<'g>,
         bump: &'b Bump,
         guard: &'g Guard,
-    ) -> Result<(DataNodeIter<'g, 'b>, PageAddr)> {
-        let mut next = 0;
+    ) -> Result<(DataNodeIter<'g, 'b>, Option<PageRef<'g>>)> {
         let mut size = 0;
+        let mut last = None;
         let mut limit = None;
         let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
         self.walk_node(node, guard, |page| {
@@ -410,8 +412,8 @@ impl Inner {
                     if size < page.size() && limit.is_none() && merger.len() >= 2 {
                         return true;
                     }
-                    next = page.next();
                     size += page.size();
+                    last = Some(page.base());
                     merger.add(bump.alloc(page.into()));
                 }
                 TypedPageRef::Split(page) => {
@@ -424,7 +426,7 @@ impl Inner {
             }
             false
         })?;
-        Ok((DataNodeIter::new(merger.build(), limit), next.into()))
+        Ok((DataNodeIter::new(merger.build(), limit), last))
     }
 
     fn index_node_iter<'a: 'g, 'b, 'g>(
@@ -638,10 +640,13 @@ impl Inner {
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
         let bump = Bump::new();
-        let (mut iter, next) = self.delta_data_iter(node, &bump, guard)?;
+        let (mut iter, last) = self.delta_data_iter(node, &bump, guard)?;
         let mut page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
         page.set_ver(node.page.ver());
-        page.set_next(next.into());
+        if let Some(last) = last {
+            page.set_len(last.len());
+            page.set_next(last.next());
+        }
 
         let addr = node.page.as_addr();
         let page = self

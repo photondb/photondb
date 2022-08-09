@@ -3,6 +3,9 @@ use std::ops::Deref;
 use super::*;
 
 /// A builder to create split pages.
+///
+/// Note: We use the sorted page layout here to make it possible to split a page into multiple ones
+/// in the future.
 pub struct SplitPageBuilder(SortedPageBuilder);
 
 impl Default for SplitPageBuilder {

@@ -87,6 +87,12 @@ impl<'a> From<PageRef<'a>> for DataPageRef<'a> {
     }
 }
 
+impl<'a> From<DataPageRef<'a>> for PageRef<'a> {
+    fn from(page: DataPageRef<'a>) -> Self {
+        page.0.into()
+    }
+}
+
 impl<'a> From<DataPageRef<'a>> for SortedPageRef<'a, Key<'a>, Value<'a>> {
     fn from(page: DataPageRef<'a>) -> Self {
         page.0

@@ -7,6 +7,7 @@ pub struct Stats {
     pub op_conflicted: OpStats,
     pub smo_succeeded: SmoStats,
     pub smo_conflicted: SmoStats,
+    pub num_visit_pages: u64,
 }
 
 #[derive(Default)]
@@ -15,6 +16,7 @@ pub struct AtomicStats {
     pub op_conflicted: AtomicOpStats,
     pub smo_succeeded: AtomicSmoStats,
     pub smo_conflicted: AtomicSmoStats,
+    pub num_visit_pages: RelaxedCounter,
 }
 
 #[derive(Default, Debug)]

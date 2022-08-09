@@ -134,6 +134,11 @@ where
         }
     }
 
+    /// Returns a reference to the base page.
+    pub fn base(&self) -> PageRef<'a> {
+        self.base
+    }
+
     /// Returns the number of items in this page.
     pub fn item_len(&self) -> usize {
         self.offsets.len()
