@@ -21,7 +21,7 @@ mod tests {
     const OPTIONS: Options = Options {
         cache_size: usize::MAX,
         data_node_size: 128,
-        data_delta_length: 2,
+        data_delta_length: 4,
         index_node_size: 32,
         index_delta_length: 2,
     };
