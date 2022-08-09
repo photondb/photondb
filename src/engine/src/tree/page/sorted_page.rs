@@ -135,7 +135,7 @@ where
     }
 
     /// Returns the number of items in this page.
-    pub fn num_items(&self) -> usize {
+    pub fn item_len(&self) -> usize {
         self.offsets.len()
     }
 
@@ -164,7 +164,7 @@ where
         T: Compare<K> + ?Sized,
     {
         let mut left = 0;
-        let mut right = self.num_items();
+        let mut right = self.item_len();
         while left < right {
             let mid = (left + right) / 2;
             let key = unsafe {
@@ -235,7 +235,7 @@ where
     V: DecodeFrom,
 {
     pub fn new(page: SortedPageRef<'a, K, V>) -> Self {
-        let index = page.num_items();
+        let index = page.item_len();
         Self {
             page,
             index,
@@ -266,12 +266,12 @@ where
     }
 
     fn skip(&mut self, n: usize) {
-        self.index = self.index.saturating_add(n).min(self.page.num_items());
+        self.index = self.index.saturating_add(n).min(self.page.item_len());
         self.current = self.page.get_item(self.index);
     }
 
     fn skip_all(&mut self) {
-        self.index = self.page.num_items();
+        self.index = self.page.item_len();
         self.current = None;
     }
 }
@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(page.is_data(), true);
 
         let page = unsafe { SortedPageRef::new(page.into()) };
-        assert_eq!(page.num_items(), data.len());
+        assert_eq!(page.item_len(), data.len());
         assert_eq!(page.seek_item(&0), Some((1, 0)));
         assert_eq!(page.seek_item(&3), Some((4, 0)));
         assert_eq!(page.seek_item(&9), None);

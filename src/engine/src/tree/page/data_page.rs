@@ -57,7 +57,7 @@ impl<'a> DataPageRef<'a> {
 
     /// Returns a split key for split and an iterator over items at and after the split key.
     pub fn split(&self) -> Option<(&'a [u8], BoundedIter<DataPageIter<'a>>)> {
-        if let Some((mut sep, _)) = self.0.get_item(self.0.num_items() / 2) {
+        if let Some((mut sep, _)) = self.0.get_item(self.0.item_len() / 2) {
             // Avoids splitting items of the same raw key.
             sep.lsn = u64::MAX;
             let index = match self.0.rank_item(&sep) {

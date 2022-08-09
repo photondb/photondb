@@ -53,7 +53,7 @@ impl<'a> IndexPageRef<'a> {
 
     /// Returns a split key and an iterator over items at or after the split key.
     pub fn split(&self) -> Option<(&'a [u8], BoundedIter<IndexPageIter<'a>>)> {
-        if let Some((sep, _)) = self.0.get_item(self.0.num_items() / 2) {
+        if let Some((sep, _)) = self.0.get_item(self.0.item_len() / 2) {
             let index = match self.0.rank_item(&sep) {
                 Ok(i) => i,
                 Err(i) => i,
