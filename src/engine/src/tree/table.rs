@@ -108,7 +108,7 @@ impl Tree {
         let leaf_id = self.table.alloc().unwrap();
         let leaf_page = DataPageBuilder::default().build(&self.cache)?;
         self.table.set(leaf_id, leaf_page.into());
-        let mut root_iter = OptionIter::from(([].as_slice(), Index::with_id(leaf_id)));
+        let mut root_iter = OptionIter::from(([].as_slice(), Index::new(leaf_id, 0)));
         let root_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
         self.table.set(root_id, root_page.into());
         Ok(self)
@@ -118,11 +118,11 @@ impl Tree {
         loop {
             match self.try_get(key, guard) {
                 Ok(value) => {
-                    self.stats.op_succeed.num_gets.inc();
+                    self.stats.op_succeeded.num_gets.inc();
                     return Ok(value);
                 }
                 Err(Error::Again) => {
-                    self.stats.op_conflict.num_gets.inc();
+                    self.stats.op_conflicted.num_gets.inc();
                     continue;
                 }
                 Err(err) => return Err(err),
@@ -141,11 +141,11 @@ impl Tree {
         loop {
             match self.try_insert(key.raw, page, guard) {
                 Ok(_) => {
-                    self.stats.op_succeed.num_inserts.inc();
+                    self.stats.op_succeeded.num_inserts.inc();
                     return Ok(());
                 }
                 Err(Error::Again) => {
-                    self.stats.op_conflict.num_inserts.inc();
+                    self.stats.op_conflicted.num_inserts.inc();
                     continue;
                 }
                 Err(err) => {
@@ -194,10 +194,10 @@ impl Tree {
     fn stats(&self) -> Stats {
         Stats {
             cache_size: self.cache.size() as u64,
-            op_succeed: self.stats.op_succeed.snapshot(),
-            op_conflict: self.stats.op_conflict.snapshot(),
-            smo_succeed: self.stats.smo_succeed.snapshot(),
-            smo_conflict: self.stats.smo_conflict.snapshot(),
+            op_succeeded: self.stats.op_succeeded.snapshot(),
+            op_conflicted: self.stats.op_conflicted.snapshot(),
+            smo_succeeded: self.stats.smo_succeeded.snapshot(),
+            smo_conflicted: self.stats.smo_conflicted.snapshot(),
         }
     }
 }
@@ -333,7 +333,7 @@ impl Tree {
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.walk_node(node, guard, |page| {
-            if let TypedPage::Data(page) = page.into() {
+            if let TypedPageRef::Data(page) = page.into() {
                 if let Some((_, v)) = page.find(key) {
                     value = v.into();
                     return true;
@@ -353,7 +353,7 @@ impl Tree {
         let mut left_index = None;
         let mut right_index = None;
         self.walk_node(node, guard, |page| {
-            if let TypedPage::Index(page) = page.into() {
+            if let TypedPageRef::Index(page) = page.into() {
                 let (left, right) = page.find(key);
                 if let Some(left) = left {
                     if left.1 != NULL_INDEX {
@@ -377,13 +377,13 @@ impl Tree {
         let mut limit = None;
         let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
         self.walk_node(node, guard, |page| {
-            match TypedPage::from(page) {
-                TypedPage::Data(page) => {
+            match TypedPageRef::from(page) {
+                TypedPageRef::Data(page) => {
                     merger.add(bump.alloc(page.into()));
                 }
-                TypedPage::Split(page) => {
+                TypedPageRef::Split(page) => {
                     if limit == None {
-                        let index = page.get();
+                        let index = page.split_index();
                         limit = Some(index.0);
                     }
                 }
@@ -405,8 +405,8 @@ impl Tree {
         let mut limit = None;
         let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
         self.walk_node(node, guard, |page| {
-            match TypedPage::from(page) {
-                TypedPage::Data(page) => {
+            match TypedPageRef::from(page) {
+                TypedPageRef::Data(page) => {
                     if size < page.size() && limit.is_none() && merger.len() >= 2 {
                         return true;
                     }
@@ -414,9 +414,9 @@ impl Tree {
                     size += page.size();
                     merger.add(bump.alloc(page.into()));
                 }
-                TypedPage::Split(page) => {
+                TypedPageRef::Split(page) => {
                     if limit == None {
-                        let index = page.get();
+                        let index = page.split_index();
                         limit = Some(index.0);
                     }
                 }
@@ -436,13 +436,13 @@ impl Tree {
         let mut limit = None;
         let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
         self.walk_node(node, guard, |page| {
-            match TypedPage::from(page) {
-                TypedPage::Index(page) => {
+            match TypedPageRef::from(page) {
+                TypedPageRef::Index(page) => {
                     merger.add(bump.alloc(page.into()));
                 }
-                TypedPage::Split(page) => {
+                TypedPageRef::Split(page) => {
                     if limit == None {
-                        let index = page.get();
+                        let index = page.split_index();
                         limit = Some(index.0);
                     }
                 }
@@ -466,11 +466,11 @@ impl Tree {
             let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
             self.install_split_page(id, page, sep, right_page, guard)
                 .map(|page| {
-                    self.stats.smo_succeed.num_data_splits.inc();
+                    self.stats.smo_succeeded.num_data_splits.inc();
                     page.into()
                 })
                 .map_err(|err| {
-                    self.stats.smo_conflict.num_data_splits.inc();
+                    self.stats.smo_conflicted.num_data_splits.inc();
                     err
                 })
         } else {
@@ -490,11 +490,11 @@ impl Tree {
             let right_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
             self.install_split_page(id, page, sep, right_page, guard)
                 .map(|page| {
-                    self.stats.smo_succeed.num_index_splits.inc();
+                    self.stats.smo_succeeded.num_index_splits.inc();
                     page.into()
                 })
                 .map_err(|err| {
-                    self.stats.smo_conflict.num_index_splits.inc();
+                    self.stats.smo_conflicted.num_index_splits.inc();
                     err
                 })
         } else {
@@ -515,7 +515,7 @@ impl Tree {
             let mut split_page = SplitPageBuilder::default().build_with_index(
                 &self.cache,
                 split_key,
-                Index::with_id(right_id),
+                Index::new(right_id, 0),
             )?;
             split_page.set_ver(left_page.ver() + 1);
             split_page.set_len(left_page.len() + 1);
@@ -538,8 +538,8 @@ impl Tree {
         guard: &'g Guard,
     ) -> Result<()> {
         let page = self.load_page_with_view(node.id, node.page, guard)?;
-        if let TypedPage::Split(page) = page.into() {
-            let split_index = page.get();
+        if let TypedPageRef::Split(page) = page.into() {
+            let split_index = page.split_index();
             if let Some(mut parent) = parent {
                 self.reconcile_split_node(&node, &mut parent, split_index, guard)?;
             } else {
@@ -648,11 +648,11 @@ impl Tree {
             .update_node(node.id, addr, page, guard)
             .map(|page| {
                 self.dealloc_page_list(addr, page.next(), guard);
-                self.stats.smo_succeed.num_data_consolidates.inc();
+                self.stats.smo_succeeded.num_data_consolidates.inc();
                 page
             })
             .map_err(|err| {
-                self.stats.smo_conflict.num_data_consolidates.inc();
+                self.stats.smo_conflicted.num_data_consolidates.inc();
                 err
             })?;
 
@@ -678,11 +678,11 @@ impl Tree {
             .update_node(node.id, addr, page, guard)
             .map(|page| {
                 self.dealloc_page_list(addr, page.next(), guard);
-                self.stats.smo_succeed.num_index_consolidates.inc();
+                self.stats.smo_succeeded.num_index_consolidates.inc();
                 page
             })
             .map_err(|err| {
-                self.stats.smo_conflict.num_index_consolidates.inc();
+                self.stats.smo_conflicted.num_index_consolidates.inc();
                 err
             })?;
 
@@ -716,8 +716,10 @@ impl Iter {
         F: FnMut((&[u8], &[u8])),
     {
         while let Some(mut iter) = self.next_iter()? {
-            while let Some(item) = iter.next() {
+            iter.rewind();
+            while let Some(item) = iter.current() {
                 f(item);
+                iter.next();
             }
         }
         Ok(())
@@ -728,7 +730,7 @@ impl Iter {
             self.bump.reset();
             self.guard.repin();
             let node = loop {
-                // TODO
+                // TODO: refactor this
                 match self.tree.find_leaf(&cursor, &self.guard) {
                     Ok((node, _)) => break node,
                     Err(Error::Again) => continue,
@@ -747,6 +749,7 @@ impl Iter {
 struct NodeIter<'a> {
     iter: DataNodeIter<'a, 'a>,
     last: &'a [u8],
+    current: Option<(&'a [u8], &'a [u8])>,
 }
 
 impl<'a> NodeIter<'a> {
@@ -754,18 +757,35 @@ impl<'a> NodeIter<'a> {
         Self {
             iter,
             last: [].as_slice(),
+            current: None,
         }
     }
 
-    fn next(&mut self) -> Option<(&[u8], &[u8])> {
-        while let Some((k, v)) = self.iter.next() {
+    fn current(&self) -> Option<(&[u8], &[u8])> {
+        self.current
+    }
+
+    fn rewind(&mut self) {
+        self.iter.rewind();
+        self.find_next();
+    }
+
+    fn next(&mut self) {
+        self.iter.next();
+        self.find_next();
+    }
+
+    fn find_next(&mut self) {
+        while let Some((k, v)) = self.iter.current() {
             if self.last != k.raw {
                 self.last = k.raw;
                 if let Value::Put(value) = v {
-                    return Some((k.raw, value));
+                    self.current = Some((k.raw, value));
+                    return;
                 }
             }
+            self.iter.next();
         }
-        None
+        self.current = None;
     }
 }

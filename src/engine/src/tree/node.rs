@@ -103,6 +103,16 @@ where
     pub fn new(iter: T, limit: Option<&'a [u8]>) -> Self {
         Self { iter, limit }
     }
+
+    fn find_next(&mut self) {
+        if let Some((key, _)) = self.iter.current() {
+            if let Some(limit) = self.limit {
+                if key.raw >= limit {
+                    self.iter.skip_all();
+                }
+            }
+        }
+    }
 }
 
 impl<'a, T> ForwardIter for DataIter<'a, T>
@@ -117,17 +127,12 @@ where
 
     fn rewind(&mut self) {
         self.iter.rewind();
+        self.find_next();
     }
 
     fn next(&mut self) {
         self.iter.next();
-        if let Some((key, _)) = self.iter.current() {
-            if let Some(limit) = self.limit {
-                if key.raw >= limit {
-                    self.iter.skip_all();
-                }
-            }
-        }
+        self.find_next();
     }
 
     fn skip_all(&mut self) {
@@ -141,6 +146,7 @@ where
 {
     fn seek(&mut self, target: &Key<'_>) {
         self.iter.seek(target);
+        self.find_next();
     }
 }
 
@@ -164,24 +170,8 @@ where
             last_index: NULL_INDEX,
         }
     }
-}
 
-impl<'a, T> ForwardIter for IndexIter<'a, T>
-where
-    T: ForwardIter<Item = IndexItem<'a>>,
-{
-    type Item = IndexItem<'a>;
-
-    fn current(&self) -> Option<&Self::Item> {
-        self.iter.current()
-    }
-
-    fn rewind(&mut self) {
-        self.iter.rewind();
-    }
-
-    fn next(&mut self) {
-        self.iter.next();
+    fn find_next(&mut self) {
         while let Some(&(key, index)) = self.iter.current() {
             if let Some(limit) = self.limit {
                 if key >= limit {
@@ -196,6 +186,27 @@ where
             self.iter.next();
         }
     }
+}
+
+impl<'a, T> ForwardIter for IndexIter<'a, T>
+where
+    T: ForwardIter<Item = IndexItem<'a>>,
+{
+    type Item = IndexItem<'a>;
+
+    fn current(&self) -> Option<&Self::Item> {
+        self.iter.current()
+    }
+
+    fn rewind(&mut self) {
+        self.iter.rewind();
+        self.find_next();
+    }
+
+    fn next(&mut self) {
+        self.iter.next();
+        self.find_next();
+    }
 
     fn skip_all(&mut self) {
         self.iter.skip_all()
@@ -208,6 +219,7 @@ where
 {
     fn seek(&mut self, target: &[u8]) {
         self.iter.seek(target);
+        self.find_next();
     }
 }
 

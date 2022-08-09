@@ -255,14 +255,14 @@ where
         self.current.as_ref()
     }
 
-    fn next(&mut self) {
-        self.index += 1;
-        self.current = self.page.get_item(self.index);
-    }
-
     fn rewind(&mut self) {
         self.index = 0;
         self.current = self.page.get_item(0);
+    }
+
+    fn next(&mut self) {
+        self.index += 1;
+        self.current = self.page.get_item(self.index);
     }
 
     fn skip(&mut self, n: usize) {

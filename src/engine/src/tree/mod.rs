@@ -1,6 +1,9 @@
 mod error;
 pub use error::{Error, Result};
 
+mod table;
+pub use table::{Options, Table};
+
 mod stats;
 pub use stats::Stats;
 
@@ -9,11 +12,6 @@ mod page;
 mod pagecache;
 mod pagestore;
 mod pagetable;
-
-/*
-mod table;
-pub use table::{Options, Table};
-
 
 #[cfg(test)]
 mod tests {
@@ -133,4 +131,3 @@ mod tests {
         }
     }
 }
-*/
