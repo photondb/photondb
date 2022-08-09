@@ -36,14 +36,14 @@ impl Default for Options {
 
 #[derive(Clone)]
 pub struct Table {
-    tree: Arc<Tree>,
+    inner: Arc<Inner>,
 }
 
 impl Table {
     pub fn open(opts: Options) -> Result<Self> {
-        let tree = Tree::open(opts)?;
+        let inner = Inner::open(opts)?;
         Ok(Self {
-            tree: Arc::new(tree),
+            inner: Arc::new(inner),
         })
     }
 
@@ -53,33 +53,33 @@ impl Table {
     {
         let guard = &pin();
         let key = Key::new(key, lsn);
-        self.tree.get(key, guard).map(f)
+        self.inner.get(key, guard).map(f)
     }
 
     pub fn iter(&self) -> Iter {
-        Iter::new(self.tree.clone())
+        Iter::new(self.inner.clone())
     }
 
     pub fn put(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
         let guard = &pin();
         let key = Key::new(key, lsn);
         let value = Value::Put(value);
-        self.tree.insert(key, value, guard)
+        self.inner.insert(key, value, guard)
     }
 
     pub fn delete(&self, key: &[u8], lsn: u64) -> Result<()> {
         let guard = &pin();
         let key = Key::new(key, lsn);
         let value = Value::Delete;
-        self.tree.insert(key, value, guard)
+        self.inner.insert(key, value, guard)
     }
 
     pub fn stats(&self) -> Stats {
-        self.tree.stats()
+        self.inner.stats()
     }
 }
 
-struct Tree {
+struct Inner {
     opts: Options,
     table: PageTable,
     cache: PageCache,
@@ -87,19 +87,19 @@ struct Tree {
     stats: AtomicStats,
 }
 
-impl Tree {
+impl Inner {
     fn open(opts: Options) -> Result<Self> {
         let table = PageTable::default();
         let cache = PageCache::default();
         let store = PageStore::open()?;
-        let tree = Self {
+        let inner = Self {
             opts,
             table,
             cache,
             store,
             stats: AtomicStats::default(),
         };
-        tree.init()
+        inner.init()
     }
 
     fn init(self) -> Result<Self> {
@@ -202,7 +202,7 @@ impl Tree {
     }
 }
 
-impl Tree {
+impl Inner {
     fn page_addr(&self, id: u64) -> PageAddr {
         self.table.get(id).into()
     }
@@ -273,7 +273,7 @@ impl Tree {
     }
 }
 
-impl Tree {
+impl Inner {
     fn find_leaf<'a: 'g, 'g>(
         &'a self,
         key: &[u8],
@@ -695,18 +695,18 @@ impl Tree {
 }
 
 pub struct Iter {
-    tree: Arc<Tree>,
     bump: Bump,
     guard: Guard,
+    inner: Arc<Inner>,
     cursor: Option<Vec<u8>>,
 }
 
 impl Iter {
-    fn new(tree: Arc<Tree>) -> Self {
+    fn new(inner: Arc<Inner>) -> Self {
         Self {
-            tree,
             bump: Bump::new(),
             guard: pin(),
+            inner,
             cursor: Some(Vec::new()),
         }
     }
@@ -731,14 +731,14 @@ impl Iter {
             self.guard.repin();
             let node = loop {
                 // TODO: refactor this
-                match self.tree.find_leaf(&cursor, &self.guard) {
+                match self.inner.find_leaf(&cursor, &self.guard) {
                     Ok((node, _)) => break node,
                     Err(Error::Again) => continue,
                     Err(err) => return Err(err),
                 }
             };
             self.cursor = node.range.end.map(|end| end.to_vec());
-            let iter = self.tree.data_node_iter(&node, &self.bump, &self.guard)?;
+            let iter = self.inner.data_node_iter(&node, &self.bump, &self.guard)?;
             Ok(Some(NodeIter::new(iter)))
         } else {
             Ok(None)
