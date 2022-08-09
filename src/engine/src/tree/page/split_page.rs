@@ -36,8 +36,8 @@ impl<'a> SplitPageRef<'a> {
         Self(unsafe { SortedPageRef::new(base) })
     }
 
-    pub fn get(&self) -> (&'a [u8], Index) {
-        self.0.get(0).unwrap()
+    pub fn split_index(&self) -> (&'a [u8], Index) {
+        self.0.get_item(0).unwrap()
     }
 }
 

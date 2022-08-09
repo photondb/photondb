@@ -20,7 +20,7 @@ impl Default for IndexPageBuilder {
 }
 
 impl IndexPageBuilder {
-    /// Builds an index page with entries from the given iterator.
+    /// Builds an index page with items from the given iterator.
     pub fn build_from_iter<'a, A, I>(self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
@@ -40,28 +40,34 @@ impl<'a> IndexPageRef<'a> {
         Self(unsafe { SortedPageRef::new(base) })
     }
 
-    /// Returns the two entries that enclose `target`.
+    /// Returns the two items that enclose `target`.
     pub fn find(&self, target: &[u8]) -> (Option<IndexItem<'a>>, Option<IndexItem<'a>>) {
-        match self.0.rank(&target) {
-            Ok(i) => (self.0.get(i), i.checked_add(1).and_then(|i| self.0.get(i))),
-            Err(i) => (i.checked_sub(1).and_then(|i| self.0.get(i)), self.0.get(i)),
+        match self.0.rank_item(&target) {
+            Ok(i) => (
+                self.0.get_item(i),
+                i.checked_add(1).and_then(|i| self.0.get_item(i)),
+            ),
+            Err(i) => (
+                i.checked_sub(1).and_then(|i| self.0.get_item(i)),
+                self.0.get_item(i),
+            ),
         }
     }
 
-    /// Creates an iterator over entries in this page.
+    /// Creates an iterator over items of this page.
     pub fn iter(&self) -> IndexPageIter<'a> {
         IndexPageIter::new(self.clone())
     }
 
-    /// Returns a split key and an iterator over the entries at or after the split key.
+    /// Returns a split key and an iterator over items at or after the split key.
     pub fn split(&self) -> Option<(&'a [u8], BoundedIter<IndexPageIter<'a>>)> {
-        if let Some((sep, _)) = self.0.get(self.0.len() / 2) {
-            let rank = match self.0.rank(&sep) {
+        if let Some((sep, _)) = self.0.get_item(self.0.num_items() / 2) {
+            let index = match self.0.rank_item(&sep) {
                 Ok(i) => i,
                 Err(i) => i,
             };
-            if rank > 0 {
-                let iter = BoundedIter::new(self.iter(), rank);
+            if index > 0 {
+                let iter = BoundedIter::new(self.iter(), index);
                 return Some((sep, iter));
             }
         }
@@ -83,7 +89,7 @@ impl<'a> From<PageRef<'a>> for IndexPageRef<'a> {
     }
 }
 
-/// An iterator over the entries of an index page.
+/// An iterator over items of an index page.
 pub struct IndexPageIter<'a>(SortedPageIter<'a, &'a [u8], Index>);
 
 impl<'a> IndexPageIter<'a> {
@@ -105,18 +111,18 @@ impl<'a> ForwardIter for IndexPageIter<'a> {
     type Item = IndexItem<'a>;
 
     #[inline]
-    fn last(&self) -> Option<&Self::Item> {
-        self.0.last()
-    }
-
-    #[inline]
-    fn next(&mut self) -> Option<&Self::Item> {
-        self.0.next()
+    fn current(&self) -> Option<&Self::Item> {
+        self.0.current()
     }
 
     #[inline]
     fn rewind(&mut self) {
         self.0.rewind();
+    }
+
+    #[inline]
+    fn next(&mut self) {
+        self.0.next()
     }
 
     #[inline]

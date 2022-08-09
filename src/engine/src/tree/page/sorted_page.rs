@@ -3,7 +3,7 @@ use std::{cmp::Ordering, marker::PhantomData, mem::size_of, ops::Deref};
 use super::*;
 use crate::util::{BufReader, BufWriter};
 
-/// A builder to create pages with sorted entries.
+/// A builder to create pages with sorted items.
 pub struct SortedPageBuilder {
     base: PageBuilder,
     offsets_size: usize,
@@ -59,15 +59,17 @@ impl SortedPageBuilder {
         V: EncodeTo,
     {
         iter.rewind();
-        while let Some((k, v)) = iter.next() {
+        while let Some((k, v)) = iter.current() {
             self.add(k, v);
+            iter.next();
         }
         let ptr = self.base.build(alloc, self.size());
         ptr.map(|ptr| unsafe {
             let mut buf = SortedPageBuf::new(ptr, self);
             iter.rewind();
-            while let Some((k, v)) = iter.next() {
+            while let Some((k, v)) = iter.current() {
                 buf.add(k, v);
+                iter.next();
             }
             ptr
         })
@@ -132,13 +134,13 @@ where
         }
     }
 
-    /// Returns the number of entries.
-    pub fn len(&self) -> usize {
+    /// Returns the number of items in this page.
+    pub fn num_items(&self) -> usize {
         self.offsets.len()
     }
 
-    /// Returns the entry at the given position.
-    pub fn get(&self, index: usize) -> Option<(K, V)> {
+    /// Returns the item at the given position.
+    pub fn get_item(&self, index: usize) -> Option<(K, V)> {
         if let Some(&offset) = self.offsets.get(index) {
             unsafe {
                 let ptr = self.content_at(offset);
@@ -152,17 +154,17 @@ where
         }
     }
 
-    /// Returns the rank of `target` in the page.
+    /// Returns the rank of `target` in this page.
     ///
     /// If `target` is found, returns `Result::Ok` with its index.
     /// If `target is not found, returns `Result::Err` with the index where `target` could be
     /// inserted while maintaining the sorted order.
-    pub fn rank<T>(&self, target: &T) -> Result<usize, usize>
+    pub fn rank_item<T>(&self, target: &T) -> Result<usize, usize>
     where
         T: Compare<K> + ?Sized,
     {
         let mut left = 0;
-        let mut right = self.len();
+        let mut right = self.num_items();
         while left < right {
             let mid = (left + right) / 2;
             let key = unsafe {
@@ -179,16 +181,16 @@ where
         Err(left)
     }
 
-    /// Returns the first entry that is no less than `target`.
-    pub fn seek<T>(&self, target: &T) -> Option<(K, V)>
+    /// Returns the first item that is no less than `target`.
+    pub fn seek_item<T>(&self, target: &T) -> Option<(K, V)>
     where
         T: Compare<K> + ?Sized,
     {
-        let rank = match self.rank(target) {
+        let index = match self.rank_item(target) {
             Ok(i) => i,
             Err(i) => i,
         };
-        self.get(rank)
+        self.get_item(index)
     }
 
     fn content_at(&self, offset: u32) -> *const u8 {
@@ -223,8 +225,8 @@ impl<'a, K, V> From<SortedPageRef<'a, K, V>> for PageRef<'a> {
 
 pub struct SortedPageIter<'a, K, V> {
     page: SortedPageRef<'a, K, V>,
-    next: usize,
-    last: Option<(K, V)>,
+    index: usize,
+    current: Option<(K, V)>,
 }
 
 impl<'a, K, V> SortedPageIter<'a, K, V>
@@ -233,10 +235,11 @@ where
     V: DecodeFrom,
 {
     pub fn new(page: SortedPageRef<'a, K, V>) -> Self {
+        let index = page.num_items();
         Self {
             page,
-            next: 0,
-            last: None,
+            index,
+            current: None,
         }
     }
 }
@@ -248,29 +251,28 @@ where
 {
     type Item = (K, V);
 
-    fn last(&self) -> Option<&Self::Item> {
-        self.last.as_ref()
+    fn current(&self) -> Option<&Self::Item> {
+        self.current.as_ref()
     }
 
-    fn next(&mut self) -> Option<&Self::Item> {
-        self.last = self.page.get(self.next).map(|next| {
-            self.next += 1;
-            next
-        });
-        self.last.as_ref()
+    fn next(&mut self) {
+        self.index += 1;
+        self.current = self.page.get_item(self.index);
     }
 
     fn rewind(&mut self) {
-        self.next = 0;
-        self.last = None;
+        self.index = 0;
+        self.current = self.page.get_item(0);
     }
 
     fn skip(&mut self, n: usize) {
-        self.next = self.next.saturating_add(n).min(self.page.len());
+        self.index = self.index.saturating_add(n).min(self.page.num_items());
+        self.current = self.page.get_item(self.index);
     }
 
     fn skip_all(&mut self) {
-        self.next = self.page.len();
+        self.index = self.page.num_items();
+        self.current = None;
     }
 }
 
@@ -281,11 +283,11 @@ where
     T: Compare<K> + ?Sized,
 {
     fn seek(&mut self, target: &T) {
-        self.next = match self.page.rank(target) {
+        self.index = match self.page.rank_item(target) {
             Ok(i) => i,
             Err(i) => i,
         };
-        self.last = None;
+        self.current = self.page.get_item(self.index);
     }
 }
 
@@ -305,19 +307,20 @@ mod tests {
         assert_eq!(page.is_data(), true);
 
         let page = unsafe { SortedPageRef::new(page.into()) };
-        assert_eq!(page.len(), data.len());
-        assert_eq!(page.seek(&0), Some((1, 0)));
-        assert_eq!(page.seek(&3), Some((4, 0)));
-        assert_eq!(page.seek(&9), None);
+        assert_eq!(page.num_items(), data.len());
+        assert_eq!(page.seek_item(&0), Some((1, 0)));
+        assert_eq!(page.seek_item(&3), Some((4, 0)));
+        assert_eq!(page.seek_item(&9), None);
 
         let mut iter = SortedPageIter::new(page);
-        assert_eq!(iter.last(), None);
         for _ in 0..2 {
-            for item in data.iter() {
-                assert_eq!(iter.next(), Some(item));
-                assert_eq!(iter.last(), Some(item));
-            }
+            assert_eq!(iter.current(), None);
             iter.rewind();
+            for item in data.iter() {
+                assert_eq!(iter.current(), Some(item));
+                iter.next();
+            }
+            assert_eq!(iter.current(), None);
         }
     }
 }

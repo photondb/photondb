@@ -28,7 +28,7 @@ impl DataPageBuilder {
         self.0.build(alloc)
     }
 
-    /// Builds a data page with entries from the given iterator.
+    /// Builds a data page with items from the given iterator.
     pub fn build_from_iter<'a, A, I>(self, alloc: &A, iter: &mut I) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
@@ -48,9 +48,9 @@ impl<'a> DataPageRef<'a> {
         Self(unsafe { SortedPageRef::new(base) })
     }
 
-    /// Returns the entry that matches `target`.
+    /// Returns the item that matches `target`.
     pub fn find(&self, target: Key<'_>) -> Option<DataItem<'a>> {
-        if let Some((k, v)) = self.0.seek(&target) {
+        if let Some((k, v)) = self.0.seek_item(&target) {
             if k.raw == target.raw {
                 return Some((k, v));
             }
@@ -58,22 +58,22 @@ impl<'a> DataPageRef<'a> {
         None
     }
 
-    /// Creates an iterator over entries in this page.
+    /// Creates an iterator over items of this page.
     pub fn iter(&self) -> DataPageIter<'a> {
         DataPageIter::new(self.clone())
     }
 
-    /// Returns a split key for split and an iterator over entries at and after the split key.
+    /// Returns a split key for split and an iterator over items at and after the split key.
     pub fn split(&self) -> Option<(&'a [u8], BoundedIter<DataPageIter<'a>>)> {
-        if let Some((mut sep, _)) = self.0.get(self.0.len() / 2) {
-            // Avoids splitting entries of the same raw key.
+        if let Some((mut sep, _)) = self.0.get_item(self.0.num_items() / 2) {
+            // Avoids splitting items of the same raw key.
             sep.lsn = u64::MAX;
-            let rank = match self.0.rank(&sep) {
+            let index = match self.0.rank_item(&sep) {
                 Ok(i) => i,
                 Err(i) => i,
             };
-            if rank > 0 {
-                let iter = BoundedIter::new(self.iter(), rank);
+            if index > 0 {
+                let iter = BoundedIter::new(self.iter(), index);
                 return Some((sep.raw, iter));
             }
         }
@@ -95,7 +95,7 @@ impl<'a> From<PageRef<'a>> for DataPageRef<'a> {
     }
 }
 
-/// An iterator over the entries of a data page.
+/// An iterator over items of a data page.
 pub struct DataPageIter<'a>(SortedPageIter<'a, Key<'a>, Value<'a>>);
 
 impl<'a> DataPageIter<'a> {
@@ -117,18 +117,18 @@ impl<'a> ForwardIter for DataPageIter<'a> {
     type Item = DataItem<'a>;
 
     #[inline]
-    fn last(&self) -> Option<&Self::Item> {
-        self.0.last()
-    }
-
-    #[inline]
-    fn next(&mut self) -> Option<&Self::Item> {
-        self.0.next()
+    fn current(&self) -> Option<&Self::Item> {
+        self.0.current()
     }
 
     #[inline]
     fn rewind(&mut self) {
         self.0.rewind();
+    }
+
+    #[inline]
+    fn next(&mut self) {
+        self.0.next()
     }
 
     #[inline]
