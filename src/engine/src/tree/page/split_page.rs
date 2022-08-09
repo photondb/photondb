@@ -1,21 +1,62 @@
+use std::ops::Deref;
+
 use super::*;
 
 /// A builder to create split pages.
-pub struct SplitPageBuilder(DeltaPageBuilder);
+pub struct SplitPageBuilder(SortedPageBuilder);
 
 impl Default for SplitPageBuilder {
     fn default() -> Self {
-        Self(DeltaPageBuilder::new(PageKind::Split, true))
+        Self(SortedPageBuilder::new(PageKind::Split, true))
     }
 }
 
 impl SplitPageBuilder {
-    pub fn build<A>(self, alloc: &A, item: &IndexItem<'_>) -> Result<PagePtr, A::Error>
+    pub fn build_with_index<A>(
+        self,
+        alloc: &A,
+        key: &[u8],
+        index: Index,
+    ) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
     {
-        self.0.build(alloc, item)
+        let mut iter = OptionIter::from((key, index));
+        self.0.build_from_iter(alloc, &mut iter)
     }
 }
 
-pub type SplitPageRef<'a> = DeltaPageRef<'a, IndexItem<'a>>;
+/// An immutable reference to a split page.
+#[derive(Clone)]
+pub struct SplitPageRef<'a>(SortedPageRef<'a, &'a [u8], Index>);
+
+impl<'a> SplitPageRef<'a> {
+    pub fn new(base: PageRef<'a>) -> Self {
+        assert_eq!(base.kind(), PageKind::Split);
+        Self(unsafe { SortedPageRef::new(base) })
+    }
+
+    pub fn split_index(&self) -> (&'a [u8], Index) {
+        self.0.get_item(0).unwrap()
+    }
+}
+
+impl<'a> Deref for SplitPageRef<'a> {
+    type Target = PageRef<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+
+impl<'a> From<PageRef<'a>> for SplitPageRef<'a> {
+    fn from(base: PageRef<'a>) -> Self {
+        Self::new(base)
+    }
+}
+
+impl<'a> From<SplitPageRef<'a>> for PageRef<'a> {
+    fn from(page: SplitPageRef<'a>) -> Self {
+        page.0.into()
+    }
+}

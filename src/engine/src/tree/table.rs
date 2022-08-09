@@ -383,7 +383,7 @@ impl Tree {
                 }
                 TypedPageRef::Split(page) => {
                     if limit == None {
-                        let index = page.item();
+                        let index = page.split_index();
                         limit = Some(index.0);
                     }
                 }
@@ -416,7 +416,7 @@ impl Tree {
                 }
                 TypedPageRef::Split(page) => {
                     if limit == None {
-                        let index = page.item();
+                        let index = page.split_index();
                         limit = Some(index.0);
                     }
                 }
@@ -442,7 +442,7 @@ impl Tree {
                 }
                 TypedPageRef::Split(page) => {
                     if limit == None {
-                        let index = page.item();
+                        let index = page.split_index();
                         limit = Some(index.0);
                     }
                 }
@@ -512,8 +512,11 @@ impl Tree {
     ) -> Result<SplitPageRef<'g>> {
         let right_id = self.install_node(right_page)?;
         let split = || -> Result<SplitPageRef<'_>> {
-            let split_index = (split_key, Index::new(right_id, 0));
-            let mut split_page = SplitPageBuilder::default().build(&self.cache, &split_index)?;
+            let mut split_page = SplitPageBuilder::default().build_with_index(
+                &self.cache,
+                split_key,
+                Index::new(right_id, 0),
+            )?;
             split_page.set_ver(left_page.ver() + 1);
             split_page.set_len(left_page.len() + 1);
             split_page.set_next(left_page.into());
@@ -536,7 +539,7 @@ impl Tree {
     ) -> Result<()> {
         let page = self.load_page_with_view(node.id, node.page, guard)?;
         if let TypedPageRef::Split(page) = page.into() {
-            let split_index = page.item();
+            let split_index = page.split_index();
             if let Some(mut parent) = parent {
                 self.reconcile_split_node(&node, &mut parent, split_index, guard)?;
             } else {

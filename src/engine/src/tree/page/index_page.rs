@@ -1,6 +1,14 @@
-use std::ops::Deref;
+use std::{cmp::Ordering, ops::Deref};
 
 use super::*;
+
+pub type IndexItem<'a> = (&'a [u8], Index);
+
+impl<'a> Compare<IndexItem<'a>> for IndexItem<'a> {
+    fn compare(&self, other: &Self) -> Ordering {
+        self.0.cmp(other.0)
+    }
+}
 
 /// A builder to create index pages.
 pub struct IndexPageBuilder(SortedPageBuilder);

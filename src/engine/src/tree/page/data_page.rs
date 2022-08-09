@@ -1,6 +1,14 @@
-use std::ops::Deref;
+use std::{cmp::Ordering, ops::Deref};
 
 use super::*;
+
+pub type DataItem<'a> = (Key<'a>, Value<'a>);
+
+impl<'a> Compare<DataItem<'a>> for DataItem<'a> {
+    fn compare(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+    }
+}
 
 /// A builder to create data pages.
 pub struct DataPageBuilder(SortedPageBuilder);
