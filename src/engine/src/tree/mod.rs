@@ -1,7 +1,3 @@
-/*
-mod table;
-pub use table::{Options, Table};
-
 mod error;
 pub use error::{Error, Result};
 
@@ -13,6 +9,11 @@ mod page;
 mod pagecache;
 mod pagestore;
 mod pagetable;
+
+/*
+mod table;
+pub use table::{Options, Table};
+
 
 #[cfg(test)]
 mod tests {
@@ -133,5 +134,3 @@ mod tests {
     }
 }
 */
-
-mod page;

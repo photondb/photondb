@@ -1,7 +1,7 @@
 use super::{page::*, pagestore::PageInfo, pagetable::PageTable};
 
-pub const NULL_INDEX: Index = Index::with_id(PageTable::NAN);
-pub const ROOT_INDEX: Index = Index::with_id(PageTable::MIN);
+pub const NULL_INDEX: Index = Index::new(PageTable::NAN, 0);
+pub const ROOT_INDEX: Index = Index::new(PageTable::MIN, 0);
 
 #[derive(Clone, Debug)]
 pub struct Node<'a> {
@@ -111,23 +111,23 @@ where
 {
     type Item = DataItem<'a>;
 
-    fn last(&self) -> Option<&Self::Item> {
-        self.iter.last()
+    fn current(&self) -> Option<&Self::Item> {
+        self.iter.current()
     }
 
-    fn next(&mut self) -> Option<&Self::Item> {
-        if let Some((key, _)) = self.iter.next() {
+    fn rewind(&mut self) {
+        self.iter.rewind();
+    }
+
+    fn next(&mut self) {
+        self.iter.next();
+        if let Some((key, _)) = self.iter.current() {
             if let Some(limit) = self.limit {
                 if key.raw >= limit {
                     self.iter.skip_all();
                 }
             }
         }
-        self.iter.last()
-    }
-
-    fn rewind(&mut self) {
-        self.iter.rewind();
     }
 
     fn skip_all(&mut self) {
@@ -172,33 +172,33 @@ where
 {
     type Item = IndexItem<'a>;
 
-    fn last(&self) -> Option<&Self::Item> {
-        self.iter.last()
+    fn current(&self) -> Option<&Self::Item> {
+        self.iter.current()
     }
 
-    fn next(&mut self) -> Option<&Self::Item> {
-        while let Some(&(key, index)) = self.iter.next() {
+    fn rewind(&mut self) {
+        self.iter.rewind();
+    }
+
+    fn next(&mut self) {
+        self.iter.next();
+        while let Some(&(key, index)) = self.iter.current() {
             if let Some(limit) = self.limit {
                 if key >= limit {
                     self.iter.skip_all();
                     break;
                 }
             }
-            if index == NULL_INDEX || index.id == self.last_index.id {
-                continue;
+            if index != NULL_INDEX && index.id != self.last_index.id {
+                self.last_index = index;
+                break;
             }
-            self.last_index = index;
-            break;
+            self.iter.next();
         }
-        self.iter.last()
     }
 
     fn skip_all(&mut self) {
         self.iter.skip_all()
-    }
-
-    fn rewind(&mut self) {
-        self.iter.rewind();
     }
 }
 

@@ -40,7 +40,7 @@ unsafe impl PageAlloc for PageCache {
 
     fn alloc_page(&self, size: usize) -> Result<PagePtr> {
         unsafe {
-            let ptr = ALLOC.alloc(Self::page_layout(size));
+            let ptr = ALLOC.alloc(PagePtr::layout(size));
             let size = ALLOC.alloc_size(ptr);
             self.size.fetch_add(size, Ordering::Relaxed);
             PagePtr::new(ptr).ok_or(Error::Alloc)
@@ -51,6 +51,6 @@ unsafe impl PageAlloc for PageCache {
         let ptr = page.as_raw();
         let size = ALLOC.alloc_size(ptr);
         self.size.fetch_sub(size, Ordering::Relaxed);
-        ALLOC.dealloc(ptr, Self::page_layout(size));
+        ALLOC.dealloc(ptr, PagePtr::layout(size));
     }
 }
