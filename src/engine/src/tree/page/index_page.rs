@@ -1,14 +1,6 @@
-use std::{cmp::Ordering, ops::Deref};
+use std::ops::Deref;
 
 use super::*;
-
-pub type IndexItem<'a> = (&'a [u8], Index);
-
-impl<'a> Compare<IndexItem<'a>> for IndexItem<'a> {
-    fn compare(&self, other: &Self) -> Ordering {
-        self.0.cmp(other.0)
-    }
-}
 
 /// A builder to create index pages.
 pub struct IndexPageBuilder(SortedPageBuilder);
@@ -56,7 +48,7 @@ impl<'a> IndexPageRef<'a> {
 
     /// Creates an iterator over items of this page.
     pub fn iter(&self) -> IndexPageIter<'a> {
-        IndexPageIter::new(self.clone())
+        IndexPageIter::new(self.0.clone())
     }
 
     /// Returns a split key and an iterator over items at or after the split key.
@@ -89,56 +81,10 @@ impl<'a> From<PageRef<'a>> for IndexPageRef<'a> {
     }
 }
 
-/// An iterator over items of an index page.
-pub struct IndexPageIter<'a>(SortedPageIter<'a, &'a [u8], Index>);
-
-impl<'a> IndexPageIter<'a> {
-    pub fn new(page: IndexPageRef<'a>) -> Self {
-        Self(SortedPageIter::new(page.0))
+impl<'a> From<IndexPageRef<'a>> for SortedPageRef<'a, &'a [u8], Index> {
+    fn from(page: IndexPageRef<'a>) -> Self {
+        page.0
     }
 }
 
-impl<'a, T> From<T> for IndexPageIter<'a>
-where
-    T: Into<IndexPageRef<'a>>,
-{
-    fn from(page: T) -> Self {
-        Self::new(page.into())
-    }
-}
-
-impl<'a> ForwardIter for IndexPageIter<'a> {
-    type Item = IndexItem<'a>;
-
-    #[inline]
-    fn current(&self) -> Option<&Self::Item> {
-        self.0.current()
-    }
-
-    #[inline]
-    fn rewind(&mut self) {
-        self.0.rewind();
-    }
-
-    #[inline]
-    fn next(&mut self) {
-        self.0.next()
-    }
-
-    #[inline]
-    fn skip(&mut self, n: usize) {
-        self.0.skip(n);
-    }
-
-    #[inline]
-    fn skip_all(&mut self) {
-        self.0.skip_all();
-    }
-}
-
-impl<'a> SeekableIter<[u8]> for IndexPageIter<'a> {
-    #[inline]
-    fn seek(&mut self, target: &[u8]) {
-        self.0.seek(target);
-    }
-}
+pub type IndexPageIter<'a> = SortedPageIter<'a, &'a [u8], Index>;

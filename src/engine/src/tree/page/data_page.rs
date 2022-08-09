@@ -1,14 +1,6 @@
-use std::{cmp::Ordering, ops::Deref};
+use std::ops::Deref;
 
 use super::*;
-
-pub type DataItem<'a> = (Key<'a>, Value<'a>);
-
-impl<'a> Compare<DataItem<'a>> for DataItem<'a> {
-    fn compare(&self, other: &Self) -> Ordering {
-        self.0.cmp(&other.0)
-    }
-}
 
 /// A builder to create data pages.
 pub struct DataPageBuilder(SortedPageBuilder);
@@ -60,7 +52,7 @@ impl<'a> DataPageRef<'a> {
 
     /// Creates an iterator over items of this page.
     pub fn iter(&self) -> DataPageIter<'a> {
-        DataPageIter::new(self.clone())
+        DataPageIter::new(self.0.clone())
     }
 
     /// Returns a split key for split and an iterator over items at and after the split key.
@@ -95,56 +87,10 @@ impl<'a> From<PageRef<'a>> for DataPageRef<'a> {
     }
 }
 
-/// An iterator over items of a data page.
-pub struct DataPageIter<'a>(SortedPageIter<'a, Key<'a>, Value<'a>>);
-
-impl<'a> DataPageIter<'a> {
-    pub fn new(page: DataPageRef<'a>) -> Self {
-        Self(SortedPageIter::new(page.0))
+impl<'a> From<DataPageRef<'a>> for SortedPageRef<'a, Key<'a>, Value<'a>> {
+    fn from(page: DataPageRef<'a>) -> Self {
+        page.0
     }
 }
 
-impl<'a, T> From<T> for DataPageIter<'a>
-where
-    T: Into<DataPageRef<'a>>,
-{
-    fn from(page: T) -> Self {
-        Self::new(page.into())
-    }
-}
-
-impl<'a> ForwardIter for DataPageIter<'a> {
-    type Item = DataItem<'a>;
-
-    #[inline]
-    fn current(&self) -> Option<&Self::Item> {
-        self.0.current()
-    }
-
-    #[inline]
-    fn rewind(&mut self) {
-        self.0.rewind();
-    }
-
-    #[inline]
-    fn next(&mut self) {
-        self.0.next()
-    }
-
-    #[inline]
-    fn skip(&mut self, n: usize) {
-        self.0.skip(n)
-    }
-
-    #[inline]
-    fn skip_all(&mut self) {
-        self.0.skip_all()
-    }
-}
-
-impl<'a> SeekableIter<Key<'_>> for DataPageIter<'a> {
-    #[inline]
-    fn seek(&mut self, target: &Key<'_>) {
-        self.0.seek(target);
-    }
-}
+pub type DataPageIter<'a> = SortedPageIter<'a, Key<'a>, Value<'a>>;

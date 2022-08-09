@@ -223,3 +223,15 @@ impl DecodeFrom for Index {
         Self::new(id, ver)
     }
 }
+
+pub type DataItem<'a> = (Key<'a>, Value<'a>);
+pub type IndexItem<'a> = (&'a [u8], Index);
+
+impl<K, V> Compare<(K, V)> for (K, V)
+where
+    K: Ord,
+{
+    fn compare(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+    }
+}

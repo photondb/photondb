@@ -291,6 +291,17 @@ where
     }
 }
 
+impl<'a, K, V, T> From<T> for SortedPageIter<'a, K, V>
+where
+    K: DecodeFrom + Ord,
+    V: DecodeFrom,
+    T: Into<SortedPageRef<'a, K, V>>,
+{
+    fn from(page: T) -> Self {
+        Self::new(page.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
