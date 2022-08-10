@@ -294,7 +294,7 @@ impl Inner {
                 self.reconcile_node(node, parent, guard)?;
                 return Err(Error::Again);
             }
-            if node.page.is_data() {
+            if node.page.is_leaf() {
                 return Ok((node, parent));
             }
             let (child, right) = self.lookup_index(key, &node, guard)?;
@@ -520,7 +520,7 @@ impl Inner {
             split_page.set_ver(left_page.ver() + 1);
             split_page.set_len(left_page.len() + 1);
             split_page.set_next(left_page.into());
-            split_page.set_data(left_page.is_data());
+            split_page.set_leaf(left_page.is_leaf());
             self.update_node(left_id, left_page, split_page, guard)
                 .map(SplitPageRef::from)
         };

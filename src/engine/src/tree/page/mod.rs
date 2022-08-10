@@ -31,8 +31,13 @@ pub enum TypedPageRef<'a> {
 impl<'a> From<PageRef<'a>> for TypedPageRef<'a> {
     fn from(page: PageRef<'a>) -> Self {
         match page.kind() {
-            PageKind::Data => Self::Data(page.into()),
-            PageKind::Index => Self::Index(page.into()),
+            PageKind::Data => {
+                if page.is_leaf() {
+                    Self::Data(page.into())
+                } else {
+                    Self::Index(page.into())
+                }
+            }
             PageKind::Split => Self::Split(page.into()),
         }
     }

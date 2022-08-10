@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bitflags = "1.3"
 bumpalo = { version = "3.10", features = ["collections"] }
 crossbeam-epoch = "0.9"
 jemallocator = "0.5"

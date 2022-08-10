@@ -10,7 +10,7 @@ pub struct SplitPageBuilder(SortedPageBuilder);
 
 impl Default for SplitPageBuilder {
     fn default() -> Self {
-        Self(SortedPageBuilder::new(PageKind::Split, true))
+        Self(SortedPageBuilder::new(PageKind::Split))
     }
 }
 
@@ -18,13 +18,13 @@ impl SplitPageBuilder {
     pub fn build_with_index<A>(
         self,
         alloc: &A,
-        key: &[u8],
+        start: &[u8],
         index: Index,
     ) -> Result<PagePtr, A::Error>
     where
         A: PageAlloc,
     {
-        let mut iter = OptionIter::from((key, index));
+        let mut iter = OptionIter::from((start, index));
         self.0.build_from_iter(alloc, &mut iter)
     }
 }
@@ -35,7 +35,7 @@ pub struct SplitPageRef<'a>(SortedPageRef<'a, &'a [u8], Index>);
 
 impl<'a> SplitPageRef<'a> {
     pub fn new(base: PageRef<'a>) -> Self {
-        assert_eq!(base.kind(), PageKind::Split);
+        debug_assert_eq!(base.kind(), PageKind::Split);
         Self(unsafe { SortedPageRef::new(base) })
     }
 

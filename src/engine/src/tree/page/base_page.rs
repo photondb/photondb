@@ -1,5 +1,7 @@
 use std::{alloc::Layout, fmt, marker::PhantomData, ops::Deref, ptr::NonNull};
 
+use bitflags::bitflags;
+
 // Page header: ver (6B) | len (1B) | tags (1B) | next (8B) | content_size (4B) |
 // TODO: maybe we can split `ver` into two halves.
 const PAGE_HEADER_SIZE: usize = 20;
@@ -113,13 +115,22 @@ impl PagePtr {
         self.set_tags(self.tags().with_kind(kind));
     }
 
-    /// Returns true if this page is a data page.
-    pub fn is_data(&self) -> bool {
-        self.tags().is_data()
+    /// Returns true if this page is a leaf page.
+    pub fn is_leaf(&self) -> bool {
+        self.tags().is_leaf()
     }
 
-    pub fn set_data(&mut self, is_data: bool) {
-        self.set_tags(self.tags().with_data(is_data));
+    pub fn set_leaf(&mut self, is_leaf: bool) {
+        self.set_tags(self.tags().with_leaf(is_leaf));
+    }
+
+    /// Returns true if this page is locked.
+    pub fn is_locked(&self) -> bool {
+        self.tags().is_locked()
+    }
+
+    pub fn set_locked(&mut self, is_locked: bool) {
+        self.set_tags(self.tags().with_locked(is_locked));
     }
 
     /// Sets the header of this page to default.
@@ -169,7 +180,8 @@ impl fmt::Debug for PagePtr {
             .field("len", &self.len())
             .field("next", &self.next())
             .field("kind", &self.kind())
-            .field("is_data", &self.is_data())
+            .field("is_leaf", &self.is_leaf())
+            .field("is_locked", &self.is_locked())
             .field("content_size", &self.content_size())
             .finish()
     }
@@ -222,47 +234,64 @@ impl fmt::Debug for PageRef<'_> {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default)]
-struct PageTags(u8);
-
-/// The most significant bit indicates whether this page is a data page.
-const PAGE_KIND_MASK: u8 = 0x7F;
+bitflags! {
+    #[derive(Default)]
+    struct PageTags: u8 {
+        const LEAF = 0b1000_0000;
+        const LOCK = 0b0100_0000;
+        const KIND = 0b0011_1111;
+    }
+}
 
 impl PageTags {
-    const fn kind(self) -> PageKind {
-        PageKind::new(self.0 & PAGE_KIND_MASK)
+    fn kind(self) -> PageKind {
+        PageKind::new((self & Self::KIND).bits())
     }
 
-    const fn with_kind(self, kind: PageKind) -> Self {
-        Self(self.data() | kind as u8)
+    fn with_kind(self, kind: PageKind) -> Self {
+        self | Self::from(kind as u8)
     }
 
-    const fn data(self) -> u8 {
-        self.0 & !PAGE_KIND_MASK
+    const fn is_leaf(self) -> bool {
+        self.contains(Self::LEAF)
     }
 
-    const fn is_data(self) -> bool {
-        self.data() == 0
-    }
-
-    const fn with_data(self, is_data: bool) -> Self {
-        if is_data {
-            Self(self.0 & PAGE_KIND_MASK)
+    fn with_leaf(self, is_leaf: bool) -> Self {
+        if is_leaf {
+            self | Self::LEAF
         } else {
-            Self(self.0 | !PAGE_KIND_MASK)
+            self & !Self::LEAF
+        }
+    }
+
+    const fn is_locked(self) -> bool {
+        self.contains(Self::LOCK)
+    }
+
+    fn with_locked(self, is_locked: bool) -> Self {
+        if is_locked {
+            self | Self::LOCK
+        } else {
+            self & !Self::LOCK
         }
     }
 }
 
 impl From<u8> for PageTags {
     fn from(v: u8) -> Self {
-        Self(v)
+        unsafe { Self::from_bits_unchecked(v) }
     }
 }
 
 impl From<PageTags> for u8 {
     fn from(tags: PageTags) -> Self {
-        tags.0
+        tags.bits()
+    }
+}
+
+impl From<PageKind> for PageTags {
+    fn from(kind: PageKind) -> Self {
+        Self::from(kind as u8)
     }
 }
 
@@ -270,20 +299,17 @@ impl From<PageTags> for u8 {
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PageKind {
-    /// Pages with data entries.
+    /// Pages with data.
     Data = 0,
-    /// Pages with index entries.
-    Index = 1,
     /// Pages with split information.
-    Split = 2,
+    Split = 1,
 }
 
 impl PageKind {
     const fn new(kind: u8) -> Self {
         match kind {
             0 => Self::Data,
-            1 => Self::Index,
-            2 => Self::Split,
+            1 => Self::Split,
             _ => panic!("invalid page kind"),
         }
     }
@@ -329,14 +355,20 @@ where
 }
 
 /// A builder to create base pages.
+#[derive(Default)]
 pub struct PageBuilder {
-    kind: PageKind,
-    is_data: bool,
+    tags: PageTags,
 }
 
 impl PageBuilder {
-    pub fn new(kind: PageKind, is_data: bool) -> Self {
-        Self { kind, is_data }
+    pub fn new(kind: PageKind) -> Self {
+        Self { tags: kind.into() }
+    }
+
+    pub fn with_leaf(kind: PageKind, is_leaf: bool) -> Self {
+        Self {
+            tags: PageTags::from(kind).with_leaf(is_leaf),
+        }
     }
 
     pub fn build<A>(&self, alloc: &A, content_size: usize) -> Result<PagePtr, A::Error>
@@ -346,8 +378,7 @@ impl PageBuilder {
         let ptr = alloc.alloc_page(PAGE_HEADER_SIZE + content_size);
         ptr.map(|mut ptr| {
             ptr.set_default();
-            ptr.set_kind(self.kind);
-            ptr.set_data(self.is_data);
+            ptr.set_tags(self.tags);
             ptr.set_content_size(content_size);
             ptr
         })
@@ -380,9 +411,12 @@ pub mod tests {
         ptr.set_kind(PageKind::Split);
         assert_eq!(ptr.kind(), PageKind::Split);
 
-        assert_eq!(ptr.is_data(), true);
-        ptr.set_data(false);
-        assert_eq!(ptr.is_data(), false);
+        assert_eq!(ptr.is_leaf(), false);
+        ptr.set_leaf(true);
+        assert_eq!(ptr.is_leaf(), true);
+        assert_eq!(ptr.is_locked(), false);
+        ptr.set_locked(true);
+        assert_eq!(ptr.is_locked(), true);
 
         assert_eq!(ptr.content_size(), 0);
         ptr.set_content_size(4);

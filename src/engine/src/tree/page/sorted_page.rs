@@ -4,6 +4,7 @@ use super::*;
 use crate::util::{BufReader, BufWriter};
 
 /// A builder to create pages with sorted items.
+#[derive(Default)]
 pub struct SortedPageBuilder {
     base: PageBuilder,
     offsets_size: usize,
@@ -13,11 +14,17 @@ pub struct SortedPageBuilder {
 // TODO: Optimizes the page layout with
 // https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf
 impl SortedPageBuilder {
-    pub fn new(kind: PageKind, is_data: bool) -> Self {
+    pub fn new(kind: PageKind) -> Self {
         Self {
-            base: PageBuilder::new(kind, is_data),
-            offsets_size: 0,
-            payload_size: 0,
+            base: PageBuilder::new(kind),
+            ..Default::default()
+        }
+    }
+
+    pub fn with_leaf(kind: PageKind, is_leaf: bool) -> Self {
+        Self {
+            base: PageBuilder::with_leaf(kind, is_leaf),
+            ..Default::default()
         }
     }
 
@@ -316,11 +323,10 @@ mod tests {
     fn data_page() {
         let data = [(1, 0), (2, 0), (4, 0), (7, 0), (8, 0)];
         let mut iter = SliceIter::from(&data);
-        let page = SortedPageBuilder::new(PageKind::Data, true)
+        let page = SortedPageBuilder::new(PageKind::Data)
             .build_from_iter(&Sysalloc, &mut iter)
             .unwrap();
         assert_eq!(page.kind(), PageKind::Data);
-        assert_eq!(page.is_data(), true);
 
         let page = unsafe { SortedPageRef::new(page.into()) };
         assert_eq!(page.item_len(), data.len());
