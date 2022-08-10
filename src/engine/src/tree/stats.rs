@@ -44,6 +44,7 @@ pub struct SmoStats {
     pub num_data_consolidates: u64,
     pub num_index_splits: u64,
     pub num_index_consolidates: u64,
+    pub num_switch_pages: u64,
 }
 
 #[derive(Default)]
@@ -52,6 +53,7 @@ pub struct AtomicSmoStats {
     pub num_data_consolidates: RelaxedCounter,
     pub num_index_splits: RelaxedCounter,
     pub num_index_consolidates: RelaxedCounter,
+    pub num_switch_pages: RelaxedCounter,
 }
 
 impl AtomicSmoStats {
@@ -61,6 +63,7 @@ impl AtomicSmoStats {
             num_data_consolidates: self.num_data_consolidates.get(),
             num_index_splits: self.num_index_splits.get(),
             num_index_consolidates: self.num_index_consolidates.get(),
+            num_switch_pages: self.num_switch_pages.get(),
         }
     }
 }

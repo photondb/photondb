@@ -22,8 +22,8 @@ mod tests {
         cache_size: usize::MAX,
         data_node_size: 128,
         data_delta_length: 4,
-        index_node_size: 32,
-        index_delta_length: 2,
+        index_node_size: 64,
+        index_delta_length: 3,
     };
 
     static SEQUENCE: RelaxedCounter = RelaxedCounter::new(0);

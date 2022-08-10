@@ -62,11 +62,11 @@ fn bench(c: &mut Criterion) {
     c.bench_function("get", |b| {
         b.iter_custom(|iters| custom_bench_function(iters, &table, get))
     });
-    // println!("Get {:?}", table.stats());
+    println!("Get {:?}", table.stats());
     c.bench_function("put", |b| {
         b.iter_custom(|iters| custom_bench_function(iters, &table, put))
     });
-    // println!("Put {:?}", table.stats());
+    println!("Put {:?}", table.stats());
 }
 
 criterion_main!(benches);

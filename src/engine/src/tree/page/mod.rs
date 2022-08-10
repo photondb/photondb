@@ -19,6 +19,9 @@ pub use index_page::{IndexPageBuilder, IndexPageIter, IndexPageRef};
 mod split_page;
 pub use split_page::{SplitPageBuilder, SplitPageRef};
 
+mod switch_page;
+pub use switch_page::{SwitchPageBuilder, SwitchPageRef};
+
 mod sorted_page;
 pub use sorted_page::{SortedPageBuilder, SortedPageIter, SortedPageRef};
 
@@ -26,10 +29,15 @@ pub enum TypedPageRef<'a> {
     Data(DataPageRef<'a>),
     Index(IndexPageRef<'a>),
     Split(SplitPageRef<'a>),
+    Switch(SwitchPageRef<'a>),
 }
 
-impl<'a> From<PageRef<'a>> for TypedPageRef<'a> {
-    fn from(page: PageRef<'a>) -> Self {
+impl<'a, T> From<T> for TypedPageRef<'a>
+where
+    T: Into<PageRef<'a>>,
+{
+    fn from(page: T) -> Self {
+        let page = page.into();
         match page.kind() {
             PageKind::Data => {
                 if page.is_leaf() {
@@ -39,6 +47,7 @@ impl<'a> From<PageRef<'a>> for TypedPageRef<'a> {
                 }
             }
             PageKind::Split => Self::Split(page.into()),
+            PageKind::Switch => Self::Switch(page.into()),
         }
     }
 }

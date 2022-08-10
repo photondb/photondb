@@ -73,7 +73,7 @@ impl PagePtr {
         }
     }
 
-    /// Returns the length of the list.
+    /// Returns the length of the delta chain.
     pub fn len(&self) -> u8 {
         unsafe { self.len_ptr().read() }
     }
@@ -84,7 +84,7 @@ impl PagePtr {
         }
     }
 
-    /// Returns the address of the next page in the list.
+    /// Returns the address of the next page in the chain.
     pub fn next(&self) -> u64 {
         let next = unsafe { self.next_ptr().read() };
         u64::from_le(next)
@@ -303,6 +303,8 @@ pub enum PageKind {
     Data = 0,
     /// Pages with split information.
     Split = 1,
+    /// Pages with switch information.
+    Switch = 2,
 }
 
 impl PageKind {
@@ -310,6 +312,7 @@ impl PageKind {
         match kind {
             0 => Self::Data,
             1 => Self::Split,
+            2 => Self::Switch,
             _ => panic!("invalid page kind"),
         }
     }

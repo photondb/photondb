@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use photondb_engine::tree::*;
 
 const NUM_KEYS: u64 = 10_000_000;
-const NUM_STEPS: u64 = 100;
+const NUM_STEPS: u64 = 1000;
 const NUM_OPS_PER_STEP: u64 = 100;
 const STEP: usize = (NUM_KEYS / NUM_STEPS) as usize;
 
@@ -38,9 +38,9 @@ fn bench(c: &mut Criterion) {
     println!("{:?}", table.stats());
 
     c.bench_function("get", |b| b.iter(|| bench_function(&table, get)));
-    // println!("Get {:?}", table.stats());
+    println!("Get {:?}", table.stats());
     c.bench_function("put", |b| b.iter(|| bench_function(&table, put)));
-    // println!("Put {:?}", table.stats());
+    println!("Put {:?}", table.stats());
 }
 
 criterion_main!(benches);
