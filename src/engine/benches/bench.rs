@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use photondb_engine::tree::*;
 
 const NUM_KEYS: u64 = 10_000_000;
-const NUM_STEPS: u64 = 1000;
+const NUM_STEPS: u64 = 100;
 const NUM_OPS_PER_STEP: u64 = 100;
 const STEP: usize = (NUM_KEYS / NUM_STEPS) as usize;
 

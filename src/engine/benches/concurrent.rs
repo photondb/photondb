@@ -4,7 +4,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use photondb_engine::tree::*;
 
 const NUM_KEYS: u64 = 10_000_000;
-const NUM_STEPS: u64 = 1000;
+const NUM_STEPS: u64 = 100;
 const NUM_OPS_PER_STEP: u64 = 100;
 const STEP: usize = (NUM_KEYS / NUM_STEPS) as usize;
 const NUM_THREADS: usize = 4;
@@ -37,16 +37,18 @@ where
     F: Fn(&Table, u64) + Copy + Send + 'static,
 {
     let start = Instant::now();
-    for _ in 0..iters {
-        let mut handles = Vec::new();
-        for _ in 0..NUM_THREADS {
-            let table = table.clone();
-            let handle = std::thread::spawn(move || bench_function(&table, func));
-            handles.push(handle);
-        }
-        for handle in handles {
-            handle.join().unwrap();
-        }
+    let mut handles = Vec::new();
+    for _ in 0..NUM_THREADS {
+        let table = table.clone();
+        let handle = std::thread::spawn(move || {
+            for _ in 0..iters {
+                bench_function(&table, func);
+            }
+        });
+        handles.push(handle);
+    }
+    for handle in handles {
+        handle.join().unwrap();
     }
     start.elapsed()
 }
