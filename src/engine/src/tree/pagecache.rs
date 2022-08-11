@@ -28,21 +28,24 @@ impl PageCache {
 }
 
 #[cfg(miri)]
+use std::alloc::System;
+#[cfg(miri)]
 unsafe impl PageAlloc for PageCache {
     type Error = Error;
 
     fn alloc_page(&self, size: usize) -> Result<PagePtr> {
         unsafe {
-            let ptr = std::alloc::alloc(PagePtr::layout(size));
+            let ptr = System.alloc(PagePtr::layout(size));
             self.size.fetch_add(size, Ordering::Relaxed);
             PagePtr::new(ptr).ok_or(Error::Alloc)
         }
     }
 
-    fn dealloc_page(&self, page: PagePtr) {
+    unsafe fn dealloc_page(&self, page: PagePtr) {
         let ptr = page.as_raw();
-        self.size.fetch_sub(page.size(), Ordering::Relaxed);
-        std::alloc::dealloc(ptr, PagePtr::layout(size));
+        let size = page.size();
+        self.size.fetch_sub(size, Ordering::Relaxed);
+        System.dealloc(ptr, PagePtr::layout(size));
     }
 }
 

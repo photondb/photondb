@@ -9,7 +9,6 @@ use std::{
 use bitflags::bitflags;
 
 // Page header: ver (6B) | len (1B) | tags (1B) | next (8B) | content_size (4B) |
-// TODO: maybe we can split `ver` into two halves.
 const PAGE_HEADER_SIZE: usize = 20;
 const PAGE_VERSION_MAX: u64 = (1 << 48) - 1;
 const PAGE_VERSION_SIZE: usize = 6;
@@ -63,10 +62,9 @@ impl PagePtr {
     /// Returns the version of this page.
     pub fn ver(&self) -> u64 {
         unsafe {
-            let mut ver = 0u64;
-            let ver_ptr = &mut ver as *mut u64 as *mut u8;
-            ver_ptr.copy_from_nonoverlapping(self.ver_ptr(), PAGE_VERSION_SIZE);
-            u64::from_le(ver)
+            let ptr = self.ver_ptr() as *mut u64;
+            let ver = u64::from_le(ptr.read());
+            ver & PAGE_VERSION_MAX
         }
     }
 
@@ -282,7 +280,7 @@ impl From<PageKind> for PageTags {
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PageKind {
-    /// Pages with data.
+    /// Pages with value.
     Data = 0,
     /// Pages with split information.
     Split = 1,
