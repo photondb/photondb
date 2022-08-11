@@ -11,8 +11,6 @@ jemallocator = "0.5"
 thiserror = "1.0"
 log = "0.4"
 env_logger = "0.9"
-clap = { version = "3.2", features = ["derive"] }
-rand = "0.8"
 
 [dev-dependencies]
 criterion = "0.3"

@@ -441,13 +441,11 @@ version = "0.1.0"
 dependencies = [
  "bitflags",
  "bumpalo",
- "clap 3.2.16",
  "criterion",
  "crossbeam-epoch",
  "env_logger",
  "jemallocator",
  "log",
- "rand",
  "thiserror",
 ]
 
