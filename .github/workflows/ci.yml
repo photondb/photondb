@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  style:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - uses: Swatinem/rust-cache@v1
+    - name: Check format
+      uses: actions-rs/cargo@v1
+      with:
+        command: fmt
+        args: --all -- --check
+    - name: Check clippy
+      uses: actions-rs/cargo@v1
+      with:
+        command: clippy
+        args: --workspace --tests --benches --examples --all-features
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - uses: Swatinem/rust-cache@v1
+    - name: Run unit tests
+      uses: actions-rs/cargo@v1
+      with:
+        command: test
+        args: --workspace
+    - name: Run miri tests
+      uses: actions-rs/cargo@v1
+      with:
+        command: miri test
+        args: --workspace
+      env:
+        MIRIFLAGS: -Zmiri-ignore-leaks -Zmiri-permissive-provenance
