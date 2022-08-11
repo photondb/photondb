@@ -19,7 +19,7 @@ struct Config {
     pub num_kvs: u64,
     #[clap(long, default_value = "8")]
     pub key_len: usize,
-    #[clap(long, default_value = "100")]
+    #[clap(long, default_value = "8")]
     pub value_len: usize,
     #[clap(long, default_value = "1000000")]
     pub num_ops: u64,
@@ -58,10 +58,12 @@ impl Bench {
         }
         let elapsed = start.elapsed().as_secs_f64();
 
-        let stats = self.inner.stats.snapshot();
-        println!("{:#?}", stats);
+        let table_stats = self.inner.table.stats();
+        let bench_stats = self.inner.stats.snapshot();
         println!("{:#?}", self.inner.cfg);
-        println!("{} ops/sec", stats.num_ops as f64 / elapsed);
+        println!("Bench {:#?}", bench_stats);
+        println!("Table {:#?}", table_stats);
+        println!("{} ops/sec", bench_stats.num_ops as f64 / elapsed);
     }
 }
 
@@ -95,7 +97,7 @@ impl Inner {
         let mut kbuf = vec![0; self.cfg.key_len];
         let mut vbuf = vec![0; self.cfg.value_len];
         let mut workload = Workload::new(&self.cfg);
-        while self.stats.num_ops.get() < self.cfg.num_ops {
+        while self.stats.num_ops.inc() < self.cfg.num_ops {
             let k = workload.rand_num();
             workload.fill_with_num(k, &mut kbuf);
             match workload.rand_op() {
@@ -109,7 +111,6 @@ impl Inner {
                     self.stats.num_puts.inc();
                 }
             }
-            self.stats.num_ops.inc();
         }
     }
 }
@@ -121,7 +122,8 @@ struct Table {
 
 impl Table {
     fn open() -> Self {
-        let table = tree::Table::open(tree::Options::default()).unwrap();
+        let opts = tree::Options::default();
+        let table = tree::Table::open(opts).unwrap();
         Self {
             table,
             sequence: Counter::new(0),
@@ -134,6 +136,10 @@ impl Table {
 
     fn put(&self, k: &[u8], v: &[u8]) {
         self.table.put(k, self.sequence.inc(), v).unwrap();
+    }
+
+    fn stats(&self) -> tree::Stats {
+        self.table.stats()
     }
 }
 
