@@ -7,7 +7,7 @@ use std::{
 };
 
 use clap::Parser;
-use photondb_engine::tree;
+use photondb_engine::tree::{Options, Table};
 use rand::{
     distributions::{Distribution, Uniform, WeightedIndex},
     rngs::ThreadRng,
@@ -58,27 +58,27 @@ impl Bench {
         }
         let elapsed = start.elapsed().as_secs_f64();
 
-        let table_stats = self.inner.table.stats();
-        let bench_stats = self.inner.stats.snapshot();
         println!("{:#?}", self.inner.cfg);
-        println!("Bench {:#?}", bench_stats);
-        println!("Table {:#?}", table_stats);
-        println!("{} ops/sec", bench_stats.num_ops as f64 / elapsed);
+        println!("Bench {:#?}", self.inner.stats);
+        println!("Table {:#?}", self.inner.table.stats());
+
+        let num_ops = self.inner.stats.num_ops.get();
+        println!("{} ops/sec", num_ops as f64 / elapsed);
     }
 }
 
 struct Inner {
     cfg: Config,
     table: Table,
-    stats: AtomicStats,
+    stats: Stats,
 }
 
 impl Inner {
     fn new(cfg: Config) -> Self {
         Self {
             cfg,
-            table: Table::open(),
-            stats: AtomicStats::default(),
+            table: Table::open(Options::default()).unwrap(),
+            stats: Stats::default(),
         }
     }
 
@@ -89,7 +89,7 @@ impl Inner {
         for k in 0..self.cfg.num_kvs {
             workload.fill_with_num(k, &mut kbuf);
             workload.fill_with_num(k, &mut vbuf);
-            self.table.put(&kbuf, &vbuf);
+            self.table.put(&kbuf, &vbuf).unwrap();
         }
     }
 
@@ -102,44 +102,16 @@ impl Inner {
             workload.fill_with_num(k, &mut kbuf);
             match workload.rand_op() {
                 Op::Get => {
-                    self.table.get(&kbuf);
+                    self.table.get(&kbuf, |_| {}).unwrap();
                     self.stats.num_gets.inc();
                 }
                 Op::Put => {
                     workload.fill_with_num(k, &mut vbuf);
-                    self.table.put(&kbuf, &vbuf);
+                    self.table.put(&kbuf, &vbuf).unwrap();
                     self.stats.num_puts.inc();
                 }
             }
         }
-    }
-}
-
-struct Table {
-    table: tree::Table,
-    sequence: Counter,
-}
-
-impl Table {
-    fn open() -> Self {
-        let opts = tree::Options::default();
-        let table = tree::Table::open(opts).unwrap();
-        Self {
-            table,
-            sequence: Counter::new(0),
-        }
-    }
-
-    fn get(&self, k: &[u8]) {
-        self.table.get(k, self.sequence.inc(), |_| {}).unwrap();
-    }
-
-    fn put(&self, k: &[u8], v: &[u8]) {
-        self.table.put(k, self.sequence.inc(), v).unwrap();
-    }
-
-    fn stats(&self) -> tree::Stats {
-        self.table.stats()
     }
 }
 
@@ -183,31 +155,14 @@ impl Workload {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Stats {
-    num_ops: u64,
-    num_gets: u64,
-    num_puts: u64,
-}
-
-#[derive(Default)]
-struct AtomicStats {
     num_ops: Counter,
     num_gets: Counter,
     num_puts: Counter,
 }
 
-impl AtomicStats {
-    fn snapshot(&self) -> Stats {
-        Stats {
-            num_ops: self.num_ops.get(),
-            num_gets: self.num_gets.get(),
-            num_puts: self.num_puts.get(),
-        }
-    }
-}
-
+#[derive(Debug)]
 struct Counter(AtomicU64);
 
 impl Default for Counter {

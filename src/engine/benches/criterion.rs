@@ -13,13 +13,13 @@ const NUM_KEYS: u64 = 10_000_000;
 fn get(table: &Table, k: u64) {
     let buf = k.to_be_bytes();
     let key = buf.as_slice();
-    table.get(key, 0, |_| {}).unwrap();
+    table.get(key, |_| {}).unwrap();
 }
 
 fn put(table: &Table, k: u64) {
     let buf = k.to_be_bytes();
     let key = buf.as_slice();
-    table.put(key, 0, key).unwrap();
+    table.put(key, key).unwrap();
 }
 
 struct Bench {

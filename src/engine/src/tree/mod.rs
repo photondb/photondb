@@ -2,7 +2,7 @@ mod error;
 pub use error::{Error, Result};
 
 mod table;
-pub use table::{Options, Table};
+pub use table::{RawTable, Table};
 
 mod stats;
 pub use stats::Stats;
@@ -12,11 +12,33 @@ mod page;
 mod pagecache;
 mod pagestore;
 mod pagetable;
+#[allow(clippy::module_inception)]
+mod tree;
+
+#[derive(Clone, Debug)]
+pub struct Options {
+    pub cache_size: usize,
+    pub data_node_size: usize,
+    pub data_delta_length: usize,
+    pub index_node_size: usize,
+    pub index_delta_length: usize,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            cache_size: usize::MAX,
+            data_node_size: 8 * 1024,
+            data_delta_length: 8,
+            index_node_size: 4 * 1024,
+            index_delta_length: 4,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::Sequencer;
 
     const OPTIONS: Options = Options {
         cache_size: usize::MAX,
@@ -25,8 +47,6 @@ mod tests {
         index_node_size: 64,
         index_delta_length: 3,
     };
-
-    static SEQUENCE: Sequencer = Sequencer::new(0);
 
     fn init() {
         let _ = env_logger::builder().try_init();
@@ -40,10 +60,9 @@ mod tests {
     fn get(table: &Table, i: usize, should_exists: bool) {
         let buf = i.to_be_bytes();
         let key = buf.as_slice();
-        let lsn = SEQUENCE.get();
         let expect = if should_exists { Some(key) } else { None };
         table
-            .get(key, lsn, |got| {
+            .get(key, |got| {
                 assert_eq!(got, expect);
             })
             .unwrap();
@@ -65,10 +84,9 @@ mod tests {
     fn put(table: &Table, i: usize) {
         let buf = i.to_be_bytes();
         let key = buf.as_slice();
-        let lsn = SEQUENCE.inc();
-        table.put(key, lsn, key).unwrap();
+        table.put(key, key).unwrap();
         table
-            .get(key, lsn, |got| {
+            .get(key, |got| {
                 assert_eq!(got, Some(key));
             })
             .unwrap();
@@ -77,10 +95,9 @@ mod tests {
     fn delete(table: &Table, i: usize) {
         let buf = i.to_be_bytes();
         let key = buf.as_slice();
-        let lsn = SEQUENCE.inc();
-        table.delete(key, lsn).unwrap();
+        table.delete(key).unwrap();
         table
-            .get(key, lsn, |got| {
+            .get(key, |got| {
                 assert_eq!(got, None);
             })
             .unwrap();

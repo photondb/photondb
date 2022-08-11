@@ -27,47 +27,54 @@ impl PageCache {
     }
 }
 
-#[cfg(miri)]
-use std::alloc::System;
-#[cfg(miri)]
-unsafe impl PageAlloc for PageCache {
-    type Error = Error;
+#[cfg(not(miri))]
+mod alloc {
+    use jemallocator::{usable_size, Jemalloc};
 
-    fn alloc_page(&self, size: usize) -> Result<PagePtr> {
-        unsafe {
-            let ptr = System.alloc(PagePtr::layout(size));
-            self.size.fetch_add(size, Ordering::Relaxed);
-            PagePtr::new(ptr).ok_or(Error::Alloc)
+    use super::*;
+
+    unsafe impl PageAlloc for PageCache {
+        type Error = Error;
+
+        fn alloc_page(&self, size: usize) -> Result<PagePtr> {
+            unsafe {
+                let ptr = Jemalloc.alloc(PagePtr::layout(size));
+                let size = usable_size(ptr);
+                self.size.fetch_add(size, Ordering::Relaxed);
+                PagePtr::new(ptr).ok_or(Error::Alloc)
+            }
         }
-    }
 
-    unsafe fn dealloc_page(&self, page: PagePtr) {
-        let ptr = page.as_raw();
-        let size = page.size();
-        self.size.fetch_sub(size, Ordering::Relaxed);
-        System.dealloc(ptr, PagePtr::layout(size));
+        unsafe fn dealloc_page(&self, page: PagePtr) {
+            let ptr = page.as_raw();
+            let size = usable_size(ptr);
+            self.size.fetch_sub(size, Ordering::Relaxed);
+            Jemalloc.dealloc(ptr, PagePtr::layout(size));
+        }
     }
 }
 
-#[cfg(not(miri))]
-use jemallocator::{usable_size, Jemalloc};
-#[cfg(not(miri))]
-unsafe impl PageAlloc for PageCache {
-    type Error = Error;
+#[cfg(miri)]
+mod alloc {
+    use std::alloc::System;
 
-    fn alloc_page(&self, size: usize) -> Result<PagePtr> {
-        unsafe {
-            let ptr = Jemalloc.alloc(PagePtr::layout(size));
-            let size = usable_size(ptr);
-            self.size.fetch_add(size, Ordering::Relaxed);
-            PagePtr::new(ptr).ok_or(Error::Alloc)
+    use super::*;
+
+    unsafe impl PageAlloc for PageCache {
+        type Error = Error;
+
+        fn alloc_page(&self, size: usize) -> Result<PagePtr> {
+            unsafe {
+                let ptr = System.alloc(PagePtr::layout(size));
+                self.size.fetch_add(size, Ordering::Relaxed);
+                PagePtr::new(ptr).ok_or(Error::Alloc)
+            }
         }
-    }
 
-    unsafe fn dealloc_page(&self, page: PagePtr) {
-        let ptr = page.as_raw();
-        let size = usable_size(ptr);
-        self.size.fetch_sub(size, Ordering::Relaxed);
-        Jemalloc.dealloc(ptr, PagePtr::layout(size));
+        unsafe fn dealloc_page(&self, page: PagePtr) {
+            let size = page.size();
+            self.size.fetch_sub(size, Ordering::Relaxed);
+            System.dealloc(page.as_raw(), PagePtr::layout(size));
+        }
     }
 }
