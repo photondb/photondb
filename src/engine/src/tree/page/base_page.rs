@@ -280,17 +280,17 @@ impl From<PageKind> for PageTags {
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PageKind {
-    /// Pages with value.
-    Data = 0,
+    /// Pages with base entries.
+    Base = 0,
     /// Pages with split information.
-    Split = 1,
+    Split = 2,
 }
 
 impl PageKind {
     const fn new(kind: u8) -> Self {
         match kind {
-            0 => Self::Data,
-            1 => Self::Split,
+            0 => Self::Base,
+            2 => Self::Split,
             _ => panic!("invalid page kind"),
         }
     }
@@ -385,7 +385,7 @@ pub mod tests {
         ptr.set_next(3);
         assert_eq!(ptr.next(), 3);
 
-        assert_eq!(ptr.kind(), PageKind::Data);
+        assert_eq!(ptr.kind(), PageKind::Base);
         ptr.set_kind(PageKind::Split);
         assert_eq!(ptr.kind(), PageKind::Split);
 

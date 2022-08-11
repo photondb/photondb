@@ -7,7 +7,7 @@ pub struct IndexPageBuilder(SortedPageBuilder);
 
 impl Default for IndexPageBuilder {
     fn default() -> Self {
-        Self(SortedPageBuilder::with_leaf(PageKind::Data, false))
+        Self(SortedPageBuilder::with_leaf(PageKind::Base, false))
     }
 }
 
@@ -28,7 +28,7 @@ pub struct IndexPageRef<'a>(SortedPageRef<'a, &'a [u8], Index>);
 
 impl<'a> IndexPageRef<'a> {
     pub fn new(base: PageRef<'a>) -> Self {
-        debug_assert_eq!(base.kind(), PageKind::Data);
+        debug_assert_eq!(base.kind(), PageKind::Base);
         debug_assert_eq!(base.is_leaf(), false);
         Self(unsafe { SortedPageRef::new(base) })
     }

@@ -35,7 +35,7 @@ where
     fn from(page: T) -> Self {
         let page = page.into();
         match page.kind() {
-            PageKind::Data => {
+            PageKind::Base => {
                 if page.is_leaf() {
                     Self::Data(page.into())
                 } else {

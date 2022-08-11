@@ -7,7 +7,7 @@ pub struct DataPageBuilder(SortedPageBuilder);
 
 impl Default for DataPageBuilder {
     fn default() -> Self {
-        Self(SortedPageBuilder::with_leaf(PageKind::Data, true))
+        Self(SortedPageBuilder::with_leaf(PageKind::Base, true))
     }
 }
 
@@ -36,7 +36,7 @@ pub struct DataPageRef<'a>(SortedPageRef<'a, Key<'a>, Value<'a>>);
 
 impl<'a> DataPageRef<'a> {
     pub fn new(base: PageRef<'a>) -> Self {
-        debug_assert_eq!(base.kind(), PageKind::Data);
+        debug_assert_eq!(base.kind(), PageKind::Base);
         debug_assert_eq!(base.is_leaf(), true);
         Self(unsafe { SortedPageRef::new(base) })
     }

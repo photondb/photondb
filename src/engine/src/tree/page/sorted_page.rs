@@ -324,10 +324,9 @@ mod tests {
     fn data_page() {
         let data = [(1, 0), (2, 0), (4, 0), (7, 0), (8, 0)];
         let mut iter = SliceIter::from(&data);
-        let page = SortedPageBuilder::new(PageKind::Data)
+        let page = SortedPageBuilder::default()
             .build_from_iter(&System, &mut iter)
             .unwrap();
-        assert_eq!(page.kind(), PageKind::Data);
 
         let page = unsafe { SortedPageRef::new(page.into()) };
         assert_eq!(page.item_len(), data.len());
