@@ -443,10 +443,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "photondb-runtime"
-version = "0.1.0"
-
-[[package]]
 name = "plotters"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
