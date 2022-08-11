@@ -161,27 +161,22 @@ impl Inner {
     fn try_insert<'g>(&self, key: &[u8], mut page: PagePtr, guard: &'g Guard) -> Result<()> {
         let (mut node, _) = self.find_leaf(key, guard)?;
         loop {
-            // TODO: This is a bit of a hack.
-            if node.page.len() >= u8::MAX / 2 {
-                let _ = self.consolidate_data_node(&mut node, guard);
-                return Err(Error::Again);
-            }
-            page.set_ver(node.page.ver());
-            page.set_len(node.page.len() + 1);
-            page.set_next(node.page.as_addr().into());
+            page.set_ver(node.view.ver());
+            page.set_len(node.view.len() + 1);
+            page.set_next(node.view.as_addr().into());
             match self.table.cas(node.id, page.next(), page.into()) {
                 Ok(_) => {
                     if page.len() as usize >= self.opts.data_delta_length {
-                        node.page = page.into();
-                        let _ = self.consolidate_data_node(&mut node, guard);
+                        node.view = page.into();
+                        let _ = self.consolidate_data_node(&node, guard);
                     }
                     return Ok(());
                 }
                 Err(addr) => {
-                    if let Some(page) = self.page_view(addr.into(), guard) {
+                    if let Some(view) = self.page_view(addr.into(), guard) {
                         // We can keep retrying as long as the page version doesn't change.
-                        if page.ver() == node.page.ver() {
-                            node.page = page;
+                        if view.ver() == node.view.ver() {
+                            node.view = view;
                             continue;
                         }
                     }
@@ -282,17 +277,23 @@ impl Inner {
         let mut parent = None;
         loop {
             let addr = self.page_addr(index.id);
-            let page = self.page_view(addr, guard).expect("the node must be valid");
+            let view = self.page_view(addr, guard).expect("the node must be valid");
             let node = Node {
                 id: index.id,
-                page,
+                view,
                 range,
             };
-            if node.page.ver() != index.ver {
+            // Ensures that future updates will not overflow the length.
+            if node.view.len() >= u8::MAX / 2 {
+                self.consolidate_node(&node, guard)?;
+                return Err(Error::Again);
+            }
+            // The node version has changed since we accessed its parent.
+            if node.view.ver() != index.ver {
                 self.reconcile_node(node, parent, guard)?;
                 return Err(Error::Again);
             }
-            if node.page.is_leaf() {
+            if node.view.is_leaf() {
                 return Ok((node, parent));
             }
             let (child, right) = self.lookup_index(key, &node, guard)?;
@@ -310,7 +311,7 @@ impl Inner {
     where
         F: FnMut(TypedPageRef<'g>) -> bool,
     {
-        let mut page = self.load_page_with_view(node.id, node.page, guard)?;
+        let mut page = self.load_page_with_view(node.id, node.view, guard)?;
         loop {
             if f(page.into()) {
                 break;
@@ -373,7 +374,7 @@ impl Inner {
         guard: &'g Guard,
     ) -> Result<DataNodeIter<'g, 'b>> {
         let mut limit = None;
-        let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
+        let mut merger = MergingIterBuilder::with_len(node.view.len() as usize + 1);
         self.walk_node(node, guard, |page| {
             match page {
                 TypedPageRef::Data(page) => {
@@ -401,7 +402,7 @@ impl Inner {
         let mut size = 0;
         let mut base = None;
         let mut limit = None;
-        let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
+        let mut merger = MergingIterBuilder::with_len(node.view.len() as usize + 1);
         self.walk_node(node, guard, |page| {
             match page {
                 TypedPageRef::Data(page) => {
@@ -432,7 +433,7 @@ impl Inner {
         guard: &'g Guard,
     ) -> Result<IndexNodeIter<'g, 'b>> {
         let mut limit = None;
-        let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
+        let mut merger = MergingIterBuilder::with_len(node.view.len() as usize + 1);
         self.walk_node(node, guard, |page| {
             match page {
                 TypedPageRef::Index(page) => {
@@ -465,7 +466,7 @@ impl Inner {
             self.install_split_page(id, page, sep, right_page, guard)
                 .map(|page| {
                     self.stats.succeeded.num_data_splits.inc();
-                    page.into()
+                    page
                 })
                 .map_err(|err| {
                     self.stats.conflicted.num_data_splits.inc();
@@ -489,7 +490,7 @@ impl Inner {
             self.install_split_page(id, page, sep, right_page, guard)
                 .map(|page| {
                     self.stats.succeeded.num_index_splits.inc();
-                    page.into()
+                    page
                 })
                 .map_err(|err| {
                     self.stats.conflicted.num_index_splits.inc();
@@ -507,9 +508,9 @@ impl Inner {
         split_key: &[u8],
         right_page: PagePtr,
         guard: &'g Guard,
-    ) -> Result<SplitPageRef<'g>> {
+    ) -> Result<PageRef<'g>> {
         let right_id = self.install_node(right_page)?;
-        let split = || -> Result<SplitPageRef<'_>> {
+        let split = || -> Result<PageRef<'_>> {
             let mut split_page = SplitPageBuilder::default().build_with_index(
                 &self.cache,
                 split_key,
@@ -520,7 +521,6 @@ impl Inner {
             split_page.set_next(left_page.into());
             split_page.set_leaf(left_page.is_leaf());
             self.update_node(left_id, left_page, split_page, guard)
-                .map(SplitPageRef::from)
         };
         split().map_err(|err| unsafe {
             self.table.dealloc(right_id, guard);
@@ -535,13 +535,13 @@ impl Inner {
         parent: Option<Node<'a>>,
         guard: &'g Guard,
     ) -> Result<()> {
-        let page = self.load_page_with_view(node.id, node.page, guard)?;
+        let page = self.load_page_with_view(node.id, node.view, guard)?;
         if let TypedPageRef::Split(page) = page.into() {
-            let split_index = page.split_index();
-            if let Some(mut parent) = parent {
-                self.reconcile_split_node(&node, &mut parent, split_index, guard)?;
+            let index = page.split_index();
+            if let Some(parent) = parent {
+                self.reconcile_split_node(node, parent, index, guard)?;
             } else {
-                self.reconcile_split_root(&node, split_index, guard)?;
+                self.reconcile_split_root(node, index, guard)?;
             }
         }
         Ok(())
@@ -549,12 +549,12 @@ impl Inner {
 
     fn reconcile_split_node<'a: 'g, 'g>(
         &'a self,
-        node: &Node<'g>,
-        parent: &mut Node<'g>,
+        node: Node<'g>,
+        mut parent: Node<'g>,
         split_index: IndexItem<'g>,
         guard: &'g Guard,
-    ) -> Result<PageRef<'g>> {
-        let left_index = (node.range.start, Index::new(node.id, node.page.ver()));
+    ) -> Result<()> {
+        let left_index = (node.range.start, Index::new(node.id, node.view.ver()));
         let mut index_page = if let Some(right_start) = node.range.end {
             assert!(right_start > split_index.0);
             let delta_data = [left_index, split_index, (right_start, NULL_INDEX)];
@@ -566,36 +566,31 @@ impl Inner {
             IndexPageBuilder::default().build_from_iter(&self.cache, &mut delta_iter)?
         };
 
-        // TODO: This is a bit of a hack.
-        if parent.page.len() == u8::MAX {
-            let _ = self.consolidate_index_node(&parent, guard);
-            return Err(Error::Again);
-        }
-        index_page.set_ver(parent.page.ver());
-        index_page.set_len(parent.page.len() + 1);
-        index_page.set_next(parent.page.as_addr().into());
+        index_page.set_ver(parent.view.ver());
+        index_page.set_len(parent.view.len() + 1);
+        index_page.set_next(parent.view.as_addr().into());
         let page = self.update_node(parent.id, index_page.next(), index_page, guard)?;
 
         if page.len() as usize >= self.opts.index_delta_length {
-            parent.page = page.into();
-            self.consolidate_index_node(parent, guard)
-        } else {
-            Ok(page)
+            parent.view = page.into();
+            let _ = self.consolidate_index_node(&parent, guard);
         }
+
+        Ok(())
     }
 
     fn reconcile_split_root<'a: 'g, 'g>(
         &'a self,
-        node: &Node<'g>,
+        node: Node<'g>,
         split_index: IndexItem<'g>,
         guard: &'g Guard,
-    ) -> Result<PageRef<'g>> {
+    ) -> Result<()> {
         assert_eq!(node.id, ROOT_INDEX.id);
-        let root_addr = node.page.as_addr();
+        let root_addr = node.view.as_addr();
 
         // Builds a new root with the original root in the left and the split node in the right.
         let left_id = self.install_node(root_addr)?;
-        let left_index = Index::new(left_id, node.page.ver());
+        let left_index = Index::new(left_id, node.view.ver());
         let root_data = [([].as_slice(), left_index), split_index];
         let mut root_iter = SliceIter::from(&root_data);
         let root_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut root_iter)?;
@@ -604,7 +599,83 @@ impl Inner {
             .map_err(|err| {
                 self.table.dealloc(left_id, guard);
                 err
+            })?;
+
+        Ok(())
+    }
+
+    fn consolidate_node<'a: 'g, 'g>(&'a self, node: &Node<'g>, guard: &'g Guard) -> Result<()> {
+        if node.view.is_leaf() {
+            self.consolidate_data_node(node, guard)
+        } else {
+            self.consolidate_index_node(node, guard)
+        }
+    }
+
+    fn consolidate_data_node<'a: 'g, 'g>(
+        &'a self,
+        node: &Node<'g>,
+        guard: &'g Guard,
+    ) -> Result<()> {
+        let bump = Bump::new();
+        let (mut data_iter, base_page) = self.delta_data_iter(node, &bump, guard)?;
+        let mut data_page =
+            DataPageBuilder::default().build_from_iter(&self.cache, &mut data_iter)?;
+        data_page.set_ver(node.view.ver());
+        if let Some(base) = base_page {
+            data_page.set_len(base.len() + 1);
+            data_page.set_next(base.into());
+        }
+
+        let old_addr = node.view.as_addr();
+        let new_page = self
+            .update_node(node.id, old_addr, data_page, guard)
+            .map(|page| {
+                self.dealloc_page_chain(old_addr, page.next(), guard);
+                self.stats.succeeded.num_data_consolidates.inc();
+                page
             })
+            .map_err(|err| {
+                self.stats.conflicted.num_data_consolidates.inc();
+                err
+            })?;
+
+        if new_page.next() == 0 && new_page.size() >= self.opts.data_node_size {
+            let _ = self.split_data_node(node.id, new_page, guard);
+        }
+
+        Ok(())
+    }
+
+    fn consolidate_index_node<'a: 'g, 'g>(
+        &'a self,
+        node: &Node<'g>,
+        guard: &'g Guard,
+    ) -> Result<()> {
+        let bump = Bump::new();
+        let mut index_iter = self.index_node_iter(node, &bump, guard)?;
+        let mut index_page =
+            IndexPageBuilder::default().build_from_iter(&self.cache, &mut index_iter)?;
+        index_page.set_ver(node.view.ver());
+
+        let old_addr = node.view.as_addr();
+        let new_page = self
+            .update_node(node.id, old_addr, index_page, guard)
+            .map(|page| {
+                self.dealloc_page_chain(old_addr, page.next(), guard);
+                self.stats.succeeded.num_index_consolidates.inc();
+                page
+            })
+            .map_err(|err| {
+                self.stats.conflicted.num_index_consolidates.inc();
+                err
+            })?;
+
+        if new_page.next() == 0 && new_page.size() >= self.opts.index_node_size {
+            let _ = self.split_index_node(node.id, new_page, guard);
+        }
+
+        Ok(())
     }
 
     fn dealloc_page_chain<'a: 'g, 'g>(
@@ -628,72 +699,6 @@ impl Inner {
                 break;
             }
         });
-    }
-
-    fn consolidate_data_node<'a: 'g, 'g>(
-        &'a self,
-        node: &mut Node<'g>,
-        guard: &'g Guard,
-    ) -> Result<PageRef<'g>> {
-        let bump = Bump::new();
-        let (mut data_iter, base_page) = self.delta_data_iter(node, &bump, guard)?;
-        let mut data_page =
-            DataPageBuilder::default().build_from_iter(&self.cache, &mut data_iter)?;
-        data_page.set_ver(node.page.ver());
-        if let Some(base) = base_page {
-            data_page.set_len(base.len() + 1);
-            data_page.set_next(base.into());
-        }
-
-        let old_addr = node.page.as_addr();
-        let new_page = self
-            .update_node(node.id, old_addr, data_page, guard)
-            .map(|page| {
-                self.stats.succeeded.num_data_consolidates.inc();
-                page
-            })
-            .map_err(|err| {
-                self.stats.conflicted.num_data_consolidates.inc();
-                err
-            })?;
-
-        self.dealloc_page_chain(old_addr, new_page.next(), guard);
-        if new_page.next() == 0 && new_page.size() >= self.opts.data_node_size {
-            self.split_data_node(node.id, new_page, guard)
-        } else {
-            Ok(new_page)
-        }
-    }
-
-    fn consolidate_index_node<'a: 'g, 'g>(
-        &'a self,
-        node: &Node<'g>,
-        guard: &'g Guard,
-    ) -> Result<PageRef<'g>> {
-        let bump = Bump::new();
-        let mut index_iter = self.index_node_iter(node, &bump, guard)?;
-        let mut index_page =
-            IndexPageBuilder::default().build_from_iter(&self.cache, &mut index_iter)?;
-        index_page.set_ver(node.page.ver());
-
-        let old_addr = node.page.as_addr();
-        let new_page = self
-            .update_node(node.id, old_addr, index_page, guard)
-            .map(|page| {
-                self.dealloc_page_chain(old_addr, page.next(), guard);
-                self.stats.succeeded.num_index_consolidates.inc();
-                page
-            })
-            .map_err(|err| {
-                self.stats.conflicted.num_index_consolidates.inc();
-                err
-            })?;
-
-        if new_page.next() == 0 && new_page.size() >= self.opts.index_node_size {
-            self.split_index_node(node.id, new_page, guard)
-        } else {
-            Ok(new_page)
-        }
     }
 }
 

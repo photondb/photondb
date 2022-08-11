@@ -428,9 +428,9 @@ where
     I::Item: Compare<I::Item>,
 {
     pub fn with_len(len: usize) -> Self {
-        let mut children = Vec::new();
-        children.reserve_exact(len);
-        Self { children }
+        Self {
+            children: Vec::with_capacity(len),
+        }
     }
 
     pub fn len(&self) -> usize {

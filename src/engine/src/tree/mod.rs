@@ -88,8 +88,12 @@ mod tests {
 
     #[cfg(miri)]
     const N: usize = 1 << 4;
+    #[cfg(miri)]
+    const T: usize = 4;
     #[cfg(not(miri))]
     const N: usize = 1 << 10;
+    #[cfg(not(miri))]
+    const T: usize = 8;
 
     #[test]
     fn crud() {
@@ -113,7 +117,7 @@ mod tests {
     fn concurrent_crud() {
         let table = open(OPTIONS);
         let mut handles = Vec::new();
-        for _ in 0..8 {
+        for _ in 0..T {
             let table = table.clone();
             let handle = std::thread::spawn(move || {
                 for i in 0..N {

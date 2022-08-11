@@ -6,7 +6,7 @@ pub const ROOT_INDEX: Index = Index::new(PageTable::MIN, 0);
 #[derive(Clone, Debug)]
 pub struct Node<'a> {
     pub id: u64,
-    pub page: PageView<'a>,
+    pub view: PageView<'a>,
     pub range: Range<'a>,
 }
 

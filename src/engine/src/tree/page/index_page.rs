@@ -29,7 +29,7 @@ pub struct IndexPageRef<'a>(SortedPageRef<'a, &'a [u8], Index>);
 impl<'a> IndexPageRef<'a> {
     pub fn new(base: PageRef<'a>) -> Self {
         debug_assert_eq!(base.kind(), PageKind::Base);
-        debug_assert_eq!(base.is_leaf(), false);
+        debug_assert!(!base.is_leaf());
         Self(unsafe { SortedPageRef::new(base) })
     }
 
