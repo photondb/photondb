@@ -36,7 +36,7 @@ jobs:
     - name: Run miri tests
       uses: actions-rs/cargo@v1
       with:
-        command: miri test
-        args: --workspace
+        command: miri
+        args: test
       env:
         MIRIFLAGS: -Zmiri-ignore-leaks -Zmiri-permissive-provenance
