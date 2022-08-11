@@ -1,0 +1,9 @@
+[package]
+name = "bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+photondb-engine = { path = ".." }
+clap = { version = "3.2", features = ["derive"] }
+rand = "0.8"
