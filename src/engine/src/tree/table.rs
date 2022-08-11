@@ -118,11 +118,11 @@ impl Inner {
         loop {
             match self.try_get(key, guard) {
                 Ok(value) => {
-                    self.stats.op_succeeded.num_gets.inc();
+                    self.stats.succeeded.num_gets.inc();
                     return Ok(value);
                 }
                 Err(Error::Again) => {
-                    self.stats.op_conflicted.num_gets.inc();
+                    self.stats.conflicted.num_gets.inc();
                     continue;
                 }
                 Err(err) => return Err(err),
@@ -141,11 +141,11 @@ impl Inner {
         loop {
             match self.try_insert(key.raw, page, guard) {
                 Ok(_) => {
-                    self.stats.op_succeeded.num_inserts.inc();
+                    self.stats.succeeded.num_inserts.inc();
                     return Ok(());
                 }
                 Err(Error::Again) => {
-                    self.stats.op_conflicted.num_inserts.inc();
+                    self.stats.conflicted.num_inserts.inc();
                     continue;
                 }
                 Err(err) => {
@@ -163,24 +163,15 @@ impl Inner {
         loop {
             // TODO: This is a bit of a hack.
             if node.page.len() >= u8::MAX / 2 {
-                if !node.page.is_locked() {
-                    let _ = self.consolidate_data_node(&mut node, guard);
-                }
-                self.stats.op_conflicted.num_inserts.inc();
+                let _ = self.consolidate_data_node(&mut node, guard);
                 return Err(Error::Again);
             }
             page.set_ver(node.page.ver());
             page.set_len(node.page.len() + 1);
             page.set_next(node.page.as_addr().into());
-            page.set_locked(node.page.is_locked());
-            let mut should_consolidate = false;
-            if !page.is_locked() && page.len() as usize >= self.opts.data_delta_length {
-                page.set_locked(true);
-                should_consolidate = true;
-            }
             match self.table.cas(node.id, page.next(), page.into()) {
                 Ok(_) => {
-                    if should_consolidate {
+                    if page.len() as usize >= self.opts.data_delta_length {
                         node.page = page.into();
                         let _ = self.consolidate_data_node(&mut node, guard);
                     }
@@ -203,10 +194,8 @@ impl Inner {
     fn stats(&self) -> Stats {
         Stats {
             cache_size: self.cache.size() as u64,
-            op_succeeded: self.stats.op_succeeded.snapshot(),
-            op_conflicted: self.stats.op_conflicted.snapshot(),
-            smo_succeeded: self.stats.smo_succeeded.snapshot(),
-            smo_conflicted: self.stats.smo_conflicted.snapshot(),
+            succeeded: self.stats.succeeded.snapshot(),
+            conflicted: self.stats.conflicted.snapshot(),
         }
     }
 }
@@ -322,21 +311,11 @@ impl Inner {
         F: FnMut(TypedPageRef<'g>) -> bool,
     {
         let mut page = self.load_page_with_view(node.id, node.page, guard)?;
-        let mut old_addr = 0;
-        let mut new_addr = 0;
         loop {
-            let typed_page = TypedPageRef::from(page);
-            if let TypedPageRef::Switch(page) = typed_page {
-                old_addr = page.old_addr();
-                new_addr = page.new_addr();
-            } else if f(typed_page) {
+            if f(page.into()) {
                 break;
             }
-            let mut next_addr = page.next();
-            if next_addr == old_addr {
-                next_addr = new_addr;
-            }
-            match self.load_page_with_addr(node.id, next_addr.into(), guard)? {
+            match self.load_page_with_addr(node.id, page.next().into(), guard)? {
                 Some(next) => page = next,
                 None => break,
             }
@@ -352,7 +331,7 @@ impl Inner {
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.walk_node(node, guard, |page| {
-            if let TypedPageRef::Data(page) = page.into() {
+            if let TypedPageRef::Data(page) = page {
                 if let Some((_, v)) = page.find(key) {
                     value = v.into();
                     return true;
@@ -372,7 +351,7 @@ impl Inner {
         let mut left_index = None;
         let mut right_index = None;
         self.walk_node(node, guard, |page| {
-            if let TypedPageRef::Index(page) = page.into() {
+            if let TypedPageRef::Index(page) = page {
                 let (left, right) = page.find(key);
                 if let Some(left) = left {
                     if left.1 != NULL_INDEX {
@@ -396,7 +375,7 @@ impl Inner {
         let mut limit = None;
         let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
         self.walk_node(node, guard, |page| {
-            match TypedPageRef::from(page) {
+            match page {
                 TypedPageRef::Data(page) => {
                     merger.add(bump.alloc(page.into()));
                 }
@@ -424,7 +403,7 @@ impl Inner {
         let mut limit = None;
         let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
         self.walk_node(node, guard, |page| {
-            match TypedPageRef::from(page) {
+            match page {
                 TypedPageRef::Data(page) => {
                     if size < page.content_size() / 2 && limit.is_none() && merger.len() >= 2 {
                         base = Some(page.base());
@@ -455,7 +434,7 @@ impl Inner {
         let mut limit = None;
         let mut merger = MergingIterBuilder::with_len(node.page.len() as usize + 1);
         self.walk_node(node, guard, |page| {
-            match TypedPageRef::from(page) {
+            match page {
                 TypedPageRef::Index(page) => {
                     merger.add(bump.alloc(page.into()));
                 }
@@ -485,11 +464,11 @@ impl Inner {
             let right_page = DataPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
             self.install_split_page(id, page, sep, right_page, guard)
                 .map(|page| {
-                    self.stats.smo_succeeded.num_data_splits.inc();
+                    self.stats.succeeded.num_data_splits.inc();
                     page.into()
                 })
                 .map_err(|err| {
-                    self.stats.smo_conflicted.num_data_splits.inc();
+                    self.stats.conflicted.num_data_splits.inc();
                     err
                 })
         } else {
@@ -509,11 +488,11 @@ impl Inner {
             let right_page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
             self.install_split_page(id, page, sep, right_page, guard)
                 .map(|page| {
-                    self.stats.smo_succeeded.num_index_splits.inc();
+                    self.stats.succeeded.num_index_splits.inc();
                     page.into()
                 })
                 .map_err(|err| {
-                    self.stats.smo_conflicted.num_index_splits.inc();
+                    self.stats.conflicted.num_index_splits.inc();
                     err
                 })
         } else {
@@ -638,19 +617,10 @@ impl Inner {
         let until = until.into();
         let cache = self.cache.clone();
         guard.defer(move || unsafe {
-            let mut old_addr = 0;
-            let mut new_addr = 0;
             while next != until {
                 if let PageAddr::Mem(addr) = next.into() {
                     if let Some(page) = PagePtr::new(addr as *mut u8) {
-                        if let TypedPageRef::Switch(page) = page.into() {
-                            old_addr = page.old_addr();
-                            new_addr = page.new_addr();
-                        }
                         next = page.next();
-                        if next == old_addr {
-                            next = new_addr;
-                        }
                         cache.dealloc_page(page);
                         continue;
                     }
@@ -674,73 +644,24 @@ impl Inner {
             data_page.set_len(base.len() + 1);
             data_page.set_next(base.into());
         }
-        let delta_len = node.page.len() - data_page.len();
 
-        let old_addr = node.page.as_addr().into();
-        if let Err(new_addr) = self.table.cas(node.id, old_addr, data_page.into()) {
-            if node.page.is_locked() {
-                if let Some(page) = self.page_view(new_addr.into(), guard) {
-                    if page.ver() == node.page.ver() {
-                        node.page = page;
-                        return self
-                            .switch_consolidated_page(node, old_addr, data_page, delta_len, guard);
-                    }
-                }
-            }
-            unsafe { self.cache.dealloc_page(data_page) };
-            self.stats.smo_conflicted.num_data_consolidates.inc();
-            return Err(Error::Again);
-        }
+        let old_addr = node.page.as_addr();
+        let new_page = self
+            .update_node(node.id, old_addr, data_page, guard)
+            .map(|page| {
+                self.stats.succeeded.num_data_consolidates.inc();
+                page
+            })
+            .map_err(|err| {
+                self.stats.conflicted.num_data_consolidates.inc();
+                err
+            })?;
 
-        let new_page = PageRef::from(data_page);
         self.dealloc_page_chain(old_addr, new_page.next(), guard);
-        self.stats.smo_succeeded.num_data_consolidates.inc();
-
         if new_page.next() == 0 && new_page.size() >= self.opts.data_node_size {
-            self.split_data_node(node.id, new_page.into(), guard)
+            self.split_data_node(node.id, new_page, guard)
         } else {
             Ok(new_page)
-        }
-    }
-
-    fn switch_consolidated_page<'a: 'g, 'g>(
-        &'a self,
-        node: &mut Node<'g>,
-        old_addr: u64,
-        new_page: PagePtr,
-        delta_len: u8,
-        guard: &'g Guard,
-    ) -> Result<PageRef<'g>> {
-        assert!(node.page.is_locked());
-        let mut switch_page =
-            SwitchPageBuilder::default().build(&self.cache, old_addr, new_page.into())?;
-        switch_page.set_ver(node.page.ver());
-        switch_page.set_leaf(node.page.is_leaf());
-
-        loop {
-            switch_page.set_len(node.page.len() - delta_len + 1);
-            switch_page.set_next(node.page.as_addr().into());
-            match self
-                .table
-                .cas(node.id, switch_page.next(), switch_page.into())
-            {
-                Ok(_) => {
-                    self.dealloc_page_chain(old_addr, new_page.next(), guard);
-                    self.stats.smo_succeeded.num_switch_pages.inc();
-                    return Ok(switch_page.into());
-                }
-                Err(addr) => {
-                    if let Some(page) = self.page_view(addr.into(), guard) {
-                        if page.ver() == node.page.ver() {
-                            node.page = page;
-                            continue;
-                        }
-                    }
-                    unsafe { self.cache.dealloc_page(new_page) };
-                    self.stats.smo_conflicted.num_switch_pages.inc();
-                    return Err(Error::Again);
-                }
-            }
         }
     }
 
@@ -750,27 +671,28 @@ impl Inner {
         guard: &'g Guard,
     ) -> Result<PageRef<'g>> {
         let bump = Bump::new();
-        let mut iter = self.index_node_iter(node, &bump, guard)?;
-        let mut page = IndexPageBuilder::default().build_from_iter(&self.cache, &mut iter)?;
-        page.set_ver(node.page.ver());
+        let mut index_iter = self.index_node_iter(node, &bump, guard)?;
+        let mut index_page =
+            IndexPageBuilder::default().build_from_iter(&self.cache, &mut index_iter)?;
+        index_page.set_ver(node.page.ver());
 
-        let addr = node.page.as_addr();
-        let page = self
-            .update_node(node.id, addr, page, guard)
+        let old_addr = node.page.as_addr();
+        let new_page = self
+            .update_node(node.id, old_addr, index_page, guard)
             .map(|page| {
-                self.dealloc_page_chain(addr, page.next(), guard);
-                self.stats.smo_succeeded.num_index_consolidates.inc();
+                self.dealloc_page_chain(old_addr, page.next(), guard);
+                self.stats.succeeded.num_index_consolidates.inc();
                 page
             })
             .map_err(|err| {
-                self.stats.smo_conflicted.num_index_consolidates.inc();
+                self.stats.conflicted.num_index_consolidates.inc();
                 err
             })?;
 
-        if page.next() == 0 && page.size() >= self.opts.index_node_size {
-            self.split_index_node(node.id, page, guard)
+        if new_page.next() == 0 && new_page.size() >= self.opts.index_node_size {
+            self.split_index_node(node.id, new_page, guard)
         } else {
-            Ok(page)
+            Ok(new_page)
         }
     }
 }

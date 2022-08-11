@@ -124,15 +124,6 @@ impl PagePtr {
         self.set_tags(self.tags().with_leaf(is_leaf));
     }
 
-    /// Returns true if this page is locked.
-    pub fn is_locked(&self) -> bool {
-        self.tags().is_locked()
-    }
-
-    pub fn set_locked(&mut self, is_locked: bool) {
-        self.set_tags(self.tags().with_locked(is_locked));
-    }
-
     /// Sets the header of this page to default.
     pub fn set_default(&mut self) {
         unsafe { self.as_raw().write_bytes(0, PAGE_HEADER_SIZE) };
@@ -181,7 +172,6 @@ impl fmt::Debug for PagePtr {
             .field("next", &self.next())
             .field("kind", &self.kind())
             .field("is_leaf", &self.is_leaf())
-            .field("is_locked", &self.is_locked())
             .field("content_size", &self.content_size())
             .finish()
     }
@@ -238,8 +228,7 @@ bitflags! {
     #[derive(Default)]
     struct PageTags: u8 {
         const LEAF = 0b1000_0000;
-        const LOCK = 0b0100_0000;
-        const KIND = 0b0011_1111;
+        const KIND = 0b0111_1111;
     }
 }
 
@@ -261,18 +250,6 @@ impl PageTags {
             self | Self::LEAF
         } else {
             self & !Self::LEAF
-        }
-    }
-
-    const fn is_locked(self) -> bool {
-        self.contains(Self::LOCK)
-    }
-
-    fn with_locked(self, is_locked: bool) -> Self {
-        if is_locked {
-            self | Self::LOCK
-        } else {
-            self & !Self::LOCK
         }
     }
 }
@@ -303,8 +280,6 @@ pub enum PageKind {
     Data = 0,
     /// Pages with split information.
     Split = 1,
-    /// Pages with switch information.
-    Switch = 2,
 }
 
 impl PageKind {
@@ -312,7 +287,6 @@ impl PageKind {
         match kind {
             0 => Self::Data,
             1 => Self::Split,
-            2 => Self::Switch,
             _ => panic!("invalid page kind"),
         }
     }
@@ -417,9 +391,6 @@ pub mod tests {
         assert_eq!(ptr.is_leaf(), false);
         ptr.set_leaf(true);
         assert_eq!(ptr.is_leaf(), true);
-        assert_eq!(ptr.is_locked(), false);
-        ptr.set_locked(true);
-        assert_eq!(ptr.is_locked(), true);
 
         assert_eq!(ptr.content_size(), 0);
         ptr.set_content_size(4);

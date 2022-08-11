@@ -71,13 +71,6 @@ impl PageView<'_> {
         }
     }
 
-    pub fn is_locked(&self) -> bool {
-        match self {
-            Self::Mem(page) => page.is_locked(),
-            Self::Disk(_, _) => todo!(),
-        }
-    }
-
     pub fn as_addr(&self) -> PageAddr {
         match *self {
             Self::Mem(page) => PageAddr::Mem(page.into()),
