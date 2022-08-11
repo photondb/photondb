@@ -18,11 +18,5 @@ rand = "0.8"
 criterion = "0.3"
 
 [[bench]]
-name = "simple"
-bench = false
-harness = false
-
-[[bench]]
-name = "concurrent"
-bench = false
+name = "criterion"
 harness = false
