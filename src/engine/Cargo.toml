@@ -11,16 +11,11 @@ jemallocator = "0.5"
 thiserror = "1.0"
 log = "0.4"
 env_logger = "0.9"
-
-[dev-dependencies]
 clap = { version = "3.2", features = ["derive"] }
-criterion = "0.3"
 rand = "0.8"
 
-[[bench]]
-name = "bench"
-bench = false
-harness = false
+[dev-dependencies]
+criterion = "0.3"
 
 [[bench]]
 name = "simple"

@@ -177,6 +177,7 @@ impl Workload {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct Stats {
     num_ops: u64,
