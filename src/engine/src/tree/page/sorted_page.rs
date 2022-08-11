@@ -316,15 +316,16 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::alloc::System;
+
     use super::*;
-    use crate::util::Sysalloc;
 
     #[test]
     fn data_page() {
         let data = [(1, 0), (2, 0), (4, 0), (7, 0), (8, 0)];
         let mut iter = SliceIter::from(&data);
         let page = SortedPageBuilder::new(PageKind::Data)
-            .build_from_iter(&Sysalloc, &mut iter)
+            .build_from_iter(&System, &mut iter)
             .unwrap();
         assert_eq!(page.kind(), PageKind::Data);
 

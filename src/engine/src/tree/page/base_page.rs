@@ -1,4 +1,10 @@
-use std::{alloc::Layout, fmt, marker::PhantomData, ops::Deref, ptr::NonNull};
+use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    fmt,
+    marker::PhantomData,
+    ops::Deref,
+    ptr::NonNull,
+};
 
 use bitflags::bitflags;
 
@@ -311,10 +317,7 @@ pub unsafe trait PageAlloc {
     unsafe fn dealloc_page(&self, page: PagePtr);
 }
 
-unsafe impl<T> PageAlloc for T
-where
-    T: crate::util::SizedAlloc,
-{
+unsafe impl PageAlloc for System {
     type Error = ();
 
     fn alloc_page(&self, size: usize) -> Result<PagePtr, Self::Error> {
@@ -326,8 +329,7 @@ where
 
     unsafe fn dealloc_page(&self, page: PagePtr) {
         let ptr = page.as_raw();
-        let size = self.alloc_size(ptr);
-        self.dealloc(ptr, PagePtr::layout(size));
+        self.dealloc(ptr, PagePtr::layout(page.size()));
     }
 }
 
@@ -364,12 +366,13 @@ impl PageBuilder {
 
 #[cfg(test)]
 pub mod tests {
+    use std::alloc::System;
+
     use super::*;
-    use crate::util::Sysalloc;
 
     #[test]
     fn page() {
-        let mut ptr = Sysalloc.alloc_page(PAGE_HEADER_SIZE).unwrap();
+        let mut ptr = System.alloc_page(PAGE_HEADER_SIZE).unwrap();
         ptr.set_default();
 
         assert_eq!(ptr.ver(), 0);

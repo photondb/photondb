@@ -7,7 +7,6 @@ use std::{
 };
 
 use super::{page::*, Error, Result};
-use crate::util::SizedAlloc;
 
 #[derive(Clone)]
 pub struct PageCache {
@@ -28,20 +27,35 @@ impl PageCache {
     }
 }
 
-#[cfg(not(miri))]
-use crate::util::Jemalloc as Alloc;
 #[cfg(miri)]
-use crate::util::Sysalloc as Alloc;
-
-const ALLOC: Alloc = Alloc;
-
 unsafe impl PageAlloc for PageCache {
     type Error = Error;
 
     fn alloc_page(&self, size: usize) -> Result<PagePtr> {
         unsafe {
-            let ptr = ALLOC.alloc(PagePtr::layout(size));
-            let size = ALLOC.alloc_size(ptr);
+            let ptr = std::alloc::alloc(PagePtr::layout(size));
+            self.size.fetch_add(size, Ordering::Relaxed);
+            PagePtr::new(ptr).ok_or(Error::Alloc)
+        }
+    }
+
+    fn dealloc_page(&self, page: PagePtr) {
+        let ptr = page.as_raw();
+        self.size.fetch_sub(page.size(), Ordering::Relaxed);
+        std::alloc::dealloc(ptr, PagePtr::layout(size));
+    }
+}
+
+#[cfg(not(miri))]
+use jemallocator::{usable_size, Jemalloc};
+#[cfg(not(miri))]
+unsafe impl PageAlloc for PageCache {
+    type Error = Error;
+
+    fn alloc_page(&self, size: usize) -> Result<PagePtr> {
+        unsafe {
+            let ptr = Jemalloc.alloc(PagePtr::layout(size));
+            let size = usable_size(ptr);
             self.size.fetch_add(size, Ordering::Relaxed);
             PagePtr::new(ptr).ok_or(Error::Alloc)
         }
@@ -49,8 +63,8 @@ unsafe impl PageAlloc for PageCache {
 
     unsafe fn dealloc_page(&self, page: PagePtr) {
         let ptr = page.as_raw();
-        let size = ALLOC.alloc_size(ptr);
+        let size = usable_size(ptr);
         self.size.fetch_sub(size, Ordering::Relaxed);
-        ALLOC.dealloc(ptr, PagePtr::layout(size));
+        Jemalloc.dealloc(ptr, PagePtr::layout(size));
     }
 }
