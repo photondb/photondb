@@ -1,4 +1,4 @@
-use crate::util::RelaxedCounter;
+use crate::util::Counter;
 
 #[derive(Default, Debug)]
 pub struct Stats {
@@ -25,12 +25,12 @@ pub struct AtomicStats {
 
 #[derive(Default)]
 pub struct AtomicOpStats {
-    pub num_gets: RelaxedCounter,
-    pub num_inserts: RelaxedCounter,
-    pub num_data_splits: RelaxedCounter,
-    pub num_data_consolidates: RelaxedCounter,
-    pub num_index_splits: RelaxedCounter,
-    pub num_index_consolidates: RelaxedCounter,
+    pub num_gets: Counter,
+    pub num_inserts: Counter,
+    pub num_data_splits: Counter,
+    pub num_data_consolidates: Counter,
+    pub num_index_splits: Counter,
+    pub num_index_consolidates: Counter,
 }
 
 impl AtomicOpStats {

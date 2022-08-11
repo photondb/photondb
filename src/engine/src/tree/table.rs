@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
 use bumpalo::Bump;
 use crossbeam_epoch::{pin, Guard};
@@ -77,6 +80,18 @@ impl Table {
     pub fn stats(&self) -> Stats {
         self.inner.stats()
     }
+
+    /// Returns the minimal valid LSN for reads.
+    pub fn min_lsn(&self) -> u64 {
+        self.inner.min_lsn.get()
+    }
+
+    /// Updates the minimal valid LSN for reads.
+    ///
+    /// Entries with smaller LSNs will be dropped later.
+    pub fn set_min_lsn(&self, lsn: u64) {
+        self.inner.min_lsn.set(lsn)
+    }
 }
 
 struct Inner {
@@ -85,6 +100,7 @@ struct Inner {
     cache: PageCache,
     store: PageStore,
     stats: AtomicStats,
+    min_lsn: MinLsn,
 }
 
 impl Inner {
@@ -98,6 +114,7 @@ impl Inner {
             cache,
             store,
             stats: AtomicStats::default(),
+            min_lsn: MinLsn::new(),
         };
         inner.init()
     }
@@ -393,39 +410,6 @@ impl Inner {
         Ok(DataNodeIter::new(merger.build(), limit))
     }
 
-    fn delta_data_iter<'a: 'g, 'b, 'g>(
-        &'a self,
-        node: &Node<'g>,
-        bump: &'b Bump,
-        guard: &'g Guard,
-    ) -> Result<(DataNodeIter<'g, 'b>, Option<PageRef<'g>>)> {
-        let mut size = 0;
-        let mut base = None;
-        let mut limit = None;
-        let mut merger = MergingIterBuilder::with_len(node.view.len() as usize + 1);
-        self.walk_node(node, guard, |page| {
-            match page {
-                TypedPageRef::Data(page) => {
-                    if size < page.content_size() / 2 && limit.is_none() && merger.len() >= 2 {
-                        base = Some(page.base());
-                        return true;
-                    }
-                    size += page.content_size();
-                    merger.add(bump.alloc(page.into()));
-                }
-                TypedPageRef::Split(page) => {
-                    if limit == None {
-                        let index = page.split_index();
-                        limit = Some(index.0);
-                    }
-                }
-                _ => unreachable!(),
-            }
-            false
-        })?;
-        Ok((DataNodeIter::new(merger.build(), limit), base))
-    }
-
     fn index_node_iter<'a: 'g, 'b, 'g>(
         &'a self,
         node: &Node<'g>,
@@ -618,11 +602,11 @@ impl Inner {
         guard: &'g Guard,
     ) -> Result<()> {
         let bump = Bump::new();
-        let (mut data_iter, base_page) = self.delta_data_iter(node, &bump, guard)?;
+        let mut data_iter = self.consolidate_data_iter(node, &bump, guard)?;
         let mut data_page =
             DataPageBuilder::default().build_from_iter(&self.cache, &mut data_iter)?;
         data_page.set_ver(node.view.ver());
-        if let Some(base) = base_page {
+        if let Some(base) = data_iter.base() {
             data_page.set_len(base.len() + 1);
             data_page.set_next(base.into());
         }
@@ -645,6 +629,41 @@ impl Inner {
         }
 
         Ok(())
+    }
+
+    fn consolidate_data_iter<'a: 'g, 'b, 'g>(
+        &'a self,
+        node: &Node<'g>,
+        bump: &'b Bump,
+        guard: &'g Guard,
+    ) -> Result<ConsolidateDataIter<'g, 'b>> {
+        let mut size = 0;
+        let mut base = None;
+        let mut limit = None;
+        let mut merger = MergingIterBuilder::with_len(node.view.len() as usize + 1);
+        self.walk_node(node, guard, |page| {
+            match page {
+                TypedPageRef::Data(page) => {
+                    if size < page.content_size() / 2 && limit.is_none() && merger.len() >= 2 {
+                        base = Some(page.base());
+                        return true;
+                    }
+                    size += page.content_size();
+                    merger.add(bump.alloc(page.into()));
+                }
+                TypedPageRef::Split(page) => {
+                    if limit == None {
+                        let index = page.split_index();
+                        limit = Some(index.0);
+                    }
+                }
+                _ => unreachable!(),
+            }
+            false
+        })?;
+
+        let iter = DataNodeIter::new(merger.build(), limit);
+        Ok(ConsolidateDataIter::new(iter, base, self.min_lsn.get()))
     }
 
     fn consolidate_index_node<'a: 'g, 'g>(
@@ -699,6 +718,31 @@ impl Inner {
                 break;
             }
         });
+    }
+}
+
+pub struct MinLsn(AtomicU64);
+
+impl MinLsn {
+    pub fn new() -> Self {
+        Self(AtomicU64::new(0))
+    }
+
+    pub fn get(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    pub fn set(&self, lsn: u64) {
+        let mut min = self.0.load(Ordering::Relaxed);
+        while min < lsn {
+            match self
+                .0
+                .compare_exchange(min, lsn, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => break,
+                Err(new) => min = new,
+            }
+        }
     }
 }
 

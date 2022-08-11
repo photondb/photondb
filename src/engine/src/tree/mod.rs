@@ -16,7 +16,7 @@ mod pagetable;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::RelaxedCounter;
+    use crate::util::Sequencer;
 
     const OPTIONS: Options = Options {
         cache_size: usize::MAX,
@@ -26,7 +26,7 @@ mod tests {
         index_delta_length: 3,
     };
 
-    static SEQUENCE: RelaxedCounter = RelaxedCounter::new(0);
+    static SEQUENCE: Sequencer = Sequencer::new(0);
 
     fn init() {
         let _ = env_logger::builder().try_init();

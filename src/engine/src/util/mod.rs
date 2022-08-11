@@ -1,5 +1,5 @@
 mod codec;
 pub use codec::{BufReader, BufWriter};
 
-mod stats;
-pub use stats::RelaxedCounter;
+mod atomic;
+pub use atomic::{Counter, Sequencer};

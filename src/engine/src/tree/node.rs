@@ -171,6 +171,10 @@ where
         }
     }
 
+    fn reset(&mut self) {
+        self.last_index = NULL_INDEX;
+    }
+
     fn find_next(&mut self) {
         while let Some(&(key, index)) = self.iter.current() {
             if let Some(limit) = self.limit {
@@ -200,6 +204,7 @@ where
 
     fn rewind(&mut self) {
         self.iter.rewind();
+        self.reset();
         self.find_next();
     }
 
@@ -219,9 +224,87 @@ where
 {
     fn seek(&mut self, target: &[u8]) {
         self.iter.seek(target);
+        self.reset();
         self.find_next();
     }
 }
 
 pub type DataNodeIter<'a, 'b> = DataIter<'a, MergingIter<OrderedIter<&'b mut DataPageIter<'a>>>>;
 pub type IndexNodeIter<'a, 'b> = IndexIter<'a, MergingIter<OrderedIter<&'b mut IndexPageIter<'a>>>>;
+
+pub struct ConsolidateDataIter<'a, 'b> {
+    iter: DataNodeIter<'a, 'b>,
+    base: Option<PageRef<'a>>,
+    min_lsn: u64,
+    last_raw: &'a [u8],
+}
+
+impl<'a, 'b> ConsolidateDataIter<'a, 'b> {
+    pub fn new(iter: DataNodeIter<'a, 'b>, base: Option<PageRef<'a>>, min_lsn: u64) -> Self {
+        Self {
+            iter,
+            base,
+            min_lsn,
+            last_raw: &[],
+        }
+    }
+
+    pub fn base(&self) -> Option<PageRef<'a>> {
+        self.base
+    }
+
+    fn reset(&mut self) {
+        self.last_raw = &[];
+    }
+
+    fn find_next(&mut self) {
+        while let Some((k, v)) = self.iter.current() {
+            if k.raw != self.last_raw {
+                self.last_raw = k.raw;
+                match v {
+                    Value::Put(_) => return,
+                    Value::Delete => {
+                        // We need to keep this deletion to mask older versions.
+                        if k.lsn >= self.min_lsn {
+                            return;
+                        }
+                    }
+                }
+            } else if k.lsn >= self.min_lsn {
+                return;
+            }
+            self.iter.next();
+        }
+    }
+}
+
+impl<'a, 'b> ForwardIter for ConsolidateDataIter<'a, 'b> {
+    type Item = DataItem<'a>;
+
+    fn current(&self) -> Option<&Self::Item> {
+        self.iter.current()
+    }
+
+    fn rewind(&mut self) {
+        self.iter.rewind();
+        self.reset();
+        self.find_next();
+    }
+
+    fn next(&mut self) {
+        self.iter.next();
+        self.find_next();
+    }
+
+    fn skip_all(&mut self) {
+        self.iter.skip_all()
+    }
+}
+
+impl<'a, 'b> SeekableIter<Key<'_>> for ConsolidateDataIter<'a, 'b> {
+    fn seek(&mut self, target: &Key<'_>) {
+        self.iter.seek(target);
+        self.reset();
+        self.find_next();
+    }
+}
