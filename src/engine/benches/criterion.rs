@@ -48,15 +48,15 @@ impl Bench {
         F: Fn(&Table, u64),
     {
         let k = self.dist.sample(&mut self.rng);
-        black_box(func(&self.table, k));
+        func(&self.table, k);
     }
 }
 
 fn bench(c: &mut Criterion) {
     let mut bench = Bench::open(Options::default());
     bench.setup();
-    c.bench_function("get", |b| b.iter(|| bench.bench(get)));
-    c.bench_function("put", |b| b.iter(|| bench.bench(put)));
+    c.bench_function("get", |b| b.iter(|| bench.bench(black_box(get))));
+    c.bench_function("put", |b| b.iter(|| bench.bench(black_box(put))));
 }
 
 criterion_group!(

@@ -389,9 +389,9 @@ pub mod tests {
         ptr.set_kind(PageKind::Split);
         assert_eq!(ptr.kind(), PageKind::Split);
 
-        assert_eq!(ptr.is_leaf(), false);
+        assert!(!ptr.is_leaf());
         ptr.set_leaf(true);
-        assert_eq!(ptr.is_leaf(), true);
+        assert!(ptr.is_leaf());
 
         assert_eq!(ptr.content_size(), 0);
         ptr.set_content_size(4);
