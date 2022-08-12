@@ -68,16 +68,19 @@ mod tests {
     }
 
     fn iter(map: &Map, start: usize, end: usize, step: usize) {
-        let mut i = start;
         let mut iter = map.iter();
-        iter.next_with(|item| {
-            let buf = i.to_be_bytes();
-            let key = buf.as_slice();
-            assert_eq!(item, (key, key));
-            i += step;
-        })
-        .unwrap();
-        assert_eq!(i, end);
+        for _ in 0..2 {
+            let mut i = start;
+            iter.reset();
+            iter.next_with(|item| {
+                let buf = i.to_be_bytes();
+                let key = buf.as_slice();
+                assert_eq!(item, (key, key));
+                i += step;
+            })
+            .unwrap();
+            assert_eq!(i, end);
+        }
     }
 
     fn put(map: &Map, i: usize) {

@@ -713,11 +713,15 @@ impl Iter {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.cursor = Some(Vec::new());
+    }
+
     pub fn next_with<F>(&mut self, mut f: F) -> Result<()>
     where
         F: FnMut((&[u8], &[u8])),
     {
-        while let Some(mut iter) = self.next_iter()? {
+        while let Some(mut iter) = self.next_node()? {
             iter.rewind();
             while let Some(item) = iter.current() {
                 f(item);
@@ -727,7 +731,7 @@ impl Iter {
         Ok(())
     }
 
-    fn next_iter(&mut self) -> Result<Option<NodeIter<'_>>> {
+    pub fn next_node(&mut self) -> Result<Option<NodeIter<'_>>> {
         if let Some(cursor) = self.cursor.take() {
             self.bump.reset();
             self.guard.repin();
@@ -748,7 +752,7 @@ impl Iter {
     }
 }
 
-struct NodeIter<'a> {
+pub struct NodeIter<'a> {
     iter: DataNodeIter<'a, 'a>,
     last: &'a [u8],
     current: Option<(&'a [u8], &'a [u8])>,
@@ -758,28 +762,18 @@ impl<'a> NodeIter<'a> {
     fn new(iter: DataNodeIter<'a, 'a>) -> Self {
         Self {
             iter,
-            last: [].as_slice(),
+            last: &[],
             current: None,
         }
     }
 
-    fn current(&self) -> Option<(&[u8], &[u8])> {
-        self.current
-    }
-
-    fn rewind(&mut self) {
-        self.iter.rewind();
-        self.find_next();
-    }
-
-    fn next(&mut self) {
-        self.iter.next();
-        self.find_next();
+    fn reset(&mut self) {
+        self.last = &[];
     }
 
     fn find_next(&mut self) {
         while let Some((k, v)) = self.iter.current() {
-            if self.last != k.raw {
+            if k.raw != self.last {
                 self.last = k.raw;
                 if let Value::Put(value) = v {
                     self.current = Some((k.raw, value));
@@ -789,6 +783,21 @@ impl<'a> NodeIter<'a> {
             self.iter.next();
         }
         self.current = None;
+    }
+
+    pub fn current(&self) -> Option<(&[u8], &[u8])> {
+        self.current
+    }
+
+    pub fn rewind(&mut self) {
+        self.iter.rewind();
+        self.reset();
+        self.find_next();
+    }
+
+    pub fn next(&mut self) {
+        self.iter.next();
+        self.find_next();
     }
 }
 
