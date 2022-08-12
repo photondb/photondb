@@ -6,17 +6,17 @@ use super::{page::*, stats::Stats, tree::*, Options, Result};
 use crate::util::Sequencer;
 
 #[derive(Clone)]
-pub struct Table {
-    raw: RawTable,
-    sequence: Arc<Sequencer>,
+pub struct Map {
+    raw: RawMap,
+    lsn: Arc<Sequencer>,
 }
 
-impl Table {
+impl Map {
     pub fn open(opts: Options) -> Result<Self> {
-        let raw = RawTable::open(opts)?;
+        let raw = RawMap::open(opts)?;
         raw.set_min_lsn(u64::MAX);
-        let sequence = Arc::new(Sequencer::new(0));
-        Ok(Self { raw, sequence })
+        let lsn = Arc::new(Sequencer::new(0));
+        Ok(Self { raw, lsn })
     }
 
     pub fn get<F>(&self, key: &[u8], func: F) -> Result<()>
@@ -31,27 +31,27 @@ impl Table {
     }
 
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        let lsn = self.sequence.inc();
+        let lsn = self.lsn.inc();
         self.raw.put(key, lsn, value)
     }
 
     pub fn delete(&self, key: &[u8]) -> Result<()> {
-        let lsn = self.sequence.inc();
+        let lsn = self.lsn.inc();
         self.raw.delete(key, lsn)
     }
 
-    /// Returns statistics of this table.
+    /// Returns statistics of this map.
     pub fn stats(&self) -> Stats {
         self.raw.stats()
     }
 }
 
 #[derive(Clone)]
-pub struct RawTable {
+pub struct RawMap {
     tree: Arc<Tree>,
 }
 
-impl RawTable {
+impl RawMap {
     pub fn open(opts: Options) -> Result<Self> {
         let tree = Tree::open(opts)?;
         Ok(Self {
@@ -86,7 +86,7 @@ impl RawTable {
         self.tree.insert(key, value, guard)
     }
 
-    /// Returns statistics of this table.
+    /// Returns statistics of this map.
     pub fn stats(&self) -> Stats {
         self.tree.stats()
     }

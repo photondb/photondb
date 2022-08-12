@@ -17,7 +17,7 @@ criterion = "0.3"
 rand = "0.8"
 
 [[bench]]
-name = "criterion"
+name = "map"
 harness = false
 
 [[bench]]

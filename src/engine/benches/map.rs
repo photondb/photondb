@@ -10,45 +10,45 @@ use rand::{
 
 const NUM_KEYS: u64 = 10_000_000;
 
-fn get(table: &Table, k: u64) {
+fn get(map: &Map, k: u64) {
     let buf = k.to_be_bytes();
     let key = buf.as_slice();
-    table.get(key, |_| {}).unwrap();
+    map.get(key, |_| {}).unwrap();
 }
 
-fn put(table: &Table, k: u64) {
+fn put(map: &Map, k: u64) {
     let buf = k.to_be_bytes();
     let key = buf.as_slice();
-    table.put(key, key).unwrap();
+    map.put(key, key).unwrap();
 }
 
 struct Bench {
+    map: Map,
     rng: ThreadRng,
     dist: Uniform<u64>,
-    table: Table,
 }
 
 impl Bench {
     fn open(opts: Options) -> Self {
         Self {
+            map: Map::open(opts).unwrap(),
             rng: thread_rng(),
             dist: Uniform::from(0..NUM_KEYS),
-            table: Table::open(opts).unwrap(),
         }
     }
 
     fn setup(&mut self) {
         for k in 0..NUM_KEYS {
-            put(&self.table, k);
+            put(&self.map, k);
         }
     }
 
     fn bench<F>(&mut self, func: F)
     where
-        F: Fn(&Table, u64),
+        F: Fn(&Map, u64),
     {
         let k = self.dist.sample(&mut self.rng);
-        func(&self.table, k);
+        func(&self.map, k);
     }
 }
 

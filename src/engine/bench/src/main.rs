@@ -7,7 +7,7 @@ use std::{
 };
 
 use clap::Parser;
-use photondb_engine::tree::{Options, Table};
+use photondb_engine::tree::{Map, Options};
 use rand::{
     distributions::{Distribution, Uniform, WeightedIndex},
     rngs::ThreadRng,
@@ -59,8 +59,8 @@ impl Bench {
         let elapsed = start.elapsed().as_secs_f64();
 
         println!("{:#?}", self.inner.cfg);
+        println!("Map {:#?}", self.inner.map.stats());
         println!("Bench {:#?}", self.inner.stats);
-        println!("Table {:#?}", self.inner.table.stats());
 
         let num_ops = self.inner.stats.num_ops.get();
         println!("{} ops/sec", num_ops as f64 / elapsed);
@@ -69,7 +69,7 @@ impl Bench {
 
 struct Inner {
     cfg: Config,
-    table: Table,
+    map: Map,
     stats: Stats,
 }
 
@@ -77,7 +77,7 @@ impl Inner {
     fn new(cfg: Config) -> Self {
         Self {
             cfg,
-            table: Table::open(Options::default()).unwrap(),
+            map: Map::open(Options::default()).unwrap(),
             stats: Stats::default(),
         }
     }
@@ -89,7 +89,7 @@ impl Inner {
         for k in 0..self.cfg.num_kvs {
             workload.fill_with_num(k, &mut kbuf);
             workload.fill_with_num(k, &mut vbuf);
-            self.table.put(&kbuf, &vbuf).unwrap();
+            self.map.put(&kbuf, &vbuf).unwrap();
         }
     }
 
@@ -102,12 +102,12 @@ impl Inner {
             workload.fill_with_num(k, &mut kbuf);
             match workload.rand_op() {
                 Op::Get => {
-                    self.table.get(&kbuf, |_| {}).unwrap();
+                    self.map.get(&kbuf, |_| {}).unwrap();
                     self.stats.num_gets.inc();
                 }
                 Op::Put => {
                     workload.fill_with_num(k, &mut vbuf);
-                    self.table.put(&kbuf, &vbuf).unwrap();
+                    self.map.put(&kbuf, &vbuf).unwrap();
                     self.stats.num_puts.inc();
                 }
             }
