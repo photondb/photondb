@@ -19,3 +19,8 @@ rand = "0.8"
 [[bench]]
 name = "criterion"
 harness = false
+
+[[bench]]
+name = "stdmap"
+bench = false
+harness = false
