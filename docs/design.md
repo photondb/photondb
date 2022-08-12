@@ -35,7 +35,3 @@ A group manages one or more shards.
 ## Future goals
 
 ### Multi-tenant
-
-### Programmable
-
-Design an intermediate programming language to manipulate data. For example, we can model collections as tree/hash maps and the language should allow all possible computation on these maps. This will be compared to a physical plan in SQL.

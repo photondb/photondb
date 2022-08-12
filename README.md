@@ -1,10 +1,11 @@
 # ![PhotonDB](docs/media/logo.png)
 
-This is an experimental project to explore how to build a high performance data store in Rust.
+This is an experimental project to build a high performance data store in Rust.
+The ultimate goal of this project is described in the [top-level design document](docs/design.md).
 
-The first plan is to build an async runtime based on io_uring and a storage engine based on Bw-Tree. And then build a standalone server based on the runtime and the storage engine.
+## Progress
 
-You can check the [top-level design document](docs/design.md) for more details about the project.
+The first plan is to build a storage engine based on Bw-Tree. Then build a standalone server with the storage engine.
 
 ## References
 

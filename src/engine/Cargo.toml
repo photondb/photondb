@@ -1,7 +1,11 @@
 [package]
 name = "photondb-engine"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
+license = "Apache-2.0"
+homepage = "https://photondb.io"
+repository = "https://github.com/photondb/photondb"
+description = "The PhotonDB storage engine."
 
 [dependencies]
 bitflags = "1.3"

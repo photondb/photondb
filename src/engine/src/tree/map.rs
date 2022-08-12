@@ -5,6 +5,7 @@ use crossbeam_epoch::pin;
 use super::{page::*, stats::Stats, tree::*, Options, Result};
 use crate::util::Sequencer;
 
+/// A lock-free ordered map.
 #[derive(Clone)]
 pub struct Map {
     raw: RawMap,
@@ -12,6 +13,7 @@ pub struct Map {
 }
 
 impl Map {
+    /// Opens a map with the given options.
     pub fn open(opts: Options) -> Result<Self> {
         let raw = RawMap::open(opts)?;
         raw.set_min_lsn(u64::MAX);
@@ -19,6 +21,7 @@ impl Map {
         Ok(Self { raw, lsn })
     }
 
+    /// Gets the value corresponding to `key` and calls `func` with it.
     pub fn get<F>(&self, key: &[u8], func: F) -> Result<()>
     where
         F: FnMut(Option<&[u8]>),
@@ -30,11 +33,13 @@ impl Map {
         self.raw.iter()
     }
 
+    /// Puts the key-value pair into this map.
     pub fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let lsn = self.lsn.inc();
         self.raw.put(key, lsn, value)
     }
 
+    /// Deletes the key-value pair from this map.
     pub fn delete(&self, key: &[u8]) -> Result<()> {
         let lsn = self.lsn.inc();
         self.raw.delete(key, lsn)
@@ -46,12 +51,14 @@ impl Map {
     }
 }
 
+/// A lock-free ordered map with raw interfaces for advanced use cases.
 #[derive(Clone)]
 pub struct RawMap {
     tree: Arc<Tree>,
 }
 
 impl RawMap {
+    /// Opens a map with the given options.
     pub fn open(opts: Options) -> Result<Self> {
         let tree = Tree::open(opts)?;
         Ok(Self {
@@ -59,6 +66,7 @@ impl RawMap {
         })
     }
 
+    /// Finds the value corresponding to `key` and calls `func` with it.
     pub fn get<F>(&self, key: &[u8], lsn: u64, f: F) -> Result<()>
     where
         F: FnMut(Option<&[u8]>),
@@ -72,6 +80,7 @@ impl RawMap {
         Iter::new(self.tree.clone())
     }
 
+    /// Puts the key-value pair into this map.
     pub fn put(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
         let guard = &pin();
         let key = Key::new(key, lsn);
@@ -79,6 +88,7 @@ impl RawMap {
         self.tree.insert(key, value, guard)
     }
 
+    /// Deletes the key-value pair into this map.
     pub fn delete(&self, key: &[u8], lsn: u64) -> Result<()> {
         let guard = &pin();
         let key = Key::new(key, lsn);
