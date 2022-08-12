@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use bumpalo::Bump;
-use crossbeam_epoch::{pin, Guard};
+use crossbeam_epoch::{pin, unprotected, Guard};
 
 use super::{
     node::*,
@@ -637,6 +637,34 @@ impl Tree {
         Ok(())
     }
 
+    fn dealloc_tree<'a: 'g, 'g>(&'a self, id: u64, guard: &'g Guard) -> Result<()> {
+        let addr = self.page_addr(id);
+        let view = self.page_view(addr, guard).expect("the node must be valid");
+        let node = Node {
+            id,
+            view,
+            range: Range::default(),
+        };
+        if node.view.is_leaf() {
+            self.dealloc_node(node.view.as_addr(), guard);
+            return Ok(());
+        }
+
+        let bump = Bump::new();
+        let mut index_iter = self.index_node_iter(&node, &bump, guard)?;
+        index_iter.rewind();
+        while let Some((_, index)) = index_iter.current() {
+            self.dealloc_tree(index.id, guard)?;
+            index_iter.next();
+        }
+
+        Ok(())
+    }
+
+    fn dealloc_node<'a: 'g, 'g>(&'a self, head: impl Into<u64>, guard: &'g Guard) {
+        self.dealloc_page_chain(head, 0u64, guard);
+    }
+
     fn dealloc_page_chain<'a: 'g, 'g>(
         &'a self,
         head: impl Into<u64>,
@@ -658,6 +686,13 @@ impl Tree {
                 break;
             }
         });
+    }
+}
+
+impl Drop for Tree {
+    fn drop(&mut self) {
+        let guard = unsafe { unprotected() };
+        self.dealloc_tree(ROOT_INDEX.id, guard).unwrap();
     }
 }
 
