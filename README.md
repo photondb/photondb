@@ -5,7 +5,9 @@ The ultimate goal of this project is described in the [top-level design document
 
 ## Progress
 
-The first plan is to build a storage engine based on Bw-Tree. Then build a standalone server with the storage engine.
+Our first plan is to build a storage engine based on the Bw-Tree. Then build a standalone server with the storage engine.
+
+The in-memory part of the storage engine is almost done at the moment. You can check the implementation in the `photondb-engine` crate.
 
 ## References
 
