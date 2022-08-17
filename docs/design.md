@@ -28,7 +28,7 @@ PhotonDB employs a three-tier architecture:
 
 ![Group](media/group.drawio.svg)
 
-A group consists of multiple replicas that run the Raft concensus protocol.
+A group consists of multiple replicas that run the Raft consensus protocol.
 
 A group manages one or more shards.
 
