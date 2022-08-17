@@ -44,13 +44,22 @@ impl Bench {
 
     fn run(&self) {
         self.inner.setup();
+        for t in 1..=self.inner.cfg.num_threads {
+            self.bench(t);
+        }
+        println!("{:#?}", self.inner.cfg);
+        println!("Map {:#?}", self.inner.map.stats());
+    }
 
+    fn bench(&self, num_threads: usize) {
         let start = Instant::now();
+        let stats = Arc::new(Stats::default());
         let mut threads = Vec::new();
-        for _ in 0..self.inner.cfg.num_threads {
+        for _ in 0..num_threads {
+            let stats = stats.clone();
             let inner = self.inner.clone();
             threads.push(std::thread::spawn(move || {
-                inner.bench();
+                inner.bench(&stats);
             }));
         }
         for thread in threads {
@@ -58,19 +67,18 @@ impl Bench {
         }
         let elapsed = start.elapsed().as_secs_f64();
 
-        println!("{:#?}", self.inner.cfg);
-        println!("Map {:#?}", self.inner.map.stats());
-        println!("Bench {:#?}", self.inner.stats);
-
-        let num_ops = self.inner.stats.num_ops.get();
-        println!("{} ops/sec", num_ops as f64 / elapsed);
+        let num_ops = stats.num_ops.get();
+        println!(
+            "{} threads, {} ops/sec",
+            num_threads,
+            num_ops as f64 / elapsed
+        );
     }
 }
 
 struct Inner {
     cfg: Config,
     map: Map,
-    stats: Stats,
 }
 
 impl Inner {
@@ -78,7 +86,6 @@ impl Inner {
         Self {
             cfg,
             map: Map::open(Options::default()).unwrap(),
-            stats: Stats::default(),
         }
     }
 
@@ -86,29 +93,35 @@ impl Inner {
         let mut kbuf = vec![0; self.cfg.key_len];
         let mut vbuf = vec![0; self.cfg.value_len];
         let mut workload = Workload::new(&self.cfg);
+        // Fills
         for k in 0..self.cfg.num_kvs {
             workload.fill_with_num(k, &mut kbuf);
             workload.fill_with_num(k, &mut vbuf);
             self.map.put(&kbuf, &vbuf).unwrap();
         }
+        // Warms up
+        for k in 0..(self.cfg.num_ops / 10) {
+            workload.fill_with_num(k, &mut kbuf);
+            self.map.get(&kbuf, |_| {}).unwrap();
+        }
     }
 
-    fn bench(&self) {
+    fn bench(&self, stats: &Stats) {
         let mut kbuf = vec![0; self.cfg.key_len];
         let mut vbuf = vec![0; self.cfg.value_len];
         let mut workload = Workload::new(&self.cfg);
-        while self.stats.num_ops.inc() < self.cfg.num_ops {
+        while stats.num_ops.inc() < self.cfg.num_ops {
             let k = workload.rand_num();
             workload.fill_with_num(k, &mut kbuf);
             match workload.rand_op() {
                 Op::Get => {
                     self.map.get(&kbuf, |_| {}).unwrap();
-                    self.stats.num_gets.inc();
+                    stats.num_gets.inc();
                 }
                 Op::Put => {
                     workload.fill_with_num(k, &mut vbuf);
                     self.map.put(&kbuf, &vbuf).unwrap();
-                    self.stats.num_puts.inc();
+                    stats.num_puts.inc();
                 }
             }
         }
