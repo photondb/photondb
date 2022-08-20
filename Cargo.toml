@@ -1,5 +1,5 @@
 [workspace]
-members = ["src/engine", "src/engine/bench"]
+members = ["src/engine", "src/engine/bench", "src/runtime"]
 
 [profile.bench]
 debug = true
