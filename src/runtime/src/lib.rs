@@ -1,14 +1,40 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
+use std::{
+    io::Result,
+    os::unix::io::RawFd,
+    path::Path,
+    task::{Context, Poll},
+};
+
+pub trait FileIo {
+    fn poll_open<P: AsRef<Path>>(&self, cx: &mut Context, path: P) -> Poll<Result<RawFd>>;
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub trait SocketIo {
+    fn poll_accept(&self, cx: &mut Context) -> Poll<Result<()>>;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+    fn poll_connect(&self, cx: &mut Context) -> Poll<Result<()>>;
+}
+
+pub trait SequentialIo {
+    fn poll_read(&self, cx: &mut Context, fd: RawFd, buf: &mut [u8]) -> Poll<Result<usize>>;
+
+    fn poll_write(&self, cx: &mut Context, fd: RawFd, buf: &[u8]) -> Poll<Result<usize>>;
+}
+
+pub trait PositionalIo {
+    fn poll_read_at(
+        &self,
+        cx: &mut Context,
+        fd: RawFd,
+        buf: &mut [u8],
+        offset: u64,
+    ) -> Poll<Result<usize>>;
+
+    fn poll_write_at(
+        &self,
+        cx: &mut Context,
+        fd: RawFd,
+        buf: &[u8],
+        offset: u64,
+    ) -> Poll<Result<usize>>;
 }
