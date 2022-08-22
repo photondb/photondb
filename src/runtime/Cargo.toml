@@ -9,3 +9,6 @@ description = "The PhotonDB asynchronous runtime."
 categories = ["asynchronous"]
 
 [dependencies]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.5"

@@ -312,6 +312,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-uring"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "427496d698429d86ff947537dff68facb83fe753b7abea4fab4ac1c4b7a4b94b"
+dependencies = [
+ "bitflags",
+ "libc",
+]
+
+[[package]]
 name = "itertools"
 version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -453,6 +463,9 @@ dependencies = [
 [[package]]
 name = "photondb-runtime"
 version = "0.0.1"
+dependencies = [
+ "io-uring",
+]
 
 [[package]]
 name = "plotters"
