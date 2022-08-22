@@ -1,9 +1,8 @@
 pub trait Env {
-    type SequentialFile;
-    type PositionalFile;
+    type SequentialWriter;
+    type PositionalReader;
 
-    async fn open_sequential_file<P: AsRef<Path>>(&self, path: P) -> Result<Self::SequentialFile>;
+    async fn open_sequential_writer<P: AsRef<Path>>(&self, path: P) -> Result<Self::SequentialWriter>;
 
-    async fn open_positional_file<P: AsRef<Path>>(&self, path: P) -> Result<Self::PositionalFile>;
+    async fn open_positional_reader<P: AsRef<Path>>(&self, path: P) -> Result<Self::PositionalReader>;
 }
-

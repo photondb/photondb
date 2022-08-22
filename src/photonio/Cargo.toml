@@ -1,11 +1,11 @@
 [package]
-name = "photondb-runtime"
+name = "photonio"
 version = "0.0.1"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://photondb.io"
 repository = "https://github.com/photondb/photondb"
-description = "The PhotonDB asynchronous runtime."
+description = "An asynchronous runtime for data-intensive applications."
 categories = ["asynchronous"]
 
 [dependencies]

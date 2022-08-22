@@ -461,7 +461,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "photondb-runtime"
+name = "photonio"
 version = "0.0.1"
 dependencies = [
  "io-uring",
