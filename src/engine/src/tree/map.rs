@@ -6,14 +6,14 @@ use super::{page::*, stats::Stats, tree::*, Options, Result};
 use crate::{env::Env, util::Sequencer};
 
 #[derive(Clone)]
-pub struct Store<E: Env> {
-    raw: RawStore<E>,
+pub struct Map<E: Env> {
+    raw: RawMap<E>,
     lsn: Arc<Sequencer>,
 }
 
-impl<E: Env> Store<E> {
+impl<E: Env> Map<E> {
     pub async fn open(env: E, root: PathBuf, opts: Options) -> Result<Self> {
-        let raw = RawStore::open(env, root, opts).await?;
+        let raw = RawMap::open(env, root, opts).await?;
         raw.set_min_lsn(u64::MAX);
         let lsn = Arc::new(Sequencer::new(0));
         Ok(Self { raw, lsn })
@@ -50,12 +50,11 @@ impl<E: Env> Store<E> {
 }
 
 #[derive(Clone)]
-pub struct RawStore<E: Env> {
+pub struct RawMap<E: Env> {
     tree: Arc<Tree<E>>,
 }
 
-impl<E: Env> RawStore<E> {
-    /// Opens a map with the given options.
+impl<E: Env> RawMap<E> {
     pub async fn open(env: E, root: PathBuf, opts: Options) -> Result<Self> {
         let tree = Tree::open(env, root, opts).await?;
         Ok(Self {

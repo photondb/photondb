@@ -1,8 +1,8 @@
+mod map;
+pub use map::{Map, RawMap};
+
 mod error;
 pub use error::{Error, Result};
-
-mod store;
-pub use store::{RawStore, Store};
 
 mod stats;
 pub use stats::Stats;
@@ -14,8 +14,6 @@ mod pagestore;
 mod pagetable;
 #[allow(clippy::module_inception)]
 mod tree;
-
-use std::path::PathBuf;
 
 #[non_exhaustive]
 #[derive(Clone, Debug)]
