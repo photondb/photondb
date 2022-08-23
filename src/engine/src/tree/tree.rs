@@ -1,6 +1,9 @@
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use bumpalo::Bump;
@@ -15,21 +18,22 @@ use super::{
     stats::{AtomicStats, Stats},
     Error, Options, Result,
 };
+use crate::env::Env;
 
-pub struct Tree {
+pub struct Tree<E: Env> {
     opts: Options,
     table: PageTable,
     cache: PageCache,
-    store: PageStore,
+    store: PageStore<E>,
     stats: AtomicStats,
     min_lsn: MinLsn,
 }
 
-impl Tree {
-    pub fn open(opts: Options) -> Result<Self> {
+impl<E: Env> Tree<E> {
+    pub async fn open(env: E, root: PathBuf, opts: Options) -> Result<Self> {
         let table = PageTable::default();
         let cache = PageCache::default();
-        let store = PageStore::open()?;
+        let store = PageStore::open(env, root, opts.clone()).await?;
         let tree = Self {
             opts,
             table,
@@ -152,7 +156,7 @@ impl Tree {
     }
 }
 
-impl Tree {
+impl<E: Env> Tree<E> {
     fn page_addr(&self, id: u64) -> PageAddr {
         self.table.get(id).into()
     }
@@ -223,7 +227,7 @@ impl Tree {
     }
 }
 
-impl Tree {
+impl<E: Env> Tree<E> {
     fn find_leaf<'a: 'g, 'g>(
         &'a self,
         key: &[u8],
@@ -689,22 +693,22 @@ impl Tree {
     }
 }
 
-impl Drop for Tree {
+impl<E: Env> Drop for Tree<E> {
     fn drop(&mut self) {
         let guard = unsafe { unprotected() };
         self.dealloc_tree(ROOT_INDEX.id, guard).unwrap();
     }
 }
 
-pub struct Iter {
-    tree: Arc<Tree>,
+pub struct Iter<E: Env> {
+    tree: Arc<Tree<E>>,
     bump: Bump,
     guard: Guard,
     cursor: Option<Vec<u8>>,
 }
 
-impl Iter {
-    pub fn new(tree: Arc<Tree>) -> Self {
+impl<E: Env> Iter<E> {
+    pub fn new(tree: Arc<Tree<E>>) -> Self {
         Self {
             tree,
             bump: Bump::new(),

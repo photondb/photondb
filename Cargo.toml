@@ -1,5 +1,5 @@
 [workspace]
-members = ["src/engine", "src/engine/bench", "src/photonio"]
+members = ["src/engine", "src/photonio"]
 
 [profile.bench]
 debug = true

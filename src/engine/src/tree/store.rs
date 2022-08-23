@@ -1,21 +1,19 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use crossbeam_epoch::pin;
 
 use super::{page::*, stats::Stats, tree::*, Options, Result};
-use crate::util::Sequencer;
+use crate::{env::Env, util::Sequencer};
 
-/// A lock-free ordered map.
 #[derive(Clone)]
-pub struct Map {
-    raw: RawMap,
+pub struct Store<E: Env> {
+    raw: RawStore<E>,
     lsn: Arc<Sequencer>,
 }
 
-impl Map {
-    /// Opens a map with the given options.
-    pub fn open(opts: Options) -> Result<Self> {
-        let raw = RawMap::open(opts)?;
+impl<E: Env> Store<E> {
+    pub async fn open(env: E, root: PathBuf, opts: Options) -> Result<Self> {
+        let raw = RawStore::open(env, root, opts).await?;
         raw.set_min_lsn(u64::MAX);
         let lsn = Arc::new(Sequencer::new(0));
         Ok(Self { raw, lsn })
@@ -29,7 +27,7 @@ impl Map {
         self.raw.get(key, u64::MAX, func)
     }
 
-    pub fn iter(&self) -> Iter {
+    pub fn iter(&self) -> Iter<E> {
         self.raw.iter()
     }
 
@@ -51,16 +49,15 @@ impl Map {
     }
 }
 
-/// A lock-free ordered map with raw interfaces for advanced use cases.
 #[derive(Clone)]
-pub struct RawMap {
-    tree: Arc<Tree>,
+pub struct RawStore<E: Env> {
+    tree: Arc<Tree<E>>,
 }
 
-impl RawMap {
+impl<E: Env> RawStore<E> {
     /// Opens a map with the given options.
-    pub fn open(opts: Options) -> Result<Self> {
-        let tree = Tree::open(opts)?;
+    pub async fn open(env: E, root: PathBuf, opts: Options) -> Result<Self> {
+        let tree = Tree::open(env, root, opts).await?;
         Ok(Self {
             tree: Arc::new(tree),
         })
@@ -76,7 +73,7 @@ impl RawMap {
         self.tree.get(key, guard).map(f)
     }
 
-    pub fn iter(&self) -> Iter {
+    pub fn iter(&self) -> Iter<E> {
         Iter::new(self.tree.clone())
     }
 

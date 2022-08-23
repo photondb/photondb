@@ -1,4 +1,10 @@
-use crate::tree::{page::PagePtr, Result};
+use std::path::PathBuf;
+
+use super::file_system::FileSystem;
+use crate::{
+    env::Env,
+    tree::{page::PagePtr, Options, Result},
+};
 
 #[derive(Copy, Clone, Debug)]
 pub struct PageInfo {
@@ -7,12 +13,16 @@ pub struct PageInfo {
     pub is_leaf: bool,
 }
 
-pub struct PageStore {}
+pub struct PageStore<E> {
+    fs: FileSystem<E>,
+    opts: Options,
+}
 
 #[allow(dead_code)]
-impl PageStore {
-    pub fn open() -> Result<Self> {
-        Ok(Self {})
+impl<E: Env> PageStore<E> {
+    pub async fn open(env: E, root: PathBuf, opts: Options) -> Result<Self> {
+        let fs = FileSystem::open(env, root).await?;
+        Ok(Self { fs, opts })
     }
 
     pub fn page_info(&self, _addr: u64) -> Option<PageInfo> {
