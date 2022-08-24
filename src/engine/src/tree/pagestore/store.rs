@@ -13,7 +13,7 @@ pub struct PageInfo {
     pub is_leaf: bool,
 }
 
-pub struct PageStore<E> {
+pub struct PageStore<E: Env> {
     fs: FileSystem<E>,
     opts: Options,
 }
