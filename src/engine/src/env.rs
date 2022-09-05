@@ -7,7 +7,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-pub use photonio::fs::{PositionalFile, SequentialFile};
+pub use photonio::{
+    fs::{PositionalFile, SequentialFile},
+    io::{PositionalRead, PositionalReadExt, SequentialWrite, SequentialWriteExt},
+};
 
 #[async_trait]
 pub trait Env {
