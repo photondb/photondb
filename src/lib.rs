@@ -1,18 +1,13 @@
 //! A storage engine for modern hardware.
 
-#[cfg(test)]
-mod tests {
-    use photondb_engine::tree::{Error, Map, Options};
+#![warn(unreachable_pub)]
+#![feature(io_error_more, type_alias_impl_trait)]
 
-    #[test]
-    fn main() -> Result<(), Error> {
-        let map = Map::open(Options::default())?;
-        map.put(b"hello", b"world")?;
-        map.get(b"hello", |value| {
-            assert_eq!(value.unwrap(), b"world");
-        })?;
-        map.delete(b"hello")?;
-        map.get(b"hello", |value| assert_eq!(value, None))?;
-        Ok(())
-    }
-}
+pub mod env;
+pub use env::Env;
+
+mod error;
+pub use error::{Error, Result};
+
+mod db;
+pub use db::Db;

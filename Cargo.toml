@@ -9,7 +9,9 @@ repository = "https://github.com/photondb/photondb"
 description = "A storage engine for modern hardware."
 
 [dependencies]
-photondb-engine = "0.0.1"
+futures = "0.3.24"
+photonio = "0.0.4"
+thiserror = "1.0.37"
 
 [profile.bench]
 debug = true
