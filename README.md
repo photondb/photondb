@@ -1,17 +1,40 @@
-# ![PhotonDB](docs/media/logo.png)
+# PhotonDB
 
-This is an experimental project to build a high performance data store in Rust.
-The ultimate goal of this project is described in the [top-level design document](docs/design.md).
+A storage engine for modern hardware, built from scratch in Rust.
+
+## Design
+
+![Architecture](doc/media/architecture.drawio.svg)
 
 ## Progress
 
-Our first plan is to build a storage engine based on the Bw-Tree. Then build a standalone server with the storage engine.
+The in-memory part of the storage engine is almost done at the moment. We have published the `photondb-engine` crate v0.0.1.
 
-The in-memory part of the storage engine is almost done at the moment. You can check the implementation in the `photondb-engine` crate.
+Example:
+
+```toml
+[dependencies]
+photondb-engine = "0.0.1"
+```
+
+```rust
+use photondb_engine::tree::{Error, Map, Options};
+
+fn main() -> Result<(), Error> {
+    let map = Map::open(Options::default())?;
+    map.put(b"hello", b"world")?;
+    map.get(b"hello", |value| {
+        assert_eq!(value.unwrap(), b"world");
+    })?;
+    map.delete(b"hello")?;
+    map.get(b"hello", |value| assert_eq!(value, None))?;
+    Ok(())
+}
+```
 
 ## Benchmark
 
-Some rough benchmarks on the in-memory storage engine so far:
+Some rough benchmarks on the in-memory storage engine with 100M keys:
 
 | #threads |   get   |   put   | get:put = 4:1 |
 |----------|---------|---------|---------------|
@@ -25,18 +48,10 @@ Some rough benchmarks on the in-memory storage engine so far:
 | 14       | 5826484 | 4636580 | 4309976 |
 | 16       | 6364404 | 5114875 | 4812409 |
 
-You can run the bench tool with:
-
-```
-cargo build --release
-target/release/bench --num-kvs 100000000 --num-ops 30000000 --num-threads 16 --get-weight 4 --put-weight 1
-```
-
 ## References
 
 - [The Bw-Tree: A B-tree for New Hardware Platforms](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/bw-tree-icde2013-final.pdf)
 - [Building a Bw-Tree Takes More Than Just Buzz Words](https://www.cs.cmu.edu/~huanche1/publications/open_bwtree.pdf)
-- [Optimizing Bw-tree Indexing Performance](https://cseweb.ucsd.edu//~csjgwang/pubs/ICDE17_BwTree.pdf)
 - [LLAMA: A Cache/Storage Subsystem for Modern Hardware](http://www.vldb.org/pvldb/vol6/p877-levandoski.pdf)
 - [Efficiently Reclaiming Space in a Log Structured Store](https://arxiv.org/abs/2005.00044)
 - [The Design and Implementation of a Log-Structured File System](https://people.eecs.berkeley.edu/~brewer/cs262/LFS.pdf)

@@ -1,5 +1,15 @@
-[workspace]
-members = ["src/engine", "src/photonio"]
+[package]
+name = "photondb"
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+authors = ["The PhotonDB Authors"]
+homepage = "https://photondb.io"
+repository = "https://github.com/photondb/photondb"
+description = "A storage engine for modern hardware."
+
+[dependencies]
+photondb-engine = "0.0.1"
 
 [profile.bench]
 debug = true
