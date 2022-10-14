@@ -2,13 +2,13 @@ use std::{fs::File, future::Future, io::Result, path::Path, thread};
 
 use futures::executor::block_on;
 
-use super::{ReadAt, Write};
+use super::{async_trait, Env, ReadAt, Write};
 
-/// An implementation of [`super::Env`] based on [`std`].
-pub struct Env;
+/// An implementation of [`Env`] based on synchronous I/O.
+pub struct Sync;
 
-#[super::async_trait]
-impl super::Env for Env {
+#[async_trait]
+impl Env for Sync {
     type PositionalReader = PositionalReader;
     type SequentialWriter = SequentialWriter;
 

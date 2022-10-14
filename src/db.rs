@@ -1,19 +1,19 @@
-use std::path::Path;
+use std::{io::Result, path::Path};
 
-use crate::{Env, Result};
+use crate::env::{Env, Photon};
 
+#[derive(Default)]
 #[non_exhaustive]
-pub struct Options<E> {
-    env: E,
-}
+pub struct Options {}
 
 pub struct Db<E> {
-    options: Options<E>,
+    env: E,
+    options: Options,
 }
 
 impl<E: Env> Db<E> {
-    pub async fn open<P: AsRef<Path>>(root: P, options: Options<E>) -> Result<Self> {
-        Ok(Db { options })
+    pub async fn open<P: AsRef<Path>>(env: E, root: P, options: Options) -> Result<Self> {
+        Ok(Db { env, options })
     }
 
     pub async fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>> {

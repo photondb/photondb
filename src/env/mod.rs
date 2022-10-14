@@ -1,9 +1,13 @@
-pub use ::photonio::io::{Read, ReadAt, Write, WriteAt};
-use ::std::{future::Future, io::Result, path::Path};
-pub use async_trait::async_trait;
+use std::{future::Future, io::Result, path::Path};
 
-pub mod photonio;
-pub mod std;
+pub use async_trait::async_trait;
+pub use photonio::io::{Read, ReadAt, Write, WriteAt};
+
+mod photon;
+pub use photon::Photon;
+
+mod sync;
+pub use sync::Sync;
 
 /// Provides an environment to interact with a specific platform.
 #[async_trait]

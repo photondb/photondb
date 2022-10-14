@@ -1,16 +1,16 @@
 use std::{future::Future, io::Result, path::Path};
 
-use photonio::{fs::File, runtime::Runtime};
+use photonio::{fs::File, task};
 
-/// An implementation of [`super::Env`] based on [`photonio`][photonio].
+use super::{async_trait, Env};
+
+/// An implementation of [`Env`] based on [`photonio`][photonio].
 ///
 /// [photonio]: https://github.com/photondb/photonio.
-pub struct Env {
-    rt: Runtime,
-}
+pub struct Photon;
 
-#[super::async_trait]
-impl super::Env for Env {
+#[async_trait]
+impl Env for Photon {
     type PositionalReader = File;
     type SequentialWriter = File;
 
@@ -33,7 +33,6 @@ impl super::Env for Env {
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        let handle = self.rt.spawn(f);
-        handle.await.unwrap()
+        task::spawn(f).await.unwrap()
     }
 }
