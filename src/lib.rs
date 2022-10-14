@@ -7,7 +7,8 @@ mod db;
 pub use db::{Db, Options};
 
 pub mod env;
-pub use env::Env;
+
+mod page_table;
 
 #[cfg(test)]
 mod tests {

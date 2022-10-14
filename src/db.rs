@@ -1,6 +1,6 @@
 use std::{io::Result, path::Path};
 
-use crate::env::{Env, Photon};
+use crate::env::Env;
 
 #[derive(Default)]
 #[non_exhaustive]
