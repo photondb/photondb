@@ -1,41 +1,40 @@
-use std::{
-    fs::File,
-    future::Future,
-    path::Path,
-    pin::Pin,
-    task::{Context, Poll},
-    thread,
-};
+use std::{fs::File, future::Future, io::Result, path::Path, thread};
 
 use futures::executor::block_on;
 
-use super::{ReadAt, Result, Write};
+use super::{ReadAt, Write};
 
 /// An implementation of [`super::Env`] based on [`std`].
 pub struct Env;
 
+#[super::async_trait]
 impl super::Env for Env {
     type PositionalReader = PositionalReader;
-    type OpenPositionalReader = impl Future<Output = Result<Self::PositionalReader>>;
-    fn open_positional_reader(&self, path: &Path) -> Self::OpenPositionalReader {
-        let file = File::open(path);
-        async move { Ok(PositionalReader(file?)) }
-    }
-
     type SequentialWriter = SequentialWriter;
-    type OpenSequentialWriter = impl Future<Output = Result<Self::SequentialWriter>>;
-    fn open_sequential_writer(&self, path: &Path) -> Self::OpenSequentialWriter {
-        let file = File::create(path);
-        async move { Ok(SequentialWriter(file?)) }
+
+    async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
+    where
+        P: AsRef<Path> + Send,
+    {
+        let file = File::open(path)?;
+        Ok(PositionalReader(file))
     }
 
-    type JoinHandle = JoinHandle;
-    fn spawn_background<F>(&self, f: F) -> Self::JoinHandle
+    async fn open_sequential_writer<P>(&self, path: P) -> Result<Self::SequentialWriter>
     where
-        F: Future<Output = ()> + Send + 'static,
+        P: AsRef<Path> + Send,
+    {
+        let file = File::create(path)?;
+        Ok(SequentialWriter(file))
+    }
+
+    async fn spawn_background<F>(&self, f: F) -> F::Output
+    where
+        F: Future + Send + 'static,
+        F::Output: Send,
     {
         let handle = thread::spawn(move || block_on(f));
-        JoinHandle(handle)
+        handle.join().unwrap()
     }
 }
 
@@ -59,15 +58,5 @@ impl Write for SequentialWriter {
     fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::Write<'a> {
         use std::io::Write as _;
         async move { self.0.write(buf) }
-    }
-}
-
-pub struct JoinHandle(thread::JoinHandle<()>);
-
-impl Future for JoinHandle {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        todo!()
     }
 }
