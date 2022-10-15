@@ -226,6 +226,7 @@ name = "photondb"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "bitflags",
  "futures",
  "photonio",
  "thiserror",

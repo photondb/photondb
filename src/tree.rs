@@ -95,3 +95,13 @@ impl Tree {
         todo!()
     }
 }
+
+impl Tree {
+    async fn find_leaf(&self, txn: &Txn, key: &Key<'_>) -> Result<()> {
+        todo!()
+    }
+
+    async fn lookup_value(&self, txn: &Txn, key: &Key<'_>) -> Result<()> {
+        todo!()
+    }
+}
