@@ -1,6 +1,10 @@
-use std::{io::Result, path::Path};
+use std::path::Path;
 
-use crate::env::Env;
+use crate::{
+    env::Env,
+    tree::{Entry, Key, Tree},
+    Result,
+};
 
 #[derive(Default)]
 #[non_exhaustive]
@@ -8,12 +12,13 @@ pub struct Options {}
 
 pub struct Db<E> {
     env: E,
-    options: Options,
+    tree: Tree,
 }
 
 impl<E: Env> Db<E> {
     pub async fn open<P: AsRef<Path>>(env: E, root: P, options: Options) -> Result<Self> {
-        Ok(Db { env, options })
+        let tree = Tree::open(options).await?;
+        Ok(Db { env, tree })
     }
 
     pub async fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>> {
@@ -25,14 +30,19 @@ impl<E: Env> Db<E> {
     where
         F: FnOnce(Option<&[u8]>) -> R,
     {
-        todo!()
+        let key = Key::new(key, lsn);
+        self.tree.get(key, f).await
     }
 
     pub async fn put(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
-        Ok(())
+        let key = Key::new(key, lsn);
+        let entry = Entry::put(key, value);
+        self.tree.write(entry).await
     }
 
     pub async fn delete(&self, key: &[u8], lsn: u64) -> Result<()> {
-        Ok(())
+        let key = Key::new(key, lsn);
+        let entry = Entry::delete(key);
+        self.tree.write(entry).await
     }
 }
