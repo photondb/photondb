@@ -4,6 +4,21 @@ use crate::{
     Error, Options, Result,
 };
 
+#[derive(Copy, Clone)]
+struct PageAddr(u64);
+
+impl From<u64> for PageAddr {
+    fn from(addr: u64) -> Self {
+        Self(addr)
+    }
+}
+
+impl From<PageAddr> for u64 {
+    fn from(addr: PageAddr) -> Self {
+        addr.0
+    }
+}
+
 struct PageStore;
 
 impl PageStore {
@@ -15,21 +30,11 @@ impl PageStore {
 struct Txn;
 
 impl Txn {
-    fn borrow_mut(&self) -> TxnMut<'_> {
-        TxnMut { txn: self }
-    }
-
-    fn read_page(&self, addr: u64) -> PageRef<'_> {
+    fn read_page(&self, addr: PageAddr) -> Result<PageRef<'_>> {
         todo!()
     }
-}
 
-struct TxnMut<'a> {
-    txn: &'a Txn,
-}
-
-impl<'a> TxnMut<'a> {
-    fn alloc_page(&mut self, size: usize) -> PageBuf<'a> {
+    fn alloc_page(&self, size: usize) -> Result<(PageAddr, PageBuf<'_>)> {
         todo!()
     }
 }
@@ -52,7 +57,7 @@ impl Tree {
         loop {
             match self.try_get(&txn, &key).await {
                 Ok(value) => return Ok(f(value)),
-                Err(Error::Conflicted) => continue,
+                Err(Error::Again) => continue,
                 Err(e) => return Err(e),
             }
         }
@@ -65,14 +70,13 @@ impl Tree {
 
     pub(crate) async fn write(&self, entry: Entry<'_>) -> Result<()> {
         let txn = self.store.begin();
-        let mut txn_mut = txn.borrow_mut();
         let builder = DataPageBuilder::new(PageTier::Leaf).with_item(&entry);
-        let mut page = txn_mut.alloc_page(builder.size());
+        let (addr, mut page) = txn.alloc_page(builder.size())?;
         builder.build(&mut page);
         loop {
-            match self.try_write(&txn, &entry.key, &mut page).await {
+            match self.try_write(&txn, &entry.key, addr, &mut page).await {
                 Ok(()) => return Ok(()),
-                Err(Error::Conflicted) => continue,
+                Err(Error::Again) => continue,
                 Err(e) => return Err(e),
             }
         }
@@ -82,6 +86,7 @@ impl Tree {
         &self,
         txn: &'t Txn,
         key: &Key<'_>,
+        addr: PageAddr,
         page: &mut PageBuf<'t>,
     ) -> Result<()> {
         let (view, _) = self.find_leaf(txn, key).await?;
@@ -106,7 +111,7 @@ impl Tree {
 
         loop {
             let addr = self.table.get(index.id);
-            let page = txn.read_page(addr);
+            let page = txn.read_page(addr.into())?;
             let view = PageView {
                 id: index.id,
                 addr,
@@ -117,7 +122,7 @@ impl Tree {
             // Do not continue if the page epoch has changed.
             if view.page.epoch() != index.epoch {
                 self.reconcile_page(txn, view, parent).await;
-                return Err(Error::Conflicted);
+                return Err(Error::Again);
             }
 
             if view.page.tier().is_leaf() {
@@ -162,10 +167,10 @@ impl Tree {
         todo!()
     }
 
-    async fn consolidate_page<'t>(&self, txn: &mut TxnMut<'t>, view: &PageView<'t>) {
+    async fn consolidate_page<'t>(&self, txn: &'t Txn, view: &PageView<'t>) -> Result<()> {
         let iter = self.consolidate_page_iter(txn, view).await;
         let builder = DataPageBuilder::new(view.page.tier()).with_iter(iter);
-        let mut page = txn.alloc_page(builder.size());
+        let (addr, mut page) = txn.alloc_page(builder.size())?;
         // builder.build(&mut page);
         page.set_epoch(view.page.epoch().next());
         // page.set_chain_len(last_page.chain_len());
@@ -174,7 +179,7 @@ impl Tree {
         todo!()
     }
 
-    async fn consolidate_page_iter<'t>(&self, txn: &mut TxnMut<'t>, view: &PageView<'t>) {
+    async fn consolidate_page_iter<'t>(&self, txn: &'t Txn, view: &PageView<'t>) {
         todo!()
     }
 }
