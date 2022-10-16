@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use crate::{
+    data::{Entry, Key},
     env::Env,
-    page::{Entry, Key},
     tree::Tree,
     Result,
 };

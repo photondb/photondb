@@ -1,5 +1,6 @@
 use crate::{
-    page::{DataPageBuilder, Entry, Key, PageBuf, PageEpoch, PageRef, PageTier, Range},
+    data::{Entry, Key, Range},
+    page::{DataPageBuilder, PageBuf, PageEpoch, PageRef, PageTier},
     page_store::{AtomicPageId, PageAddr, PageId, PageStore, PageTxn},
     Error, Options, Result,
 };
@@ -50,7 +51,7 @@ impl Tree {
         loop {
             let txn = self.begin();
             match txn.write(&entry).await {
-                Ok(()) => return Ok(()),
+                Ok(_) => return Ok(()),
                 Err(Error::Again) => continue,
                 Err(e) => return Err(e),
             }
@@ -71,30 +72,28 @@ impl<'a> TreeTxn<'a> {
     }
 
     async fn write(&self, entry: &Entry<'_>) -> Result<()> {
-        let builder = DataPageBuilder::new(PageTier::Leaf).with_item(&entry);
-        let (addr, mut page) = self.txn.alloc_page(builder.size())?;
-        builder.build(&mut page);
         let (mut view, _) = self.find_leaf(&entry.key).await?;
+        let builder = DataPageBuilder::new(PageTier::Leaf).with_item(());
+        let (new_addr, mut new_page) = self.txn.alloc_page(builder.size())?;
+        builder.build(&mut new_page);
         loop {
-            page.set_epoch(view.page.epoch());
-            page.set_chain_len(view.page.chain_len());
-            page.set_chain_next(view.addr.into());
-            match self.txn.update_page(view.id, view.addr, addr) {
+            new_page.set_epoch(view.page.epoch());
+            new_page.set_chain_len(view.page.chain_len());
+            new_page.set_chain_next(view.addr.into());
+            match self.txn.update_page(view.id, view.addr, new_addr) {
                 Ok(_) => {
-                    if page.chain_len() as usize >= self.opts.page_chain_length {
-                        view.page = page.into();
+                    if new_page.chain_len() as usize >= self.opts.page_chain_length {
+                        view.page = new_page.into();
                         // It doesn't matter whether this consolidation succeeds or not.
                         let _ = self.consolidate_page(view).await;
                         return Ok(());
                     }
                 }
-                Err(new_addr) => {
-                    if new_addr < addr {
-                        let new_page = self.txn.read_page(new_addr).await?;
-                        if new_page.epoch() == view.page.epoch() {
-                            view.page = new_page;
-                            continue;
-                        }
+                Err(addr) => {
+                    let page = self.txn.read_page(addr).await?;
+                    if page.epoch() == view.page.epoch() {
+                        view.page = page;
+                        continue;
                     }
                     return Err(Error::Again);
                 }
@@ -124,7 +123,9 @@ impl<'a> TreeTxn<'a> {
             if view.page.tier().is_leaf() {
                 return Ok((view, parent));
             }
-            self.lookup_index(key, &view).await?;
+            let (child_index, child_range) = self.lookup_child(key, &view).await?;
+            index = child_index;
+            range = child_range;
             parent = Some(view);
         }
     }
@@ -140,7 +141,7 @@ impl<'a> TreeTxn<'a> {
         todo!()
     }
 
-    async fn lookup_index(&self, key: &Key<'_>, view: &PageView<'_>) -> Result<()> {
+    async fn lookup_child(&self, key: &Key<'_>, view: &PageView<'_>) -> Result<(PageIndex, Range)> {
         todo!()
     }
 
@@ -149,7 +150,7 @@ impl<'a> TreeTxn<'a> {
     }
 
     async fn consolidate_page(&self, view: PageView<'_>) -> Result<()> {
-        let iter = self.consolidate_page_iter(&view).await;
+        let iter = self.delta_page_iter(&view).await;
         let builder = DataPageBuilder::new(view.page.tier()).with_iter(iter);
         let (addr, mut page) = self.txn.alloc_page(builder.size())?;
         // builder.build(&mut page);
@@ -162,7 +163,7 @@ impl<'a> TreeTxn<'a> {
         todo!()
     }
 
-    async fn consolidate_page_iter(&self, view: &PageView<'_>) {
+    async fn delta_page_iter(&self, view: &PageView<'_>) {
         todo!()
     }
 }

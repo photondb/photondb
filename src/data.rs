@@ -1,5 +1,3 @@
-use super::PageEpoch;
-
 pub(crate) struct Key<'a> {
     pub(crate) raw: &'a [u8],
     pub(crate) lsn: u64,

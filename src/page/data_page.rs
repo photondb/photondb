@@ -1,4 +1,4 @@
-use super::{Entry, PageBuf, PageKind, PageTier, SortedPageBuilder};
+use super::{PageBuf, PageKind, PageTier, SortedPageBuilder};
 
 pub(crate) struct DataPageBuilder(SortedPageBuilder);
 
@@ -11,7 +11,7 @@ impl DataPageBuilder {
         todo!()
     }
 
-    pub(crate) fn with_item(mut self, item: &Entry<'_>) -> Self {
+    pub(crate) fn with_item(mut self, item: ()) -> Self {
         todo!()
     }
 

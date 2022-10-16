@@ -11,6 +11,7 @@ pub mod env;
 mod error;
 pub use error::{Error, Result};
 
+mod data;
 mod page;
 mod page_store;
 mod tree;

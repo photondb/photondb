@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PageId(u64);
 
-/// An atomic version of [`PageId`] that allows concurrent access.
+/// An atomic [`PageId`] that allows concurrent access.
 pub(crate) struct AtomicPageId(AtomicU64);
 
 impl AtomicPageId {

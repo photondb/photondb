@@ -23,11 +23,11 @@ impl PageTxn {
         todo!()
     }
 
-    pub(crate) fn page_addr(&self, id: PageId) -> PageAddr {
+    pub(crate) async fn read_page(&self, addr: PageAddr) -> Result<PageRef<'_>> {
         todo!()
     }
 
-    pub(crate) async fn read_page(&self, addr: PageAddr) -> Result<PageRef<'_>> {
+    pub(crate) fn page_addr(&self, id: PageId) -> PageAddr {
         todo!()
     }
 
@@ -37,6 +37,7 @@ impl PageTxn {
         old: PageAddr,
         new: PageAddr,
     ) -> std::result::Result<(), PageAddr> {
+        // TODO: ensures that old < new so that we can recover the page table in order.
         todo!()
     }
 
