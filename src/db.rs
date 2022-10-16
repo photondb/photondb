@@ -2,7 +2,8 @@ use std::path::Path;
 
 use crate::{
     env::Env,
-    tree::{Entry, Key, Tree},
+    page::{Entry, Key},
+    tree::Tree,
     Result,
 };
 

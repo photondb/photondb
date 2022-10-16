@@ -1,4 +1,8 @@
-use std::ops::Deref;
+use std::{
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+    ptr::NonNull,
+};
 
 use bitflags::bitflags;
 
@@ -8,9 +12,13 @@ use bitflags::bitflags;
 ///     chain_len  : 1B
 ///     chain_next : 8B
 /// }
-pub(crate) struct PageBuf;
+#[derive(Copy, Clone)]
+pub(crate) struct PagePtr {
+    ptr: NonNull<u8>,
+    len: usize,
+}
 
-impl PageBuf {
+impl PagePtr {
     /// Returns the page tier.
     pub(crate) fn tier(&self) -> PageTier {
         todo!()
@@ -62,21 +70,56 @@ impl PageBuf {
     }
 }
 
-pub(crate) struct PageRef(PageBuf);
+pub(crate) struct PageBuf<'a> {
+    ptr: PagePtr,
+    _marker: PhantomData<&'a ()>,
+}
 
-impl Deref for PageRef {
-    type Target = PageBuf;
+impl<'a> Deref for PageBuf<'a> {
+    type Target = PagePtr;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.ptr
     }
 }
 
+impl<'a> DerefMut for PageBuf<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.ptr
+    }
+}
+
+#[derive(Copy, Clone)]
+pub(crate) struct PageRef<'a> {
+    ptr: PagePtr,
+    _marker: PhantomData<&'a ()>,
+}
+
+impl<'a> Deref for PageRef<'a> {
+    type Target = PagePtr;
+
+    fn deref(&self) -> &Self::Target {
+        &self.ptr
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PageTier {
     Leaf,
     Inner,
 }
 
+impl PageTier {
+    pub(crate) fn is_leaf(&self) -> bool {
+        self == &Self::Leaf
+    }
+
+    pub(crate) fn is_inner(&self) -> bool {
+        self == &Self::Inner
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PageKind {
     Data,
     Split,
@@ -89,4 +132,25 @@ bitflags! {
     }
 }
 
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PageEpoch(u64);
+
+const PAGE_EPOCH_MAX: u64 = (1 << 48) - 1;
+
+impl PageEpoch {
+    pub(crate) fn next(self) -> Self {
+        assert!(self.0 < PAGE_EPOCH_MAX);
+        Self(self.0 + 1)
+    }
+}
+
+pub(super) struct PageBuilder {
+    tier: PageTier,
+    kind: PageKind,
+}
+
+impl PageBuilder {
+    pub(super) fn new(tier: PageTier, kind: PageKind) -> Self {
+        Self { tier, kind }
+    }
+}
