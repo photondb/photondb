@@ -1,7 +1,5 @@
 use thiserror::Error;
 
-use super::PageAddr;
-
 #[derive(Error, Debug)]
 pub(crate) enum Error {
     #[error("Again")]
@@ -9,7 +7,7 @@ pub(crate) enum Error {
     #[error("Corrupted")]
     Corrupted,
     #[error("UpdatePage")]
-    UpdatePage(PageAddr),
+    UpdatePage(u64),
 }
 
 pub(crate) type Result<T> = std::result::Result<T, Error>;

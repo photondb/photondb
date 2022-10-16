@@ -1,6 +1,3 @@
-mod base;
-pub(crate) use base::{AtomicPageId, PageAddr, PageId};
-
 mod error;
 pub(crate) use error::{Error, Result};
 

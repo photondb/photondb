@@ -4,9 +4,7 @@ use photonio::{fs::File, task};
 
 use super::{async_trait, Env};
 
-/// An implementation of [`Env`] based on [`photonio`][photonio].
-///
-/// [photonio]: https://github.com/photondb/photonio.
+/// An implementation of [`Env`] based on PhotonIO.
 pub struct Photon;
 
 #[async_trait]

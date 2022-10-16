@@ -1,14 +1,16 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::{
     data::{Entry, Key, Range},
     env::Env,
     page::{DataPageBuilder, PageBuf, PageEpoch, PageRef, PageTier},
-    page_store::{AtomicPageId, Error, PageAddr, PageId, PageStore, PageTxn, Result},
+    page_store::{Error, PageStore, PageTxn, Result},
     Options,
 };
 
 pub(crate) struct Tree<E> {
     opts: Options,
-    root: AtomicPageId,
+    root: AtomicId,
     store: PageStore<E>,
 }
 
@@ -20,7 +22,7 @@ impl<E: Env> Tree<E> {
         txn.commit();
         Ok(Self {
             opts,
-            root: root.into(),
+            root: AtomicId::new(root),
             store,
         })
     }
@@ -63,7 +65,7 @@ impl<E: Env> Tree<E> {
 struct TreeTxn<'a> {
     txn: PageTxn,
     opts: &'a Options,
-    root: &'a AtomicPageId,
+    root: &'a AtomicId,
 }
 
 impl<'a> TreeTxn<'a> {
@@ -90,7 +92,7 @@ impl<'a> TreeTxn<'a> {
                         return Ok(());
                     }
                 }
-                Err(addr) => {
+                Err(Error::UpdatePage(addr)) => {
                     let page = self.txn.read_page(addr).await?;
                     if page.epoch() == view.page.epoch() {
                         view.page = page;
@@ -98,6 +100,7 @@ impl<'a> TreeTxn<'a> {
                     }
                     return Err(Error::Again);
                 }
+                Err(err) => return Err(err),
             }
         }
     }
@@ -151,39 +154,55 @@ impl<'a> TreeTxn<'a> {
     }
 
     async fn consolidate_page(&self, view: PageView<'_>) -> Result<()> {
-        let iter = self.delta_page_iter(&view).await;
+        let (iter, last_page) = self.delta_page_iter(&view).await;
         let builder = DataPageBuilder::new(view.page.tier()).with_iter(iter);
-        let (addr, mut page) = self.txn.alloc_page(builder.size())?;
-        // builder.build(&mut page);
-        page.set_epoch(view.page.epoch().next());
-        // page.set_chain_len(last_page.chain_len());
-        // page.set_chain_next(last_page.next());
+        let (new_addr, mut new_page) = self.txn.alloc_page(builder.size())?;
+        builder.build(&mut new_page);
+        new_page.set_epoch(view.page.epoch().next());
+        new_page.set_chain_len(last_page.chain_len());
+        new_page.set_chain_next(last_page.chain_next());
 
         // self.txn.update_page(view.id, view.addr, addr)?;
 
         todo!()
     }
 
-    async fn delta_page_iter(&self, view: &PageView<'_>) {
+    async fn delta_page_iter(&self, view: &PageView<'_>) -> ((), PageRef<'_>) {
         todo!()
     }
 }
 
+struct AtomicId(AtomicU64);
+
+impl AtomicId {
+    fn new(id: u64) -> Self {
+        Self(AtomicU64::new(id))
+    }
+
+    fn get(&self) -> u64 {
+        self.0.load(Ordering::Acquire)
+    }
+
+    fn set(&self, id: u64) {
+        self.0.store(id, Ordering::Release)
+    }
+}
+
 struct PageView<'a> {
-    id: PageId,
-    addr: PageAddr,
+    id: u64,
+    addr: u64,
     page: PageRef<'a>,
     range: Range<'a>,
 }
 
 #[derive(Copy, Clone, Debug)]
 struct PageIndex {
-    id: PageId,
+    id: u64,
     epoch: PageEpoch,
 }
 
 impl PageIndex {
-    fn new(id: PageId) -> Self {
+    fn new(id: u64) -> Self {
         Self {
             id,
             epoch: PageEpoch::default(),
