@@ -42,12 +42,6 @@ pub(crate) enum EntryKind {
 }
 
 #[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct Index {
-    pub(crate) id: u64,
-    pub(crate) epoch: PageEpoch,
-}
-
-#[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct Range<'a> {
     pub(crate) left: &'a [u8],
     pub(crate) right: Option<&'a [u8]>,

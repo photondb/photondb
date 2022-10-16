@@ -12,7 +12,7 @@ mod error;
 pub use error::{Error, Result};
 
 mod page;
-mod page_table;
+mod page_store;
 mod tree;
 
 #[cfg(test)]

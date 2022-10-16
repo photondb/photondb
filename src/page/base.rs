@@ -75,6 +75,12 @@ pub(crate) struct PageBuf<'a> {
     _marker: PhantomData<&'a ()>,
 }
 
+impl<'a> From<PageBuf<'a>> for PageRef<'a> {
+    fn from(buf: PageBuf<'a>) -> Self {
+        todo!()
+    }
+}
+
 impl<'a> Deref for PageBuf<'a> {
     type Target = PagePtr;
 

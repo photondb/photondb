@@ -7,9 +7,18 @@ use crate::{
     Result,
 };
 
-#[derive(Default)]
 #[non_exhaustive]
-pub struct Options {}
+pub struct Options {
+    pub page_chain_length: usize,
+}
+
+impl Options {
+    pub fn new() -> Self {
+        Self {
+            page_chain_length: 8,
+        }
+    }
+}
 
 pub struct Db<E> {
     env: E,
