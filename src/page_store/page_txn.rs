@@ -1,8 +1,5 @@
-use super::{PageAddr, PageId};
-use crate::{
-    page::{PageBuf, PageRef},
-    Result,
-};
+use super::{PageAddr, PageId, Result};
+use crate::page::{PageBuf, PageRef};
 
 pub(crate) struct PageTxn;
 

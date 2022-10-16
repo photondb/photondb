@@ -19,6 +19,11 @@ pub(crate) struct PagePtr {
 }
 
 impl PagePtr {
+    /// Returns the page size.
+    pub(crate) fn size(&self) -> usize {
+        self.len
+    }
+
     /// Returns the page tier.
     pub(crate) fn tier(&self) -> PageTier {
         todo!()
@@ -70,15 +75,10 @@ impl PagePtr {
     }
 }
 
+/// A mutable reference to a page.
 pub(crate) struct PageBuf<'a> {
     ptr: PagePtr,
     _marker: PhantomData<&'a ()>,
-}
-
-impl<'a> From<PageBuf<'a>> for PageRef<'a> {
-    fn from(buf: PageBuf<'a>) -> Self {
-        todo!()
-    }
 }
 
 impl<'a> Deref for PageBuf<'a> {
@@ -95,6 +95,13 @@ impl<'a> DerefMut for PageBuf<'a> {
     }
 }
 
+impl<'a> From<PageBuf<'a>> for PageRef<'a> {
+    fn from(buf: PageBuf<'a>) -> Self {
+        todo!()
+    }
+}
+
+/// An immutable reference to a page.
 #[derive(Copy, Clone)]
 pub(crate) struct PageRef<'a> {
     ptr: PagePtr,
@@ -134,7 +141,6 @@ pub(crate) enum PageKind {
 bitflags! {
     struct PageFlags: u8 {
         const LEAF = 0b0000_0001;
-        const KIND = 0b0000_0010;
     }
 }
 

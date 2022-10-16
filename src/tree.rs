@@ -1,19 +1,20 @@
 use crate::{
     data::{Entry, Key, Range},
+    env::Env,
     page::{DataPageBuilder, PageBuf, PageEpoch, PageRef, PageTier},
-    page_store::{AtomicPageId, PageAddr, PageId, PageStore, PageTxn},
-    Error, Options, Result,
+    page_store::{AtomicPageId, Error, PageAddr, PageId, PageStore, PageTxn, Result},
+    Options,
 };
 
-pub(crate) struct Tree {
+pub(crate) struct Tree<E> {
     opts: Options,
     root: AtomicPageId,
-    store: PageStore,
+    store: PageStore<E>,
 }
 
-impl Tree {
-    pub(crate) async fn open(opts: Options) -> Result<Self> {
-        let store = PageStore::open().await?;
+impl<E: Env> Tree<E> {
+    pub(crate) async fn open(env: E, opts: Options) -> Result<Self> {
+        let store = PageStore::open(env).await?;
         let txn = store.begin();
         let root = txn.alloc_id();
         txn.commit();
