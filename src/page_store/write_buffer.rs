@@ -223,11 +223,3 @@ bitflags! {
         const TOMBSTONE     = 0b1000_0000;
     }
 }
-
-const _: () = {
-    fn assert_send<T: Send>() {}
-    fn assert_sync<T: Sync>() {}
-
-    assert_send::<WriteBuffer>();
-    assert_sync::<WriteBuffer>();
-};
