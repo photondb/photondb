@@ -8,7 +8,7 @@ use crate::{
     Options,
 };
 
-pub struct Table<E> {
+pub(crate) struct Table<E> {
     tree: Tree<E>,
 }
 

@@ -19,6 +19,7 @@ mod page;
 mod page_store;
 mod table;
 mod tree;
+mod util;
 
 #[cfg(test)]
 mod tests {
