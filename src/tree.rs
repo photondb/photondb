@@ -5,23 +5,30 @@ use crate::{
     env::Env,
     page::{PageBuf, PageEpoch, PageKind, PageRef, PageTier, SortedPageBuilder},
     page_store::{Error, Guard, PageStore, PageTxn, Result},
+    util::Counter,
     Options,
 };
 
 pub(crate) struct Tree<E> {
     options: Options,
+    stats: AtomicTreeStats,
     store: PageStore<E>,
 }
 
 impl<E: Env> Tree<E> {
     pub(crate) async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
+        let stats = AtomicTreeStats::default();
         let store = PageStore::open(env, path).await?;
-        Ok(Self { options, store })
+        Ok(Self {
+            options,
+            stats,
+            store,
+        })
     }
 
     fn begin(&self) -> TreeTxn {
         let guard = self.store.guard();
-        TreeTxn::new(&self.options, guard)
+        TreeTxn::new(&self.options, &self.stats, guard)
     }
 
     pub(crate) async fn get<F, R>(&self, key: Key<'_>, f: F) -> Result<R>
@@ -48,16 +55,25 @@ impl<E: Env> Tree<E> {
             }
         }
     }
+
+    pub(crate) fn stats(&self) -> TreeStats {
+        self.stats.snapshot()
+    }
 }
 
 struct TreeTxn<'a> {
     options: &'a Options,
+    stats: &'a AtomicTreeStats,
     guard: Guard,
 }
 
 impl<'a> TreeTxn<'a> {
-    fn new(options: &'a Options, guard: Guard) -> Self {
-        Self { options, guard }
+    fn new(options: &'a Options, stats: &'a AtomicTreeStats, guard: Guard) -> Self {
+        Self {
+            options,
+            stats,
+            guard,
+        }
     }
 
     async fn get(&self, key: &Key<'_>) -> Result<Option<&[u8]>> {
@@ -198,6 +214,52 @@ impl<'a> TreeTxn<'a> {
 
     async fn delta_page_iter(&self, view: &PageView<'_>) -> ((), PageRef<'_>) {
         todo!()
+    }
+}
+
+pub(crate) struct TxnStats {
+    get: u64,
+    write: u64,
+    split_page: u64,
+    consolidate_page: u64,
+}
+
+pub(crate) struct TreeStats {
+    success: TxnStats,
+    failure: TxnStats,
+}
+
+#[derive(Default)]
+pub(crate) struct AtomicTxnStats {
+    get: Counter,
+    write: Counter,
+    page_split: Counter,
+    page_consolidate: Counter,
+}
+
+impl AtomicTxnStats {
+    fn snapshot(&self) -> TxnStats {
+        TxnStats {
+            get: self.get.get(),
+            write: self.write.get(),
+            split_page: self.page_split.get(),
+            consolidate_page: self.page_consolidate.get(),
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct AtomicTreeStats {
+    success: AtomicTxnStats,
+    failure: AtomicTxnStats,
+}
+
+impl AtomicTreeStats {
+    fn snapshot(&self) -> TreeStats {
+        TreeStats {
+            success: self.success.snapshot(),
+            failure: self.failure.snapshot(),
+        }
     }
 }
 
