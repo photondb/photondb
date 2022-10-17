@@ -38,12 +38,12 @@ impl<'a> PageTxn<'a> {
         todo!()
     }
 
-    pub(crate) fn update_page(&mut self, id: u64, old: u64, new: u64) -> Result<()> {
+    pub(crate) fn update_page(&mut self, id: u64, old: u64, new: u64) -> Result<(), u64> {
         // TODO: ensures that old < new so that we can recover the page table in order.
         todo!()
     }
 
-    pub(crate) fn replace_page(&mut self, id: u64, old: u64, new: u64) -> Result<()> {
+    pub(crate) fn replace_page(&mut self, id: u64, old: u64, new: u64) -> Result<(), u64> {
         // TODO: ensures that old < new so that we can recover the page table in order.
         todo!()
     }

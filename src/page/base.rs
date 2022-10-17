@@ -95,12 +95,6 @@ impl<'a> DerefMut for PageBuf<'a> {
     }
 }
 
-impl<'a> From<PageBuf<'a>> for PageRef<'a> {
-    fn from(buf: PageBuf<'a>) -> Self {
-        todo!()
-    }
-}
-
 /// An immutable reference to a page.
 #[derive(Copy, Clone)]
 pub(crate) struct PageRef<'a> {
@@ -108,11 +102,26 @@ pub(crate) struct PageRef<'a> {
     _marker: PhantomData<&'a ()>,
 }
 
+impl<'a> PageRef<'a> {
+    fn new(ptr: PagePtr) -> Self {
+        Self {
+            ptr,
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<'a> Deref for PageRef<'a> {
     type Target = PagePtr;
 
     fn deref(&self) -> &Self::Target {
         &self.ptr
+    }
+}
+
+impl<'a> From<PageBuf<'a>> for PageRef<'a> {
+    fn from(buf: PageBuf<'a>) -> Self {
+        Self::new(buf.ptr)
     }
 }
 

@@ -1,13 +1,16 @@
 use super::{ForwardIter, PageBuf, PageBuilder, PageKind, PageTier};
 
-pub(crate) struct SortedPageBuilder<'a, I> {
+pub(crate) struct SortedPageBuilder<'a, I, K, V>
+where
+    I: ForwardIter<Item = (K, V)>,
+{
     base: PageBuilder,
     iter: Option<&'a mut I>,
 }
 
-impl<'a, I> SortedPageBuilder<'a, I>
+impl<'a, I, K, V> SortedPageBuilder<'a, I, K, V>
 where
-    I: ForwardIter,
+    I: ForwardIter<Item = (K, V)>,
 {
     pub(crate) fn new(tier: PageTier, kind: PageKind) -> Self {
         Self {
