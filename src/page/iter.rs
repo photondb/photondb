@@ -21,6 +21,63 @@ pub(crate) trait SeekableIter: ForwardIter {
     fn seek(&mut self);
 }
 
+pub(crate) struct ItemIter<'a, T> {
+    next: Option<&'a T>,
+    item: Option<&'a T>,
+}
+
+impl<'a, T> ItemIter<'a, T> {
+    pub(crate) fn new(item: &'a T) -> Self {
+        Self {
+            next: None,
+            item: Some(item),
+        }
+    }
+}
+
+impl<'a, T> ForwardIter for ItemIter<'a, T> {
+    type Item = &'a T;
+
+    fn init(&mut self) {
+        self.next = self.item;
+    }
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next.take()
+    }
+}
+
+pub(crate) struct SliceIter<'a, T> {
+    data: &'a [T],
+    next: usize,
+}
+
+impl<'a, T> SliceIter<'a, T> {
+    pub(crate) fn new(data: &'a [T]) -> Self {
+        Self {
+            data,
+            next: data.len(),
+        }
+    }
+}
+
+impl<'a, T> ForwardIter for SliceIter<'a, T> {
+    type Item = &'a T;
+
+    fn init(&mut self) {
+        self.next = 0;
+    }
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(item) = self.data.get(self.next) {
+            self.next += 1;
+            Some(item)
+        } else {
+            None
+        }
+    }
+}
+
 struct OrderedIter<I>
 where
     I: ForwardIter,

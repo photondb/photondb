@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::{
     data::{Entry, Key, Range},
     env::Env,
-    page::{DataPageBuilder, PageBuf, PageEpoch, PageRef, PageTier},
+    page::{PageBuf, PageEpoch, PageKind, PageRef, PageTier, SortedPageBuilder},
     page_store::{Error, PageStore, PageTxn, Result},
     Options,
 };
@@ -76,9 +76,9 @@ impl<'a> TreeTxn<'a> {
 
     async fn write(&self, entry: &Entry<'_>) -> Result<()> {
         let (mut view, _) = self.find_leaf(&entry.key).await?;
-        let builder = DataPageBuilder::new(PageTier::Leaf).with_item(());
-        let (new_addr, mut new_page) = self.txn.alloc_page(builder.size())?;
-        builder.build(&mut new_page);
+        // let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data);
+        let (new_addr, mut new_page) = self.txn.alloc_page(0)?;
+        // builder.build(&mut new_page);
         loop {
             new_page.set_epoch(view.page.epoch());
             new_page.set_chain_len(view.page.chain_len());
@@ -155,9 +155,9 @@ impl<'a> TreeTxn<'a> {
 
     async fn consolidate_page(&self, view: PageView<'_>) -> Result<()> {
         let (iter, last_page) = self.delta_page_iter(&view).await;
-        let builder = DataPageBuilder::new(view.page.tier()).with_iter(iter);
-        let (new_addr, mut new_page) = self.txn.alloc_page(builder.size())?;
-        builder.build(&mut new_page);
+        // let builder = DataPageBuilder::new(view.page.tier()).with_iter(iter);
+        let (new_addr, mut new_page) = self.txn.alloc_page(0)?;
+        // builder.build(&mut new_page);
         new_page.set_epoch(view.page.epoch().next());
         new_page.set_chain_len(last_page.chain_len());
         new_page.set_chain_next(last_page.chain_next());
