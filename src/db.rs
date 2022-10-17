@@ -7,8 +7,8 @@ pub struct Db {
 }
 
 impl Db {
-    pub async fn open<P: AsRef<Path>>(root: P, options: Options) -> Result<Self> {
-        let table = Table::open(Photon, root, options).await?;
+    pub async fn open<P: AsRef<Path>>(path: P, options: Options) -> Result<Self> {
+        let table = Table::open(Photon, path, options).await?;
         Ok(Db { table })
     }
 }

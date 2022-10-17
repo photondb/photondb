@@ -13,8 +13,8 @@ pub struct Table<E> {
 }
 
 impl<E: Env> Table<E> {
-    pub(crate) async fn open<P: AsRef<Path>>(env: E, root: P, opts: Options) -> Result<Self> {
-        let tree = Tree::open(env, opts).await?;
+    pub(crate) async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
+        let tree = Tree::open(env, path, options).await?;
         Ok(Self { tree })
     }
 
