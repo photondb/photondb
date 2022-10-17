@@ -10,4 +10,4 @@ pub(crate) enum Error {
     UpdatePage(u64),
 }
 
-pub(crate) type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
