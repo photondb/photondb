@@ -61,15 +61,15 @@ impl<'a> TreeTxn<'a> {
     }
 
     async fn get(&self, key: &Key<'_>) -> Result<Option<&[u8]>> {
-        let mut txn = self.guard.begin();
-        let (view, _) = self.find_leaf(&mut txn, key).await?;
-        self.find_value(&mut txn, key, &view).await
+        let (view, _) = self.find_leaf(key).await?;
+        self.find_value(key, &view).await
     }
 
     async fn write(&self, entry: &Entry<'_>) -> Result<()> {
-        let mut txn = self.guard.begin();
-        let (mut view, _) = self.find_leaf(&mut txn, &entry.key).await?;
+        let (mut view, _) = self.find_leaf(&entry.key).await?;
         // let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data);
+
+        let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(0)?;
         // builder.build(&mut new_page);
         loop {
@@ -77,15 +77,8 @@ impl<'a> TreeTxn<'a> {
             new_page.set_chain_len(view.page.chain_len());
             new_page.set_chain_next(view.addr.into());
             match txn.update_page(view.id, view.addr, new_addr) {
-                Ok(_) => {
-                    if new_page.chain_len() as usize >= self.options.page_chain_length {
-                        view.page = new_page.into();
-                        // It doesn't matter whether this consolidation succeeds or not.
-                        let _ = self.consolidate_page(&mut txn, view).await;
-                        return Ok(());
-                    }
-                }
-                Err(Error::UpdatePage(addr)) => {
+                Ok(_) => break,
+                Err(addr) => {
                     let page = self.guard.read_page(addr).await?;
                     if page.epoch() == view.page.epoch() {
                         view.page = page;
@@ -93,16 +86,19 @@ impl<'a> TreeTxn<'a> {
                     }
                     return Err(Error::Again);
                 }
-                Err(err) => return Err(err),
             }
         }
+        txn.commit();
+
+        if new_page.chain_len() as usize >= self.options.page_chain_length {
+            view.page = new_page.into();
+            // It doesn't matter whether this consolidation succeeds or not.
+            let _ = self.consolidate_page(view).await;
+        }
+        Ok(())
     }
 
-    async fn find_leaf<'s: 't, 't>(
-        &'s self,
-        txn: &mut PageTxn<'t>,
-        key: &Key<'_>,
-    ) -> Result<(PageView<'t>, Option<PageView<'t>>)> {
+    async fn find_leaf(&self, key: &Key<'_>) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
         let mut index = PageIndex::new(0);
         let mut range = Range::default();
         let mut parent = None;
@@ -117,65 +113,87 @@ impl<'a> TreeTxn<'a> {
             };
             // Do not continue if the page epoch has changed.
             if view.page.epoch() != index.epoch {
-                self.reconcile_page(txn, view, parent).await;
+                self.reconcile_page(view, parent).await;
                 return Err(Error::Again);
             }
             if view.page.tier().is_leaf() {
                 return Ok((view, parent));
             }
-            let (child_index, child_range) = self.find_child(txn, key, &view).await?;
+            let (child_index, child_range) = self.find_child(key, &view).await?;
             index = child_index;
             range = child_range;
             parent = Some(view);
         }
     }
 
-    async fn walk_page<F>(&self, view: &PageView<'_>) -> Result<()>
+    async fn walk_page<F, R>(&self, view: &PageView<'_>, mut f: F) -> Result<Option<R>>
     where
-        F: FnMut(PageRef<'_>),
+        F: FnMut(PageRef<'_>) -> Option<R>,
     {
-        Ok(())
+        let mut page = view.page;
+        loop {
+            if let Some(result) = f(page) {
+                return Ok(Some(result));
+            }
+            if page.chain_next() == 0 {
+                break;
+            }
+            page = self.guard.read_page(page.chain_next()).await?;
+        }
+        Ok(None)
     }
 
-    async fn find_value<'t>(
-        &self,
-        txn: &mut PageTxn<'t>,
-        key: &Key<'_>,
-        view: &PageView<'t>,
-    ) -> Result<Option<&[u8]>> {
+    async fn find_value(&self, key: &Key<'_>, view: &PageView<'_>) -> Result<Option<&[u8]>> {
+        self.walk_page(view, |page| {
+            debug_assert!(page.tier().is_leaf());
+            if page.kind() == PageKind::Data {
+                todo!()
+            }
+            None
+        })
+        .await
+    }
+
+    async fn find_child(&self, key: &Key<'_>, view: &PageView<'_>) -> Result<(PageIndex, Range)> {
+        let child = self
+            .walk_page(view, |page| {
+                debug_assert!(page.tier().is_inner());
+                if page.kind() == PageKind::Data {
+                    todo!()
+                }
+                None
+            })
+            .await?;
+        Ok(child.expect("child page must exist"))
+    }
+
+    async fn split_page(&self, view: PageView<'_>) -> Result<()> {
         todo!()
     }
 
-    async fn find_child<'t>(
-        &self,
-        txn: &mut PageTxn<'t>,
-        key: &Key<'_>,
-        view: &PageView<'t>,
-    ) -> Result<(PageIndex, Range)> {
+    async fn reconcile_page(&self, view: PageView<'_>, parent: Option<PageView<'_>>) {
+        let mut txn = self.guard.begin();
         todo!()
     }
 
-    async fn reconcile_page<'t>(
-        &self,
-        txn: &mut PageTxn<'t>,
-        view: PageView<'t>,
-        parent: Option<PageView<'t>>,
-    ) {
-        todo!()
-    }
-
-    async fn consolidate_page<'t>(&self, txn: &mut PageTxn<'t>, view: PageView<'t>) -> Result<()> {
+    async fn consolidate_page(&self, view: PageView<'_>) -> Result<()> {
         let (iter, last_page) = self.delta_page_iter(&view).await;
         // let builder = DataPageBuilder::new(view.page.tier()).with_iter(iter);
+
+        let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(0)?;
         // builder.build(&mut new_page);
         new_page.set_epoch(view.page.epoch().next());
         new_page.set_chain_len(last_page.chain_len());
         new_page.set_chain_next(last_page.chain_next());
+        txn.replace_page(view.id, view.addr, new_addr)
+            .map_err(|_| Error::Again)?;
+        txn.commit();
 
-        // self.txn.update_page(view.id, view.addr, addr)?;
-
-        todo!()
+        if new_page.chain_next() == 0 && new_page.size() >= self.options.page_size {
+            let _ = self.split_page(view);
+        }
+        Ok(())
     }
 
     async fn delta_page_iter(&self, view: &PageView<'_>) -> ((), PageRef<'_>) {

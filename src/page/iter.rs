@@ -8,11 +8,9 @@ pub(crate) trait ForwardIter {
     type Item;
 
     /// Positions the iterator at the first item.
-    ///
-    /// [`Self::next`] will return the first item.
     fn init(&mut self);
 
-    /// Advances the iterator to the next item.
+    /// Moves the iterator to the next item.
     fn next(&mut self) -> Option<Self::Item>;
 }
 
