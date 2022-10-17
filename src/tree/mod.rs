@@ -8,8 +8,8 @@ use stats::AtomicTreeStats;
 pub use stats::TreeStats;
 
 use crate::{
-    data::{Entry, Key},
     env::Env,
+    page::{Key, Value},
     page_store::{Error, PageStore, Result},
     Options,
 };
@@ -50,10 +50,10 @@ impl<E: Env> Tree<E> {
         }
     }
 
-    pub(crate) async fn write(&self, entry: Entry<'_>) -> Result<()> {
+    pub(crate) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
         loop {
             let txn = self.begin();
-            match txn.write(&entry).await {
+            match txn.write(&key, &value).await {
                 Ok(_) => return Ok(()),
                 Err(Error::Again) => continue,
                 Err(e) => return Err(e),

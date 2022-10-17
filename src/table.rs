@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use crate::{
-    data::{Entry, Key},
     env::Env,
+    page::{Key, Value},
     page_store::Result,
     tree::Tree,
     Options,
@@ -28,13 +28,13 @@ impl<E: Env> Table<E> {
 
     pub(crate) async fn put(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
         let key = Key::new(key, lsn);
-        let entry = Entry::put(key, value);
-        self.tree.write(entry).await
+        let value = Value::Put(value);
+        self.tree.write(key, value).await
     }
 
     pub(crate) async fn delete(&self, key: &[u8], lsn: u64) -> Result<()> {
         let key = Key::new(key, lsn);
-        let entry = Entry::delete(key);
-        self.tree.write(entry).await
+        let value = Value::Delete;
+        self.tree.write(key, value).await
     }
 }
