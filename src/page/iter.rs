@@ -1,22 +1,18 @@
 use std::{
     cmp::{Ordering, Reverse},
     collections::BinaryHeap,
+    iter::Iterator,
     mem,
 };
 
-pub(crate) trait ForwardIter {
-    type Item;
-
-    /// Positions the iterator at the first item.
-    fn init(&mut self);
-
-    /// Moves the iterator to the next item.
-    fn next(&mut self) -> Option<Self::Item>;
-}
-
-pub(crate) trait SeekableIter: ForwardIter {
+pub(crate) trait SeekableIter: Iterator {
     /// Positions the iterator at the first item that is greater than or equal to `target`.
     fn seek(&mut self);
+}
+
+pub(crate) trait RewindableIter: Iterator {
+    /// Positions the iterator at the first item.
+    fn rewind(&mut self);
 }
 
 pub(crate) struct ItemIter<'a, T> {
@@ -27,21 +23,23 @@ pub(crate) struct ItemIter<'a, T> {
 impl<'a, T> ItemIter<'a, T> {
     pub(crate) fn new(item: &'a T) -> Self {
         Self {
-            next: None,
+            next: Some(item),
             item: Some(item),
         }
     }
 }
 
-impl<'a, T> ForwardIter for ItemIter<'a, T> {
+impl<'a, T> Iterator for ItemIter<'a, T> {
     type Item = &'a T;
-
-    fn init(&mut self) {
-        self.next = self.item;
-    }
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next.take()
+    }
+}
+
+impl<'a, T> RewindableIter for ItemIter<'a, T> {
+    fn rewind(&mut self) {
+        self.next = self.item;
     }
 }
 
@@ -52,19 +50,12 @@ pub(crate) struct SliceIter<'a, T> {
 
 impl<'a, T> SliceIter<'a, T> {
     pub(crate) fn new(data: &'a [T]) -> Self {
-        Self {
-            data,
-            next: data.len(),
-        }
+        Self { data, next: 0 }
     }
 }
 
-impl<'a, T> ForwardIter for SliceIter<'a, T> {
+impl<'a, T> Iterator for SliceIter<'a, T> {
     type Item = &'a T;
-
-    fn init(&mut self) {
-        self.next = 0;
-    }
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(item) = self.data.get(self.next) {
@@ -76,9 +67,15 @@ impl<'a, T> ForwardIter for SliceIter<'a, T> {
     }
 }
 
+impl<'a, T> RewindableIter for SliceIter<'a, T> {
+    fn rewind(&mut self) {
+        self.next = 0;
+    }
+}
+
 struct OrderedIter<I>
 where
-    I: ForwardIter,
+    I: Iterator,
 {
     iter: I,
     next: Option<I::Item>,
@@ -86,7 +83,7 @@ where
 
 impl<I> OrderedIter<I>
 where
-    I: ForwardIter,
+    I: Iterator,
 {
     fn new(iter: I) -> Self {
         Self { iter, next: None }
@@ -95,14 +92,14 @@ where
 
 impl<I> Eq for OrderedIter<I>
 where
-    I: ForwardIter,
+    I: Iterator,
     I::Item: Ord,
 {
 }
 
 impl<I> PartialEq for OrderedIter<I>
 where
-    I: ForwardIter,
+    I: Iterator,
     I::Item: Ord,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -112,7 +109,7 @@ where
 
 impl<I> Ord for OrderedIter<I>
 where
-    I: ForwardIter,
+    I: Iterator,
     I::Item: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -122,7 +119,7 @@ where
 
 impl<I> PartialOrd for OrderedIter<I>
 where
-    I: ForwardIter,
+    I: Iterator,
     I::Item: Ord,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -130,16 +127,11 @@ where
     }
 }
 
-impl<I> ForwardIter for OrderedIter<I>
+impl<I> Iterator for OrderedIter<I>
 where
-    I: ForwardIter,
+    I: Iterator,
 {
     type Item = I::Item;
-
-    fn init(&mut self) {
-        self.iter.init();
-        self.next = self.iter.next();
-    }
 
     fn next(&mut self) -> Option<Self::Item> {
         let next = self.next.take();
@@ -158,9 +150,19 @@ where
     }
 }
 
+impl<I> RewindableIter for OrderedIter<I>
+where
+    I: RewindableIter,
+{
+    fn rewind(&mut self) {
+        self.iter.rewind();
+        self.next = self.iter.next();
+    }
+}
+
 pub(crate) struct MergingIter<I>
 where
-    I: ForwardIter,
+    I: Iterator,
     I::Item: Ord,
 {
     heap: BinaryHeap<Reverse<OrderedIter<I>>>,
@@ -168,10 +170,13 @@ where
 
 impl<I> MergingIter<I>
 where
-    I: ForwardIter,
+    I: Iterator,
     I::Item: Ord,
 {
-    fn new(iters: Vec<Reverse<OrderedIter<I>>>) -> Self {
+    fn init(mut iters: Vec<Reverse<OrderedIter<I>>>) -> Self {
+        for iter in iters.iter_mut() {
+            iter.0.next();
+        }
         Self { heap: iters.into() }
     }
 
@@ -188,16 +193,12 @@ where
     }
 }
 
-impl<I> ForwardIter for MergingIter<I>
+impl<I> Iterator for MergingIter<I>
 where
-    I: ForwardIter,
+    I: Iterator,
     I::Item: Ord,
 {
     type Item = I::Item;
-
-    fn init(&mut self) {
-        self.for_each(|iter| iter.0.init());
-    }
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(mut iter) = self.heap.peek_mut() {
@@ -218,9 +219,19 @@ where
     }
 }
 
+impl<I> RewindableIter for MergingIter<I>
+where
+    I: RewindableIter,
+    I::Item: Ord,
+{
+    fn rewind(&mut self) {
+        self.for_each(|iter| iter.0.rewind());
+    }
+}
+
 pub(crate) struct MergingIterBuilder<I>
 where
-    I: ForwardIter,
+    I: Iterator,
     I::Item: Ord,
 {
     iters: Vec<Reverse<OrderedIter<I>>>,
@@ -228,7 +239,7 @@ where
 
 impl<I> MergingIterBuilder<I>
 where
-    I: ForwardIter,
+    I: Iterator,
     I::Item: Ord,
 {
     pub(crate) fn new() -> Self {
@@ -240,6 +251,6 @@ where
     }
 
     pub(crate) fn build(self) -> MergingIter<I> {
-        MergingIter::new(self.iters)
+        MergingIter::init(self.iters)
     }
 }

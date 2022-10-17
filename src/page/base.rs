@@ -12,6 +12,8 @@ use bitflags::bitflags;
 ///     chain_len  : 1B
 ///     chain_next : 8B
 /// }
+const PAGE_EPOCH_MAX: u64 = (1 << 48) - 1;
+
 #[derive(Copy, Clone)]
 pub(crate) struct PagePtr {
     ptr: NonNull<u8>,
@@ -45,12 +47,13 @@ impl PagePtr {
     }
 
     /// Returns the page epoch.
-    pub(crate) fn epoch(&self) -> PageEpoch {
+    pub(crate) fn epoch(&self) -> u64 {
         todo!()
     }
 
     /// Updates the page epoch.
-    pub(crate) fn set_epoch(&mut self, epoch: PageEpoch) {
+    pub(crate) fn set_epoch(&mut self, epoch: u64) {
+        assert!(epoch <= PAGE_EPOCH_MAX);
         todo!()
     }
 
@@ -150,18 +153,6 @@ pub(crate) enum PageKind {
 bitflags! {
     struct PageFlags: u8 {
         const LEAF = 0b0000_0001;
-    }
-}
-
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PageEpoch(u64);
-
-const PAGE_EPOCH_MAX: u64 = (1 << 48) - 1;
-
-impl PageEpoch {
-    pub(crate) fn next(self) -> Self {
-        assert!(self.0 < PAGE_EPOCH_MAX);
-        Self(self.0 + 1)
     }
 }
 

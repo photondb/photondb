@@ -1,7 +1,6 @@
 use super::stats::AtomicTreeStats;
 use crate::{
-    data::{Entry, Key, Range},
-    page::{PageBuf, PageEpoch, PageKind, PageRef, PageTier, SortedPageBuilder},
+    page::{Index, Key, PageBuf, PageKind, PageRef, PageTier, Range, SortedPageBuilder, Value},
     page_store::{Error, Guard, PageTxn, Result},
     Options,
 };
@@ -26,8 +25,8 @@ impl<'a> TreeTxn<'a> {
         self.find_value(key, &view).await
     }
 
-    pub(super) async fn write(&self, entry: &Entry<'_>) -> Result<()> {
-        let (mut view, _) = self.find_leaf(&entry.key).await?;
+    pub(super) async fn write(&self, key: &Key<'_>, value: &Value<'_>) -> Result<()> {
+        let (mut view, _) = self.find_leaf(key).await?;
         // let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data);
 
         let mut txn = self.guard.begin();
@@ -60,7 +59,7 @@ impl<'a> TreeTxn<'a> {
     }
 
     async fn find_leaf(&self, key: &Key<'_>) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
-        let mut index = PageIndex::new(0);
+        let mut index = Index::new(0);
         let mut range = Range::default();
         let mut parent = None;
         loop {
@@ -115,7 +114,7 @@ impl<'a> TreeTxn<'a> {
         .await
     }
 
-    async fn find_child(&self, key: &Key<'_>, view: &PageView<'_>) -> Result<(PageIndex, Range)> {
+    async fn find_child(&self, key: &Key<'_>, view: &PageView<'_>) -> Result<(Index, Range)> {
         let child = self
             .walk_page(view, |page| {
                 debug_assert!(page.tier().is_inner());
@@ -144,7 +143,7 @@ impl<'a> TreeTxn<'a> {
         let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(0)?;
         // builder.build(&mut new_page);
-        new_page.set_epoch(view.page.epoch().next());
+        new_page.set_epoch(view.page.epoch());
         new_page.set_chain_len(last_page.chain_len());
         new_page.set_chain_next(last_page.chain_next());
         txn.replace_page(view.id, view.addr, new_addr)
@@ -167,19 +166,4 @@ struct PageView<'a> {
     addr: u64,
     page: PageRef<'a>,
     range: Range<'a>,
-}
-
-#[derive(Copy, Clone, Debug)]
-struct PageIndex {
-    id: u64,
-    epoch: PageEpoch,
-}
-
-impl PageIndex {
-    fn new(id: u64) -> Self {
-        Self {
-            id,
-            epoch: PageEpoch::default(),
-        }
-    }
 }

@@ -14,7 +14,6 @@ pub use options::Options;
 
 pub mod env;
 
-mod data;
 mod page;
 mod page_store;
 mod table;
