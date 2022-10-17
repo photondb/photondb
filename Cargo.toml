@@ -13,6 +13,7 @@ async-trait = "0.1.57"
 bitflags = "1.3.2"
 futures = "0.3.24"
 photonio = "0.0.4"
+prost = "0.10"
 thiserror = "1.0.37"
 
 [profile.bench]

@@ -11,6 +11,8 @@ pub(crate) use page_txn::{Guard, PageTxn};
 mod page_table;
 use page_table::PageTable;
 
+mod meta;
+
 pub(crate) struct PageStore<E> {
     env: E,
     table: PageTable,
