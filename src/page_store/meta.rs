@@ -3,9 +3,9 @@ use prost::{alloc::vec::Vec, Message};
 #[derive(Clone, PartialEq, Message)]
 pub(crate) struct VersionEdit {
     #[prost(uint32, repeated, tag = "1")]
-    pub deleted_file_set: Vec<u32>,
-    #[prost(uint32, repeated, tag = "2")]
     pub new_files: Vec<u32>,
+    #[prost(uint32, repeated, tag = "2")]
+    pub deleted_files: Vec<u32>,
 }
 
 #[cfg(test)]
