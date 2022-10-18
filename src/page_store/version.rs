@@ -83,6 +83,10 @@ impl BufferSet {
     pub fn on_flushed(&self, files: &[u32]) {
         todo!()
     }
+
+    pub async fn wait_flushable(&self) {
+        todo!()
+    }
 }
 
 impl Drop for BufferSet {
@@ -93,8 +97,15 @@ impl Drop for BufferSet {
 
 impl BufferSetVersion {
     /// Read [`WriteBuffer`] of the specified `file_id`.
-    pub fn write_buffer(&self, file_id: u32) -> Option<&WriteBuffer> {
+    ///
+    /// If the user needs to access the [`WriteBuffer`] for a long time, use `clone` to make a copy.
+    pub fn write_buffer(&self, file_id: u32) -> Option<&Arc<WriteBuffer>> {
         todo!()
+    }
+
+    #[inline]
+    pub fn min_file_id(&self) -> u32 {
+        self.min_file_id
     }
 }
 
