@@ -79,7 +79,7 @@ impl Manifest {
         };
 
         let written = if rolled {
-            // TODO: remove new created file when write file.
+            // TODO: remove new created file when write fail.
             let base_snapshot = version_snapshot();
             let base_written = VersionEditEncoder(base_snapshot)
                 .encode(&mut writer)
