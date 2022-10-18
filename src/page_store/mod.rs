@@ -18,7 +18,7 @@ use version::Version;
 
 mod write_buffer;
 
-mod pagefile;
+mod page_file;
 
 pub(crate) struct PageStore<E> {
     env: E,
