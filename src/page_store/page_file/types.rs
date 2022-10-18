@@ -50,6 +50,10 @@ impl FileMeta {
         }
     }
 
+    pub(crate) fn get_file_id(&self) -> u32 {
+        self.file_id
+    }
+
     /// Returns the page size for the page specified by `page_addr`.
     pub(crate) fn get_page_size(&self, page_addr: u64) -> usize {
         todo!()
