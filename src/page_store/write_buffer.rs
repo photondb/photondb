@@ -27,7 +27,7 @@ struct BufferState {
 
 #[repr(C)]
 pub(crate) struct RecordHeader {
-    node_id: u64,
+    page_id: u64,
     flags: u32,
     page_size: u32,
 }
