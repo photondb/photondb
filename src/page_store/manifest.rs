@@ -1,11 +1,8 @@
-use std::{
-    path::PathBuf,
-    sync::atomic::{AtomicU32, Ordering},
-};
+use std::path::PathBuf;
 
 use photonio::{
     fs::{File, OpenOptions},
-    io::{ReadAt, Write, WriteExt},
+    io::{ReadAt, Write},
 };
 use prost::Message;
 
