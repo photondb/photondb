@@ -1,11 +1,11 @@
 use std::path::Path;
 
 mod txn;
-use txn::TreeTxn;
+use txn::Txn;
 
 mod stats;
-use stats::AtomicTreeStats;
-pub use stats::TreeStats;
+use stats::AtomicStats;
+pub use stats::Stats;
 
 use crate::{
     env::Env,
@@ -16,13 +16,13 @@ use crate::{
 
 pub(crate) struct Tree<E> {
     options: Options,
-    stats: AtomicTreeStats,
+    stats: AtomicStats,
     store: PageStore<E>,
 }
 
 impl<E: Env> Tree<E> {
     pub(crate) async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
-        let stats = AtomicTreeStats::default();
+        let stats = AtomicStats::default();
         let store = PageStore::open(env, path).await?;
         Ok(Self {
             options,
@@ -31,9 +31,9 @@ impl<E: Env> Tree<E> {
         })
     }
 
-    fn begin(&self) -> TreeTxn {
+    fn begin(&self) -> Txn<E> {
         let guard = self.store.guard();
-        TreeTxn::new(&self.options, &self.stats, guard)
+        Txn::new(&self, guard)
     }
 
     pub(crate) async fn get<F, R>(&self, key: Key<'_>, f: F) -> Result<R>
@@ -61,7 +61,7 @@ impl<E: Env> Tree<E> {
         }
     }
 
-    pub(crate) fn stats(&self) -> TreeStats {
+    pub(crate) fn stats(&self) -> Stats {
         self.stats.snapshot()
     }
 }

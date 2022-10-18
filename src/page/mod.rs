@@ -11,4 +11,4 @@ pub(crate) use data::{Index, Key, Range, Value};
 mod codec;
 
 mod sorted_page;
-pub(crate) use sorted_page::{SortedPageBuilder, SortedPageIter};
+pub(crate) use sorted_page::{SortedPageBuilder, SortedPageIter, SortedPageRef};

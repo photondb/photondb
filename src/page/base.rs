@@ -6,14 +6,18 @@ use std::{
 
 use bitflags::bitflags;
 
-/// Page header format {
-///     flags      : 1B
-///     epoch      : 6B
-///     chain_len  : 1B
-///     chain_next : 8B
+/// Page format {
+///     flags      : 1 bytes
+///     epoch      : 6 bytes
+///     chain_len  : 1 bytes
+///     chain_next : 8 bytes
+///     content    : multiple bytes
 /// }
 const PAGE_EPOCH_MAX: u64 = (1 << 48) - 1;
+const PAGE_EPOCH_LEN: usize = 6;
+const PAGE_HEADER_LEN: usize = 16;
 
+/// A raw pointer to a page.
 #[derive(Copy, Clone)]
 pub(crate) struct PagePtr {
     ptr: NonNull<u8>,
@@ -128,6 +132,7 @@ impl<'a> From<PageBuf<'a>> for PageRef<'a> {
     }
 }
 
+/// A page is either a leaf page or an inner page.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PageTier {
     Leaf,
@@ -144,10 +149,21 @@ impl PageTier {
     }
 }
 
+/// A list of possible page kinds.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PageKind {
     Data,
     Split,
+}
+
+impl PageKind {
+    pub(crate) fn is_data(&self) -> bool {
+        self == &Self::Data
+    }
+
+    pub(crate) fn is_split(&self) -> bool {
+        self == &Self::Split
+    }
 }
 
 bitflags! {
@@ -156,13 +172,46 @@ bitflags! {
     }
 }
 
-pub(super) struct PageBuilder {
+/// Builds a page with basic information.
+pub(crate) struct PageBuilder {
     tier: PageTier,
     kind: PageKind,
+    epoch: u64,
+    chain_len: u8,
+    chain_next: u64,
 }
 
 impl PageBuilder {
-    pub(super) fn new(tier: PageTier, kind: PageKind) -> Self {
-        Self { tier, kind }
+    pub(crate) fn new(tier: PageTier, kind: PageKind) -> Self {
+        Self {
+            tier,
+            kind,
+            epoch: 0,
+            chain_len: 1,
+            chain_next: 0,
+        }
+    }
+
+    pub(crate) fn epoch(mut self, epoch: u64) -> Self {
+        self.epoch = epoch;
+        self
+    }
+
+    pub(crate) fn chain_len(mut self, chain_len: u8) -> Self {
+        self.chain_len = chain_len;
+        self
+    }
+
+    pub(crate) fn chain_next(mut self, chain_next: u64) -> Self {
+        self.chain_next = chain_next;
+        self
+    }
+
+    pub(crate) fn build(&self, page: &mut PageBuf<'_>) {
+        page.set_tier(self.tier);
+        page.set_kind(self.kind);
+        page.set_epoch(self.epoch);
+        page.set_chain_len(self.chain_len);
+        page.set_chain_next(self.chain_next);
     }
 }

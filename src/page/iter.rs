@@ -11,7 +11,7 @@ pub(crate) trait SeekableIterator<T>: Iterator {
     fn seek(&mut self, target: &T);
 }
 
-/// An extension of [`Iterator`] that can rewind back to the first item.
+/// An extension of [`Iterator`] that can rewind back to the beginning.
 pub(crate) trait RewindableIterator: Iterator {
     /// Positions the iterator at the first item.
     fn rewind(&mut self);
@@ -167,7 +167,7 @@ where
     }
 }
 
-/// An iterator that merges multiple ordered iterators.
+/// An iterator that merges multiple ordered iterators into one.
 pub(crate) struct MergingIter<I>
 where
     I: Iterator,
@@ -181,12 +181,11 @@ where
     I: Iterator,
     I::Item: Ord,
 {
-    fn new(vec: Vec<Reverse<OrderedIter<I>>>) -> Self {
+    fn init(mut vec: Vec<Reverse<OrderedIter<I>>>) -> Self {
+        for iter in vec.iter_mut() {
+            iter.0.init();
+        }
         Self { heap: vec.into() }
-    }
-
-    fn init(&mut self) {
-        self.for_each(|iter| iter.0.init())
     }
 
     fn for_each<F>(&mut self, f: F)
@@ -260,7 +259,8 @@ where
         self.iters.push(Reverse(OrderedIter::new(iter)));
     }
 
+    /// Creates a [`MergingIter`] from the specified iterators.
     pub(crate) fn build(self) -> MergingIter<I> {
-        MergingIter::new(self.iters)
+        MergingIter::init(self.iters)
     }
 }

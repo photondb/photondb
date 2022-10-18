@@ -1,6 +1,8 @@
+use std::cmp::Ordering;
+
 use super::codec::{BufReader, BufWriter, DecodeFrom, EncodeTo};
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Key<'a> {
     pub(crate) raw: &'a [u8],
     pub(crate) lsn: u64,
@@ -9,6 +11,37 @@ pub(crate) struct Key<'a> {
 impl<'a> Key<'a> {
     pub(crate) fn new(raw: &'a [u8], lsn: u64) -> Self {
         Self { raw, lsn }
+    }
+}
+
+impl Ord for Key<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.raw.cmp(other.raw) {
+            Ordering::Equal => other.lsn.cmp(&self.lsn),
+            o => o,
+        }
+    }
+}
+
+impl PartialOrd for Key<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl EncodeTo for &[u8] {
+    fn encode_size(&self) -> usize {
+        BufWriter::length_prefixed_slice_size(self)
+    }
+
+    unsafe fn encode_to(&self, w: &mut BufWriter) {
+        w.put_length_prefixed_slice(self);
+    }
+}
+
+impl DecodeFrom for &[u8] {
+    unsafe fn decode_from(r: &mut BufReader) -> Self {
+        r.get_length_prefixed_slice()
     }
 }
 
