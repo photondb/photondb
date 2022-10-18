@@ -163,21 +163,28 @@ impl<'a, E> Txn<'a, E> {
     ///
     /// Returns the index and the range of the child page.
     async fn find_child<'g>(
-        &'a self,
+        &'g self,
         key: &Key<'_>,
         view: &PageView<'g>,
-    ) -> Result<(Index, Range)> {
-        let mut child = None;
+    ) -> Result<(Index, Range<'g>)> {
+        let mut child_index = Index::default();
+        let mut child_range = Range::default();
         self.walk_page(view, |page| {
             debug_assert!(page.tier().is_inner());
             if page.kind().is_data() {
-                let page = InnerPageRef::from(page);
-                todo!()
+                let mut iter = InnerPageIter::from(page);
+                iter.seek_back(key);
+                let (start, index) = iter.next().expect("child must exist");
+                child_index = index;
+                child_range.start = start;
+                if let Some((end, _)) = iter.next() {
+                    child_range.end = Some(end);
+                }
             }
             false
         })
         .await?;
-        Ok(child.expect("child page must exist"))
+        Ok((child_index, child_range))
     }
 
     async fn split_page(&self, view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
@@ -239,7 +246,7 @@ impl<'a, E> Txn<'a, E> {
         let page = InnerPageRef::from(view.page);
         let (split_key, split_index) = page.get(0).unwrap();
 
-        let left_key = Key::new(view.range.start, 0);
+        let left_key = view.range.start;
         let left_index = Index::with_epoch(view.id, view.page.epoch());
         let iter = ArrayIter::new([(left_key, left_index), (split_key, split_index)]);
         let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data).with_iter(iter);

@@ -30,6 +30,12 @@ impl PartialOrd for Key<'_> {
     }
 }
 
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct Range<'a> {
+    pub(crate) start: Key<'a>,
+    pub(crate) end: Option<Key<'a>>,
+}
+
 impl EncodeTo for &[u8] {
     fn encode_size(&self) -> usize {
         BufWriter::length_prefixed_slice_size(self)
@@ -101,10 +107,4 @@ impl DecodeFrom for Index {
     unsafe fn decode_from(r: &mut BufReader) -> Self {
         todo!()
     }
-}
-
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct Range<'a> {
-    pub(crate) start: &'a [u8],
-    pub(crate) end: Option<&'a [u8]>,
 }
