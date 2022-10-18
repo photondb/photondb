@@ -59,17 +59,21 @@ impl<'a> PageTxn<'a> {
         todo!()
     }
 
+    pub(crate) fn insert_page(&mut self, addr: u64) -> u64 {
+        todo!()
+    }
+
     pub(crate) fn update_page(&mut self, id: u64, old: u64, new: u64) -> Result<(), u64> {
-        // TODO: ensures that old < new so that we can recover the page table in order.
+        // TODO: ensure that old < new so that we can recover the page table in order.
+        // TODO: commit the transaction on success
         todo!()
     }
 
     pub(crate) fn replace_page(&mut self, id: u64, old: u64, new: u64) -> Result<(), u64> {
         // TODO: ensures that old < new so that we can recover the page table in order.
+        // TODO: commit the transaction on success
         todo!()
     }
-
-    pub(crate) fn commit(self) {}
 }
 
 impl<'a> Drop for PageTxn<'a> {
