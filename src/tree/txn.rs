@@ -1,6 +1,8 @@
 use super::stats::AtomicTreeStats;
 use crate::{
-    page::{Index, Key, PageBuf, PageKind, PageRef, PageTier, Range, SortedPageBuilder, Value},
+    page::{
+        Index, ItemIter, Key, PageBuf, PageKind, PageRef, PageTier, Range, SortedPageBuilder, Value,
+    },
     page_store::{Error, Guard, PageTxn, Result},
     Options,
 };
@@ -20,18 +22,21 @@ impl<'a> TreeTxn<'a> {
         }
     }
 
-    pub(super) async fn get(&self, key: &Key<'_>) -> Result<Option<&[u8]>> {
+    pub(super) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
         let (view, _) = self.find_leaf(key).await?;
         self.find_value(key, &view).await
     }
 
-    pub(super) async fn write(&self, key: &Key<'_>, value: &Value<'_>) -> Result<()> {
-        let (mut view, _) = self.find_leaf(key).await?;
-        // let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data);
-
+    pub(super) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
+        // Builds a delta page with the given key-value pair.
+        let iter = ItemIter::new((key, value));
+        let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
         let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(0)?;
-        // builder.build(&mut new_page);
+        builder.build(&mut new_page);
+
+        // Installs the delta page to the corresponding leaf page.
+        let (mut view, _) = self.find_leaf(key).await?;
         loop {
             new_page.set_epoch(view.page.epoch());
             new_page.set_chain_len(view.page.chain_len());
@@ -58,7 +63,7 @@ impl<'a> TreeTxn<'a> {
         Ok(())
     }
 
-    async fn find_leaf(&self, key: &Key<'_>) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
+    async fn find_leaf(&self, key: Key<'_>) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
         let mut index = Index::new(0);
         let mut range = Range::default();
         let mut parent = None;
@@ -103,7 +108,7 @@ impl<'a> TreeTxn<'a> {
         Ok(None)
     }
 
-    async fn find_value(&self, key: &Key<'_>, view: &PageView<'_>) -> Result<Option<&[u8]>> {
+    async fn find_value(&self, key: Key<'_>, view: &PageView<'_>) -> Result<Option<&[u8]>> {
         self.walk_page(view, |page| {
             debug_assert!(page.tier().is_leaf());
             if page.kind() == PageKind::Data {
@@ -114,7 +119,7 @@ impl<'a> TreeTxn<'a> {
         .await
     }
 
-    async fn find_child(&self, key: &Key<'_>, view: &PageView<'_>) -> Result<(Index, Range)> {
+    async fn find_child(&self, key: Key<'_>, view: &PageView<'_>) -> Result<(Index, Range)> {
         let child = self
             .walk_page(view, |page| {
                 debug_assert!(page.tier().is_inner());

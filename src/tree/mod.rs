@@ -42,7 +42,7 @@ impl<E: Env> Tree<E> {
     {
         loop {
             let txn = self.begin();
-            match txn.get(&key).await {
+            match txn.get(key).await {
                 Ok(value) => return Ok(f(value)),
                 Err(Error::Again) => continue,
                 Err(e) => return Err(e),
@@ -53,7 +53,7 @@ impl<E: Env> Tree<E> {
     pub(crate) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
         loop {
             let txn = self.begin();
-            match txn.write(&key, &value).await {
+            match txn.write(key, value).await {
                 Ok(_) => return Ok(()),
                 Err(Error::Again) => continue,
                 Err(e) => return Err(e),
