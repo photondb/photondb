@@ -7,7 +7,7 @@ use super::{async_trait, Env, ReadAt, Write};
 /// An implementation of [`Env`] based on synchronous I/O.
 pub struct Sync;
 
-#[async_trait]
+#[async_trait(?Send)]
 impl Env for Sync {
     type PositionalReader = PositionalReader;
     type SequentialWriter = SequentialWriter;

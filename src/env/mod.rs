@@ -10,7 +10,7 @@ mod photon;
 pub use photon::Photon;
 
 /// Provides an environment to interact with a specific platform.
-#[async_trait]
+#[async_trait(?Send)]
 pub trait Env {
     type PositionalReader: ReadAt;
     type SequentialWriter: Write;
