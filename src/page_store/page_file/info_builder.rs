@@ -85,7 +85,7 @@ impl FileInfoBuilder {
         for page_addr in delete_pages {
             let (file_id, _) = split_page_addr(*page_addr);
             if let Some(info) = files.get_mut(&file_id) {
-                info.remove(*page_addr)
+                info.deactive_page(*page_addr)
             }
         }
     }

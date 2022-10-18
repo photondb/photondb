@@ -25,7 +25,7 @@ impl FileInfo {
         }
     }
 
-    pub(crate) fn remove(&mut self, page_addr: u64) {
+    pub(crate) fn deactive_page(&mut self, page_addr: u64) {
         let (_, index) = split_page_addr(page_addr);
         if self.active_pages.remove(index) {
             self.active_size -= self.meta.get_page_size(page_addr);
