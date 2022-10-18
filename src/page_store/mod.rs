@@ -34,11 +34,3 @@ impl<E: Env> PageStore<E> {
         Guard::new(Version::from_local(), self.table.clone())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_name() {}
-}
