@@ -5,41 +5,43 @@ use std::{
     mem,
 };
 
-pub(crate) trait SeekableIter: Iterator {
+/// An extension of [`Iterator`] that can seek to a target.
+pub(crate) trait SeekableIterator<T>: Iterator {
     /// Positions the iterator at the first item that is greater than or equal to `target`.
-    fn seek(&mut self);
+    fn seek(&mut self, target: &T);
 }
 
-pub(crate) trait RewindableIter: Iterator {
+/// An extension of [`Iterator`] that can rewind back to the first item.
+pub(crate) trait RewindableIterator: Iterator {
     /// Positions the iterator at the first item.
     fn rewind(&mut self);
 }
 
-pub(crate) struct ItemIter<'a, T> {
-    next: Option<&'a T>,
-    item: Option<&'a T>,
+pub(crate) struct ItemIter<T> {
+    next: Option<T>,
+    item: Option<T>,
 }
 
-impl<'a, T> ItemIter<'a, T> {
-    pub(crate) fn new(item: &'a T) -> Self {
+impl<T: Clone> ItemIter<T> {
+    pub(crate) fn new(item: T) -> Self {
         Self {
-            next: Some(item),
+            next: Some(item.clone()),
             item: Some(item),
         }
     }
 }
 
-impl<'a, T> Iterator for ItemIter<'a, T> {
-    type Item = &'a T;
+impl<T: Clone> Iterator for ItemIter<T> {
+    type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next.take()
     }
 }
 
-impl<'a, T> RewindableIter for ItemIter<'a, T> {
+impl<T: Clone> RewindableIterator for ItemIter<T> {
     fn rewind(&mut self) {
-        self.next = self.item;
+        self.next = self.item.clone();
     }
 }
 
@@ -67,12 +69,13 @@ impl<'a, T> Iterator for SliceIter<'a, T> {
     }
 }
 
-impl<'a, T> RewindableIter for SliceIter<'a, T> {
+impl<'a, T> RewindableIterator for SliceIter<'a, T> {
     fn rewind(&mut self) {
         self.next = 0;
     }
 }
 
+/// A wrapper to order an [`Iterator`] by its next item.
 struct OrderedIter<I>
 where
     I: Iterator,
@@ -87,6 +90,10 @@ where
 {
     fn new(iter: I) -> Self {
         Self { iter, next: None }
+    }
+
+    fn init(&mut self) {
+        self.next = self.iter.next();
     }
 }
 
@@ -140,19 +147,19 @@ where
     }
 }
 
-impl<I> SeekableIter for OrderedIter<I>
+impl<I, T> SeekableIterator<T> for OrderedIter<I>
 where
-    I: SeekableIter,
+    I: SeekableIterator<T>,
 {
-    fn seek(&mut self) {
-        self.iter.seek();
+    fn seek(&mut self, target: &T) {
+        self.iter.seek(target);
         self.next = self.iter.next();
     }
 }
 
-impl<I> RewindableIter for OrderedIter<I>
+impl<I> RewindableIterator for OrderedIter<I>
 where
-    I: RewindableIter,
+    I: RewindableIterator,
 {
     fn rewind(&mut self) {
         self.iter.rewind();
@@ -160,6 +167,7 @@ where
     }
 }
 
+/// An iterator that merges multiple ordered iterators.
 pub(crate) struct MergingIter<I>
 where
     I: Iterator,
@@ -173,11 +181,12 @@ where
     I: Iterator,
     I::Item: Ord,
 {
-    fn init(mut iters: Vec<Reverse<OrderedIter<I>>>) -> Self {
-        for iter in iters.iter_mut() {
-            iter.0.next();
-        }
-        Self { heap: iters.into() }
+    fn new(vec: Vec<Reverse<OrderedIter<I>>>) -> Self {
+        Self { heap: vec.into() }
+    }
+
+    fn init(&mut self) {
+        self.for_each(|iter| iter.0.init())
     }
 
     fn for_each<F>(&mut self, f: F)
@@ -209,19 +218,19 @@ where
     }
 }
 
-impl<I> SeekableIter for MergingIter<I>
+impl<I, T> SeekableIterator<T> for MergingIter<I>
 where
-    I: SeekableIter,
+    I: SeekableIterator<T>,
     I::Item: Ord,
 {
-    fn seek(&mut self) {
-        self.for_each(|iter| iter.0.seek());
+    fn seek(&mut self, target: &T) {
+        self.for_each(|iter| iter.0.seek(target));
     }
 }
 
-impl<I> RewindableIter for MergingIter<I>
+impl<I> RewindableIterator for MergingIter<I>
 where
-    I: RewindableIter,
+    I: RewindableIterator,
     I::Item: Ord,
 {
     fn rewind(&mut self) {
@@ -229,6 +238,7 @@ where
     }
 }
 
+/// Builds a [`MergingIter`] from multiple iterators.
 pub(crate) struct MergingIterBuilder<I>
 where
     I: Iterator,
@@ -251,6 +261,6 @@ where
     }
 
     pub(crate) fn build(self) -> MergingIter<I> {
-        MergingIter::init(self.iters)
+        MergingIter::new(self.iters)
     }
 }
