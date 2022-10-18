@@ -48,18 +48,18 @@ impl<T: Clone> RewindableIterator for ItemIter<T> {
     }
 }
 
-pub(crate) struct ArrayIter<T, const N: usize> {
-    data: [T; N],
+pub(crate) struct SliceIter<'a, T> {
+    data: &'a [T],
     next: usize,
 }
 
-impl<T, const N: usize> ArrayIter<T, N> {
-    pub(crate) fn new(data: [T; N]) -> Self {
+impl<'a, T> SliceIter<'a, T> {
+    pub(crate) fn new(data: &'a [T]) -> Self {
         Self { data, next: 0 }
     }
 }
 
-impl<T: Clone, const N: usize> Iterator for ArrayIter<T, N> {
+impl<'a, T: Clone> Iterator for SliceIter<'a, T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -72,7 +72,7 @@ impl<T: Clone, const N: usize> Iterator for ArrayIter<T, N> {
     }
 }
 
-impl<T: Clone, const N: usize> RewindableIterator for ArrayIter<T, N> {
+impl<'a, T: Clone> RewindableIterator for SliceIter<'a, T> {
     fn rewind(&mut self) {
         self.next = 0;
     }

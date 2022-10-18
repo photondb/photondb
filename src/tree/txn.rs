@@ -30,7 +30,7 @@ impl<'a, E> Txn<'a, E> {
         let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
         builder.build(&mut new_page);
-        // Update the corresponding leaf page with the delta page.
+        // Update the corresponding leaf page with the delta.
         loop {
             new_page.set_epoch(view.page.epoch());
             new_page.set_chain_len(view.page.chain_len().saturating_add(1));
@@ -88,7 +88,7 @@ impl<'a, E> Txn<'a, E> {
             let (child_index, child_range) = self.find_child(key, &view).await?;
             index = child_index;
             range.start = child_range.start;
-            // If the child has no range end, use the parent's range end instead.
+            // If the child has no range end, use the parent's instead.
             if let Some(end) = child_range.end {
                 range.end = Some(end);
             }
@@ -145,7 +145,7 @@ impl<'a, E> Txn<'a, E> {
         self.walk_page(view, |page| {
             debug_assert!(page.tier().is_leaf());
             if page.kind().is_data() {
-                let page = LeafPageRef::from(page);
+                let page = LeafDataPageRef::from(page);
                 if let Some((_, v)) = page.find(key) {
                     if let Value::Put(v) = v {
                         value = Some(v);
@@ -172,7 +172,7 @@ impl<'a, E> Txn<'a, E> {
         self.walk_page(view, |page| {
             debug_assert!(page.tier().is_inner());
             if page.kind().is_data() {
-                let mut iter = InnerPageIter::from(page);
+                let mut iter = InnerDataPageIter::from(page);
                 iter.seek_back(key);
                 let (start, index) = iter.next().expect("child must exist");
                 child_index = index;
@@ -193,8 +193,8 @@ impl<'a, E> Txn<'a, E> {
             return Err(Error::InvalidArgument);
         }
 
-        let data_page = DataPageRef::from(view.page);
-        if let Some((split_key, right_iter)) = data_page.split() {
+        let page = DataPageRef::from(view.page);
+        if let Some((split_key, right_iter)) = page.split() {
             let mut txn = self.guard.begin();
             // Build and insert the right page.
             let right_id = {
@@ -204,24 +204,23 @@ impl<'a, E> Txn<'a, E> {
                 builder.build(&mut new_page);
                 txn.insert_page(new_addr)
             };
-            // Build and update the left page.
-            {
-                let iter = ItemIter::new((split_key, Index::new(right_id)));
-                let builder =
-                    SortedPageBuilder::new(view.page.tier(), PageKind::Split).with_iter(iter);
-                let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
-                new_page.set_epoch(view.page.epoch() + 1);
-                new_page.set_chain_len(view.page.chain_len().saturating_add(1));
-                new_page.set_chain_next(view.addr);
-                txn.update_page(view.id, view.addr, new_addr)
-                    .map(|_| {
-                        self.tree.stats.success.split_page.inc();
-                    })
-                    .map_err(|_| {
-                        self.tree.stats.restart.split_page.inc();
-                        Error::Again
-                    })?;
-            }
+            // Build a delta page with the right index.
+            let iter = ItemIter::new((split_key, Index::new(right_id)));
+            let builder = SortedPageBuilder::new(view.page.tier(), PageKind::Split).with_iter(iter);
+            let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+            builder.build(&mut new_page);
+            // Update the left page with the delta.
+            new_page.set_epoch(view.page.epoch() + 1);
+            new_page.set_chain_len(view.page.chain_len().saturating_add(1));
+            new_page.set_chain_next(view.addr);
+            txn.update_page(view.id, view.addr, new_addr)
+                .map(|_| {
+                    self.tree.stats.success.split_page.inc();
+                })
+                .map_err(|_| {
+                    self.tree.stats.restart.split_page.inc();
+                    Error::Again
+                })?;
         }
 
         Ok(())
@@ -243,17 +242,27 @@ impl<'a, E> Txn<'a, E> {
 
     async fn reconcile_split_page(&self, view: PageView<'_>, parent: PageView<'_>) -> Result<()> {
         debug_assert!(view.page.kind().is_split());
-        let page = InnerPageRef::from(view.page);
-        let (split_key, split_index) = page.get(0).unwrap();
-
         let left_key = view.range.start;
         let left_index = Index::with_epoch(view.id, view.page.epoch());
-        let iter = ArrayIter::new([(left_key, left_index), (split_key, split_index)]);
-        let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data).with_iter(iter);
-
+        let split_page = SplitPageRef::from(view.page);
+        let (split_key, split_index) = split_page.get(0).unwrap();
+        // Build a delta page with the child on the left and the new split page on
+        // the right.
+        let delta = if let Some(right_key) = view.range.end {
+            vec![
+                (left_key, left_index),
+                (split_key, split_index),
+                (right_key, Index::new(NULL_ID)),
+            ]
+        } else {
+            vec![(left_key, left_index), (split_key, split_index)]
+        };
+        let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data)
+            .with_iter(SliceIter::new(&delta));
         let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
         builder.build(&mut new_page);
+        // Update the parent page with the delta.
         new_page.set_epoch(parent.page.epoch());
         new_page.set_chain_len(parent.page.chain_len().saturating_add(1));
         new_page.set_chain_next(parent.addr);
@@ -263,20 +272,21 @@ impl<'a, E> Txn<'a, E> {
 
     async fn reconcile_split_root(&self, view: PageView<'_>) -> Result<()> {
         debug_assert!(view.page.kind().is_split());
-        let split_page = SplitPageRef::from(view.page);
-        let (split_key, split_index) = split_page.get(0).unwrap();
-
         let mut txn = self.guard.begin();
-        // Move the original root page to another place.
+        // Move the root to another place.
         let left_id = txn.insert_page(view.addr);
         let left_key = Key::default();
         let left_index = Index::with_epoch(left_id, view.page.epoch());
-        // Build a new root with the original root page in the left and the split page
-        // in the right.
-        let iter = ArrayIter::new([(left_key, left_index), (split_key, split_index)]);
-        let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data).with_iter(iter);
+        let split_page = SplitPageRef::from(view.page);
+        let (split_key, split_index) = split_page.get(0).unwrap();
+        // Build a new root with the original root on the left and the new split page on
+        // the right.
+        let delta = [(left_key, left_index), (split_key, split_index)];
+        let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data)
+            .with_iter(SliceIter::new(&delta));
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
         builder.build(&mut new_page);
+        // Update the original root with the new root.
         txn.update_page(view.id, view.addr, new_addr)
             .map_err(|_| Error::Again)
     }
@@ -331,10 +341,10 @@ struct PageView<'a> {
 
 type DataPageRef<'a> = SortedPageRef<'a, &'a [u8]>;
 type DataPageIter<'a> = SortedPageIter<'a, &'a [u8]>;
-type LeafPageRef<'a> = SortedPageRef<'a, Value<'a>>;
-type InnerPageRef<'a> = SortedPageRef<'a, Index>;
-type InnerPageIter<'a> = SortedPageIter<'a, Index>;
 type SplitPageRef<'a> = SortedPageRef<'a, Index>;
+type LeafDataPageRef<'a> = SortedPageRef<'a, Value<'a>>;
+type InnerDataPageRef<'a> = SortedPageRef<'a, Index>;
+type InnerDataPageIter<'a> = SortedPageIter<'a, Index>;
 
 struct MergingDataPageIter<'a> {
     iter: MergingIter<DataPageIter<'a>>,
