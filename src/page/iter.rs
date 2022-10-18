@@ -255,6 +255,12 @@ where
         Self { iters: Vec::new() }
     }
 
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self {
+            iters: Vec::with_capacity(capacity),
+        }
+    }
+
     pub(crate) fn add(mut self, iter: I) {
         self.iters.push(Reverse(OrderedIter::new(iter)));
     }

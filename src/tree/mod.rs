@@ -43,8 +43,14 @@ impl<E: Env> Tree<E> {
         loop {
             let txn = self.begin();
             match txn.get(key).await {
-                Ok(value) => return Ok(f(value)),
-                Err(Error::Again) => continue,
+                Ok(value) => {
+                    self.stats.success.get.inc();
+                    return Ok(f(value));
+                }
+                Err(Error::Again) => {
+                    self.stats.restart.get.inc();
+                    continue;
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -54,8 +60,14 @@ impl<E: Env> Tree<E> {
         loop {
             let txn = self.begin();
             match txn.write(key, value).await {
-                Ok(_) => return Ok(()),
-                Err(Error::Again) => continue,
+                Ok(_) => {
+                    self.stats.success.write.inc();
+                    return Ok(());
+                }
+                Err(Error::Again) => {
+                    self.stats.restart.write.inc();
+                    continue;
+                }
                 Err(e) => return Err(e),
             }
         }

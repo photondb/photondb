@@ -1,6 +1,6 @@
 //! A storage engine for modern hardware.
 
-#![warn(unreachable_pub, trivial_casts, trivial_numeric_casts)]
+#![warn(unreachable_pub)]
 #![feature(io_error_more, type_alias_impl_trait)]
 
 mod db;

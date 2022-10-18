@@ -1,21 +1,21 @@
-use crate::util::Counter;
+use crate::util::atomic::Counter;
 
 pub struct Stats {
     pub success: TxnStats,
-    pub failure: TxnStats,
+    pub restart: TxnStats,
 }
 
 #[derive(Default)]
 pub(super) struct AtomicStats {
     pub(super) success: AtomicTxnStats,
-    pub(super) failure: AtomicTxnStats,
+    pub(super) restart: AtomicTxnStats,
 }
 
 impl AtomicStats {
     pub(super) fn snapshot(&self) -> Stats {
         Stats {
             success: self.success.snapshot(),
-            failure: self.failure.snapshot(),
+            restart: self.restart.snapshot(),
         }
     }
 }

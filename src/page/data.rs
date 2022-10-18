@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use super::codec::{BufReader, BufWriter, DecodeFrom, EncodeTo};
+use crate::util::codec::{BufReader, BufWriter, DecodeFrom, EncodeTo};
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Key<'a> {
@@ -71,18 +71,18 @@ impl DecodeFrom for Value<'_> {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Index {
     pub(crate) id: u64,
     pub(crate) epoch: u64,
 }
 
 impl Index {
-    pub(crate) fn new(id: u64) -> Self {
+    pub(crate) const fn new(id: u64) -> Self {
         Self { id, epoch: 0 }
     }
 
-    pub(crate) fn with_epoch(id: u64, epoch: u64) -> Self {
+    pub(crate) const fn with_epoch(id: u64, epoch: u64) -> Self {
         Self { id, epoch }
     }
 }

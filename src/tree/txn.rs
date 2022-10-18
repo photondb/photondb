@@ -1,13 +1,8 @@
 use super::Tree;
-use crate::{
-    page::{
-        ArrayIter, Index, ItemIter, Key, MergingIter, PageBuf, PageKind, PageRef, PageTier, Range,
-        SortedPageBuilder, SortedPageIter, SortedPageRef, Value,
-    },
-    page_store::{Error, Guard, PageTxn, Result},
-};
+use crate::{page::*, page_store::*};
 
 const ROOT_ID: u64 = 0;
+const NULL_ID: u64 = 0;
 
 pub(super) struct Txn<'a, E> {
     tree: &'a Tree<E>,
@@ -25,7 +20,7 @@ impl<'a, E> Txn<'a, E> {
         self.find_value(&key, &view).await
     }
 
-    /// Writes the given key-value pair to the tree.
+    /// Writes the key-value pair to the tree.
     pub(super) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
         let (mut view, parent) = self.find_leaf(&key).await?;
 
@@ -62,7 +57,9 @@ impl<'a, E> Txn<'a, E> {
         }
         Ok(())
     }
+}
 
+impl<'a, E> Txn<'a, E> {
     /// Finds the leaf page that may contain the key.
     ///
     /// Returns the leaf page and its parent.
@@ -79,8 +76,8 @@ impl<'a, E> Txn<'a, E> {
                 page,
                 range,
             };
-            // If the page epoch has changed, the page may not contain the expect data anymore.
-            // Try to reconcile any pending conflicts and retry the operation.
+            // If the page epoch has changed, the page may not contain the expect data
+            // anymore. Try to reconcile pending conflicts and restart the operation.
             if view.page.epoch() != index.epoch {
                 let _ = self.reconcile_page(view, parent).await;
                 return Err(Error::Again);
@@ -90,58 +87,96 @@ impl<'a, E> Txn<'a, E> {
             }
             let (child_index, child_range) = self.find_child(key, &view).await?;
             index = child_index;
-            range = child_range;
+            range.start = child_range.start;
+            // If the child has no range end, use the parent's range end instead.
+            if let Some(end) = child_range.end {
+                range.end = Some(end);
+            }
             parent = Some(view);
         }
     }
 
     /// Walks through the page chain and applies a function on each page.
     ///
-    /// This function walks through pages on the chain one by one and applies the given function on
-    /// each page. If the applied function returns some result on a page, the walk stops and returns
-    /// that result. Otherwise, it walks until the end of the chain and returns none.
-    async fn walk_page<F, R>(&self, view: &PageView<'_>, mut f: F) -> Result<Option<R>>
+    /// This function returns when it reaches the end of the chain or the
+    /// applied function returns true.
+    async fn walk_page<'g, F>(&'g self, view: &PageView<'g>, mut f: F) -> Result<()>
     where
-        F: FnMut(PageRef<'_>) -> Option<R>,
+        F: FnMut(PageRef<'g>) -> bool,
     {
         let mut page = view.page;
         loop {
-            if let Some(result) = f(page) {
-                return Ok(Some(result));
-            }
-            if page.chain_next() == 0 {
-                break;
+            if f(page) || page.chain_next() == 0 {
+                return Ok(());
             }
             page = self.guard.read_page(page.chain_next()).await?;
         }
-        Ok(None)
+    }
+
+    async fn iter_page<'g>(&'g self, view: &PageView<'g>) -> Result<MergingDataPageIter<'g>> {
+        // let mut builder = MergingIterBuilder::with_capacity(view.page.chain_len() as
+        // usize);
+        let mut range_end = None;
+        self.walk_page(view, |page| {
+            match page.kind() {
+                PageKind::Data => {
+                    // builder.add(DataPageIter::from(page));
+                }
+                PageKind::Split => {
+                    if range_end.is_none() {
+                        let split_page = SplitPageRef::from(page);
+                        range_end = Some(split_page.get(0).unwrap().0);
+                    }
+                }
+            }
+            false
+        })
+        .await?;
+        todo!()
     }
 
     /// Finds the value corresponding to the key in the given page.
-    async fn find_value(&self, key: &Key<'_>, view: &PageView<'_>) -> Result<Option<&[u8]>> {
+    async fn find_value<'g>(
+        &'g self,
+        key: &Key<'_>,
+        view: &PageView<'g>,
+    ) -> Result<Option<&'g [u8]>> {
+        let mut value = None;
         self.walk_page(view, |page| {
             debug_assert!(page.tier().is_leaf());
-            if page.kind() == PageKind::Data {
-                todo!()
+            if page.kind().is_data() {
+                let page = LeafPageRef::from(page);
+                if let Some((_, v)) = page.find(key) {
+                    if let Value::Put(v) = v {
+                        value = Some(v);
+                    }
+                    return true;
+                }
             }
-            None
+            false
         })
-        .await
+        .await?;
+        Ok(value)
     }
 
     /// Finds the child page that may contain the key in the given page.
     ///
     /// Returns the index and the range of the child page.
-    async fn find_child(&self, key: &Key<'_>, view: &PageView<'_>) -> Result<(Index, Range)> {
-        let child = self
-            .walk_page(view, |page| {
-                debug_assert!(page.tier().is_inner());
-                if page.kind() == PageKind::Data {
-                    todo!()
-                }
-                None
-            })
-            .await?;
+    async fn find_child<'g>(
+        &'a self,
+        key: &Key<'_>,
+        view: &PageView<'g>,
+    ) -> Result<(Index, Range)> {
+        let mut child = None;
+        self.walk_page(view, |page| {
+            debug_assert!(page.tier().is_inner());
+            if page.kind().is_data() {
+                let page = InnerPageRef::from(page);
+                todo!()
+            }
+            false
+        })
+        .await?;
         Ok(child.expect("child page must exist"))
     }
 
@@ -151,13 +186,13 @@ impl<'a, E> Txn<'a, E> {
             return Err(Error::InvalidArgument);
         }
 
-        let page = DataPageRef::from(view.page);
-        if let Some((split_key, right_iter)) = page.split() {
+        let data_page = DataPageRef::from(view.page);
+        if let Some((split_key, right_iter)) = data_page.split() {
             let mut txn = self.guard.begin();
             // Build and insert the right page.
             let right_id = {
-                let builder =
-                    SortedPageBuilder::new(page.tier(), page.kind()).with_iter(right_iter);
+                let builder = SortedPageBuilder::new(view.page.tier(), view.page.kind())
+                    .with_iter(right_iter);
                 let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
                 builder.build(&mut new_page);
                 txn.insert_page(new_addr)
@@ -165,13 +200,20 @@ impl<'a, E> Txn<'a, E> {
             // Build and update the left page.
             {
                 let iter = ItemIter::new((split_key, Index::new(right_id)));
-                let builder = SortedPageBuilder::new(page.tier(), PageKind::Split).with_iter(iter);
+                let builder =
+                    SortedPageBuilder::new(view.page.tier(), PageKind::Split).with_iter(iter);
                 let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
-                new_page.set_epoch(page.epoch() + 1);
-                new_page.set_chain_len(page.chain_len().saturating_add(1));
+                new_page.set_epoch(view.page.epoch() + 1);
+                new_page.set_chain_len(view.page.chain_len().saturating_add(1));
                 new_page.set_chain_next(view.addr);
                 txn.update_page(view.id, view.addr, new_addr)
-                    .map_err(|_| Error::Again)?;
+                    .map(|_| {
+                        self.tree.stats.success.split_page.inc();
+                    })
+                    .map_err(|_| {
+                        self.tree.stats.restart.split_page.inc();
+                        Error::Again
+                    })?;
             }
         }
 
@@ -196,6 +238,7 @@ impl<'a, E> Txn<'a, E> {
         debug_assert!(view.page.kind().is_split());
         let page = InnerPageRef::from(view.page);
         let (split_key, split_index) = page.get(0).unwrap();
+
         let left_key = Key::new(view.range.start, 0);
         let left_index = Index::with_epoch(view.id, view.page.epoch());
         let iter = ArrayIter::new([(left_key, left_index), (split_key, split_index)]);
@@ -213,15 +256,16 @@ impl<'a, E> Txn<'a, E> {
 
     async fn reconcile_split_root(&self, view: PageView<'_>) -> Result<()> {
         debug_assert!(view.page.kind().is_split());
-        let page = InnerPageRef::from(view.page);
-        let (split_key, split_index) = page.get(0).unwrap();
+        let split_page = SplitPageRef::from(view.page);
+        let (split_key, split_index) = split_page.get(0).unwrap();
 
         let mut txn = self.guard.begin();
         // Move the original root page to another place.
         let left_id = txn.insert_page(view.addr);
         let left_key = Key::default();
         let left_index = Index::with_epoch(left_id, view.page.epoch());
-        // Build a new root with the original root in the left and the new split page in the right.
+        // Build a new root with the original root page in the left and the split page
+        // in the right.
         let iter = ArrayIter::new([(left_key, left_index), (split_key, split_index)]);
         let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data).with_iter(iter);
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
@@ -235,7 +279,7 @@ impl<'a, E> Txn<'a, E> {
         view: PageView<'_>,
         parent: Option<PageView<'_>>,
     ) -> Result<()> {
-        let (iter, last_page) = self.delta_page_iter(&view).await;
+        let (iter, last_page) = self.iter_page_for_consolidation(&view).await;
         let builder = SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(iter);
         let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
@@ -244,7 +288,13 @@ impl<'a, E> Txn<'a, E> {
         new_page.set_chain_len(last_page.chain_len());
         new_page.set_chain_next(last_page.chain_next());
         txn.replace_page(view.id, view.addr, new_addr)
-            .map_err(|_| Error::Again)?;
+            .map(|_| {
+                self.tree.stats.success.consolidate_page.inc();
+            })
+            .map_err(|_| {
+                self.tree.stats.restart.consolidate_page.inc();
+                Error::Again
+            })?;
 
         // Try to split the page if it is too large.
         if new_page.size() >= self.tree.options.page_size {
@@ -253,7 +303,14 @@ impl<'a, E> Txn<'a, E> {
         Ok(())
     }
 
-    async fn delta_page_iter(&self, view: &PageView<'_>) -> (DataPageIter<'_>, PageRef<'_>) {
+    async fn iter_page_for_consolidation(
+        &self,
+        view: &PageView<'_>,
+    ) -> (DataPageIter<'_>, PageRef<'_>) {
+        todo!()
+    }
+
+    async fn dealloc_page(&self, start: u64, until: u64) {
         todo!()
     }
 }
@@ -266,5 +323,13 @@ struct PageView<'a> {
 }
 
 type DataPageRef<'a> = SortedPageRef<'a, &'a [u8]>;
-type DataPageIter<'a> = MergingIter<SortedPageIter<'a, &'a [u8]>>;
+type DataPageIter<'a> = SortedPageIter<'a, &'a [u8]>;
+type LeafPageRef<'a> = SortedPageRef<'a, Value<'a>>;
 type InnerPageRef<'a> = SortedPageRef<'a, Index>;
+type InnerPageIter<'a> = SortedPageIter<'a, Index>;
+type SplitPageRef<'a> = SortedPageRef<'a, Index>;
+
+struct MergingDataPageIter<'a> {
+    iter: MergingIter<DataPageIter<'a>>,
+    range_end: Option<Key<'a>>,
+}
