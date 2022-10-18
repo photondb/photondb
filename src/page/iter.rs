@@ -7,8 +7,11 @@ use std::{
 
 /// An extension of [`Iterator`] that can seek to a target.
 pub(crate) trait SeekableIterator<T>: Iterator {
-    /// Positions the iterator at the first item that is greater than or equal to `target`.
+    /// Positions the iterator at the first item that is at or after `target`.
     fn seek(&mut self, target: &T);
+
+    /// Positions the iterator at the first item that is at or before `target`.
+    fn seek_back(&mut self, target: &T);
 }
 
 /// An extension of [`Iterator`] that can rewind back to the beginning.
@@ -155,6 +158,11 @@ where
         self.iter.seek(target);
         self.next = self.iter.next();
     }
+
+    fn seek_back(&mut self, target: &T) {
+        self.iter.seek_back(target);
+        self.next = self.iter.next();
+    }
 }
 
 impl<I> RewindableIterator for OrderedIter<I>
@@ -224,6 +232,10 @@ where
 {
     fn seek(&mut self, target: &T) {
         self.for_each(|iter| iter.0.seek(target));
+    }
+
+    fn seek_back(&mut self, target: &T) {
+        self.for_each(|iter| iter.0.seek_back(target));
     }
 }
 
