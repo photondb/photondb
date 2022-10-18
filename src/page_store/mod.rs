@@ -18,8 +18,10 @@ use version::Version;
 
 mod jobs;
 mod write_buffer;
+use write_buffer::WriteBuffer;
 
 mod page_file;
+use page_file::{FileInfo, FileMeta, PageHandle};
 
 pub(crate) struct PageStore<E> {
     env: E,
