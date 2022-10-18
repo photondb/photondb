@@ -14,7 +14,6 @@ use crossbeam_epoch::Guard;
 use super::{write_buffer::WriteBuffer, Result};
 use crate::page::PagePtr;
 
-
 pub(crate) struct Version {
     pub buffer_set: Arc<BufferSet>,
     pub files: HashMap<u32, FileInfo>,
