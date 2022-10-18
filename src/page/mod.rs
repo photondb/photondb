@@ -1,6 +1,6 @@
 mod base;
 use base::PageBuilder;
-pub(crate) use base::{PageBuf, PageKind, PageRef, PageTier};
+pub(crate) use base::{PageBuf, PageKind, PagePtr, PageRef, PageTier};
 
 mod data;
 pub(crate) use data::{Index, Key, Range, Value};
