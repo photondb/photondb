@@ -16,6 +16,7 @@ mod meta;
 mod version;
 use version::Version;
 
+mod jobs;
 mod write_buffer;
 
 pub(crate) struct PageStore<E> {

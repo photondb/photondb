@@ -211,6 +211,16 @@ impl RecordHeader {
     pub fn page_ptr(&self) -> PagePtr {
         todo!()
     }
+
+    #[inline]
+    pub fn page_size(&self) -> u32 {
+        self.page_size
+    }
+
+    #[inline]
+    pub fn page_id(&self) -> u64 {
+        self.page_id
+    }
 }
 
 impl<'a> Iterator for RecordIterator<'a> {
