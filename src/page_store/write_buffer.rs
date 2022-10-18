@@ -64,6 +64,11 @@ impl WriteBuffer {
         todo!()
     }
 
+    #[inline]
+    pub fn file_id(&self) -> u32 {
+        self.file_id
+    }
+
     pub fn is_flushable(&self) -> bool {
         todo!()
     }
@@ -104,8 +109,8 @@ impl WriteBuffer {
     /// # Safety
     ///
     /// Before the writer is released if `release_writer` is set, it must be ensured that all former
-    /// allocated [`PageBuf`] have been released or converted to [`PageRef`] to avoid violating pointer
-    /// aliasing rules.
+    /// allocated [`PageBuf`] have been released or converted to [`PageRef`] to avoid violating
+    /// pointer aliasing rules.
     pub unsafe fn seal(&self, release_writer: bool) -> Result<()> {
         todo!()
     }
@@ -121,6 +126,20 @@ impl WriteBuffer {
             write_buffer: &self,
             offset: 0,
         }
+    }
+
+    /// Return the [`PageRef`] of the specified addr.
+    ///
+    /// # Panic
+    ///
+    /// Panic if the `page_addr` is not belongs to the [`WriteBuffer`].
+    ///
+    /// # Safety
+    ///
+    /// Users need to ensure that the accessed page has no mutable references, so as not to violate
+    /// the rules of pointer aliasing.
+    pub unsafe fn page(&self, page_addr: u64) -> PageRef {
+        todo!()
     }
 }
 
