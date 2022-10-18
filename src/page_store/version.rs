@@ -11,7 +11,7 @@ use std::{
 
 use crossbeam_epoch::Guard;
 
-use super::{write_buffer::WriteBuffer, Result};
+use super::{WriteBuffer, FileInfo, PageHandle, Result};
 use crate::page::PagePtr;
 
 pub(crate) struct Version {
@@ -125,31 +125,5 @@ impl<'a> Deref for BufferSetRef<'a> {
 
     fn deref(&self) -> &Self::Target {
         self.version
-    }
-}
-
-pub(crate) struct PageHandle {
-    pub offset: u32,
-    pub size: u32,
-}
-
-// TODO: Replace this dummy definition with the actual FileInfo.
-pub(crate) struct FileInfo {
-    // TODO: record active pages
-    meta: Arc<FileMeta>,
-}
-
-struct FileMeta {
-    file_id: u32,
-    file_size: u32,
-    indexes: Vec<u32>,
-    offsets: Vec<u32>,
-}
-
-impl FileInfo {
-    /// Get the [`PageHandle`] of the corresponding page. Returns `None` if no such active page
-    /// exists.
-    pub fn get_page_handle(&self, page_addr: u64) -> Option<PageHandle> {
-        todo!()
     }
 }

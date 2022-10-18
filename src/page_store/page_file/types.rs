@@ -1,5 +1,11 @@
 use std::sync::Arc;
 
+#[derive(Debug, Clone)]
+pub(crate) struct PageHandle {
+    pub offset: u32,
+    pub size: u32,
+}
+
 #[derive(Clone)]
 pub(crate) struct FileInfo {
     active_pages: roaring::RoaringBitmap,
@@ -25,11 +31,30 @@ impl FileInfo {
         }
     }
 
-    pub(crate) fn deactive_page(&mut self, page_addr: u64) {
+    #[inline]
+    pub fn get_file_id(&self) -> u32 {
+        self.meta.get_file_id()
+    }
+
+    pub(crate) fn deactivate_page(&mut self, page_addr: u64) {
         let (_, index) = split_page_addr(page_addr);
         if self.active_pages.remove(index) {
             self.active_size -= self.meta.get_page_size(page_addr);
         }
+    }
+
+    /// Get the [`PageHandle`] of the corresponding page. Returns `None` if no such active page
+    /// exists.
+    pub fn get_page_handle(&self, page_addr: u64) -> Option<PageHandle> {
+        todo!()
+    }
+
+    pub fn effective_size(&self) -> u32 {
+        todo!()
+    }
+
+    pub fn decline_rate(&self) -> f64 {
+        todo!()
     }
 }
 
@@ -50,6 +75,7 @@ impl FileMeta {
         }
     }
 
+    #[inline]
     pub(crate) fn get_file_id(&self) -> u32 {
         self.file_id
     }
@@ -59,7 +85,7 @@ impl FileMeta {
         todo!()
     }
 
-    // Return the totol page size(include inactive page).
+    // Return the total page size(include inactive page).
     pub(crate) fn total_page_size(&self) -> usize {
         todo!()
     }
