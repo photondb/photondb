@@ -1,5 +1,25 @@
 use crate::util::Counter;
 
+pub struct Stats {
+    pub success: TxnStats,
+    pub failure: TxnStats,
+}
+
+#[derive(Default)]
+pub(super) struct AtomicStats {
+    pub(super) success: AtomicTxnStats,
+    pub(super) failure: AtomicTxnStats,
+}
+
+impl AtomicStats {
+    pub(super) fn snapshot(&self) -> Stats {
+        Stats {
+            success: self.success.snapshot(),
+            failure: self.failure.snapshot(),
+        }
+    }
+}
+
 pub struct TxnStats {
     pub get: u64,
     pub write: u64,
@@ -22,26 +42,6 @@ impl AtomicTxnStats {
             write: self.write.get(),
             split_page: self.split_page.get(),
             consolidate_page: self.consolidate_page.get(),
-        }
-    }
-}
-
-pub struct TreeStats {
-    pub success: TxnStats,
-    pub failure: TxnStats,
-}
-
-#[derive(Default)]
-pub(super) struct AtomicTreeStats {
-    pub(super) success: AtomicTxnStats,
-    pub(super) failure: AtomicTxnStats,
-}
-
-impl AtomicTreeStats {
-    pub(super) fn snapshot(&self) -> TreeStats {
-        TreeStats {
-            success: self.success.snapshot(),
-            failure: self.failure.snapshot(),
         }
     }
 }
