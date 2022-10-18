@@ -99,12 +99,13 @@ impl WriteBuffer {
         todo!()
     }
 
-    /// Release the writer guard acquired before.
+    /// Seal the [`WriteBuffer`].
     ///
     /// # Safety
     ///
-    /// Before the writer is released, it must be ensured that all former allocated [`PageBuf`] have
-    /// been released or converted to [`PageRef`] to avoid violating pointer aliasing rules.
+    /// Before the writer is released if `release_writer` is set, it must be ensured that all former
+    /// allocated [`PageBuf`] have been released or converted to [`PageRef`] to avoid violating pointer
+    /// aliasing rules.
     pub unsafe fn seal(&self, release_writer: bool) -> Result<()> {
         todo!()
     }
