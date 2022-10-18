@@ -1,9 +1,9 @@
 use std::{marker::PhantomData, ops::Deref};
 
 use super::{
-    codec::{DecodeFrom, EncodeTo},
     Key, PageBuf, PageBuilder, PageKind, PageRef, PageTier, RewindableIterator, SeekableIterator,
 };
+use crate::util::codec::{DecodeFrom, EncodeTo};
 
 type SortedItem<'a, V> = (Key<'a>, V);
 
@@ -67,6 +67,10 @@ impl<'a, V> SortedPageRef<'a, V> {
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<SortedItem<'a, V>> {
+        todo!()
+    }
+
+    pub(crate) fn find(&self, target: &Key<'_>) -> Option<SortedItem<'a, V>> {
         todo!()
     }
 

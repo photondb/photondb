@@ -1,2 +1,2 @@
-mod atomic;
-pub(crate) use atomic::{Counter, Sequencer};
+pub(crate) mod atomic;
+pub(crate) mod codec;

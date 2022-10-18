@@ -1,14 +1,13 @@
-mod base;
-use base::PageBuilder;
-pub(crate) use base::{PageBuf, PageKind, PagePtr, PageRef, PageTier};
-
-mod iter;
-pub(crate) use iter::{ArrayIter, ItemIter, MergingIter, RewindableIterator, SeekableIterator};
-
 mod data;
 pub(crate) use data::{Index, Key, Range, Value};
 
-mod codec;
+mod iter;
+pub(crate) use iter::{
+    ArrayIter, ItemIter, MergingIter, MergingIterBuilder, RewindableIterator, SeekableIterator,
+};
+
+mod base_page;
+pub(crate) use base_page::{PageBuf, PageBuilder, PageKind, PagePtr, PageRef, PageTier};
 
 mod sorted_page;
 pub(crate) use sorted_page::{SortedPageBuilder, SortedPageIter, SortedPageRef};
