@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use super::codec::{BufReader, BufWriter, DecodeFrom, EncodeTo};
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Key<'a> {
     pub(crate) raw: &'a [u8],
     pub(crate) lsn: u64,
@@ -16,6 +16,7 @@ impl<'a> Key<'a> {
 
 impl Ord for Key<'_> {
     fn cmp(&self, other: &Self) -> Ordering {
+        // Order by the raw key ascendingly and the LSN descendingly.
         match self.raw.cmp(other.raw) {
             Ordering::Equal => other.lsn.cmp(&self.lsn),
             o => o,
@@ -80,6 +81,10 @@ impl Index {
     pub(crate) fn new(id: u64) -> Self {
         Self { id, epoch: 0 }
     }
+
+    pub(crate) fn with_epoch(id: u64, epoch: u64) -> Self {
+        Self { id, epoch }
+    }
 }
 
 impl EncodeTo for Index {
@@ -100,6 +105,6 @@ impl DecodeFrom for Index {
 
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct Range<'a> {
-    pub(crate) left: &'a [u8],
-    pub(crate) right: Option<&'a [u8]>,
+    pub(crate) start: &'a [u8],
+    pub(crate) end: Option<&'a [u8]>,
 }
