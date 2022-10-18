@@ -13,6 +13,11 @@ use page_table::PageTable;
 
 mod meta;
 
+mod version;
+use version::Version;
+
+mod write_buffer;
+
 pub(crate) struct PageStore<E> {
     env: E,
     table: PageTable,
@@ -24,6 +29,6 @@ impl<E: Env> PageStore<E> {
     }
 
     pub(crate) fn guard(&self) -> Guard {
-        todo!()
+        Guard::new(Version::from_local(), self.table.clone())
     }
 }
