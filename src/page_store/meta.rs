@@ -15,13 +15,13 @@ mod tests {
     #[test]
     fn version_edit_decode_and_encode() {
         let edit = VersionEdit {
-            deleted_file_set: vec![1, 2, 3],
             new_files: vec![4, 5, 6],
+            deleted_files: vec![1, 2, 3],
         };
 
         let payload = edit.encode_to_vec();
         let edit = VersionEdit::decode(payload.as_slice()).unwrap();
-        assert_eq!(edit.deleted_file_set, vec![1, 2, 3]);
+        assert_eq!(edit.deleted_files, vec![1, 2, 3]);
         assert_eq!(edit.new_files, vec![4, 5, 6]);
     }
 }
