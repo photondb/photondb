@@ -18,6 +18,8 @@ use version::Version;
 
 mod write_buffer;
 
+mod pagefile;
+
 pub(crate) struct PageStore<E> {
     env: E,
     table: PageTable,
@@ -31,4 +33,12 @@ impl<E: Env> PageStore<E> {
     pub(crate) fn guard(&self) -> Guard {
         Guard::new(Version::from_local(), self.table.clone())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_name() {}
 }
