@@ -19,6 +19,8 @@ use version::Version;
 mod jobs;
 mod write_buffer;
 
+mod page_file;
+
 pub(crate) struct PageStore<E> {
     env: E,
     table: PageTable,

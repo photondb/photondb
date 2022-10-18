@@ -16,6 +16,7 @@ futures = "0.3.24"
 photonio = "0.0.4"
 prost = "0.10"
 thiserror = "1.0.37"
+roaring = "0.10"
 
 [profile.bench]
 debug = true
