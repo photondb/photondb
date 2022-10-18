@@ -19,6 +19,7 @@ use version::Version;
 mod jobs;
 mod write_buffer;
 
+mod manifest;
 mod page_file;
 
 pub(crate) struct PageStore<E> {
