@@ -51,6 +51,12 @@ pub(crate) struct BufferSetRef<'a> {
 impl Version {
     /// Construct [`Version`] from thread local storage.
     pub fn from_local() -> Rc<Self> {
+        // TODO: refresh next version.
+        todo!()
+    }
+
+    /// Wait and construct next [`Version`].
+    pub async fn wait_next_version(&self) -> Self {
         todo!()
     }
 
@@ -60,6 +66,11 @@ impl Version {
 
     /// Try install new version into
     pub fn install(&self, delta: DeltaVersion) -> Result<()> {
+        todo!()
+    }
+
+    /// Fetch the files which obsolated but referenced by the [`Version`].
+    pub fn deleted_files(&self) -> Vec<u32> {
         todo!()
     }
 }
