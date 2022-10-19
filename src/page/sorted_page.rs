@@ -27,14 +27,6 @@ where
         }
     }
 
-    pub(crate) fn with_next(addr: u64, page: PageRef<'_>) -> Self {
-        let base = PageBuilder::new(page.tier(), page.kind())
-            .epoch(page.epoch())
-            .chain_len(page.chain_len().saturating_add(1))
-            .chain_next(addr);
-        Self { base, iter: None }
-    }
-
     pub(crate) fn with_iter(mut self, iter: I) -> Self {
         self.iter = Some(iter);
         self

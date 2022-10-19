@@ -14,16 +14,16 @@ pub struct Table {
 }
 
 impl Table {
-    /// Opens a table in the given path.
+    /// Opens a table in the path.
     pub async fn open<P: AsRef<Path>>(path: P, options: Options) -> Result<Self> {
         let raw = RawTable::open(Photon, path, options).await?;
         Ok(Self {
             raw,
-            lsn: Sequencer::default(),
+            lsn: Sequencer::new(0),
         })
     }
 
-    /// Gets the value corresponding to the given key from the table.
+    /// Gets the value corresponding to the key from the table.
     pub async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let lsn = self.lsn.get();
         self.raw
@@ -31,13 +31,13 @@ impl Table {
             .await
     }
 
-    /// Inserts the given key-value pair into the table.
+    /// Inserts the key-value pair into the table.
     pub async fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let lsn = self.lsn.inc();
         self.raw.put(key, lsn, value).await
     }
 
-    /// Deletes the given key from the table.
+    /// Deletes the key from the table.
     pub async fn delete(&self, key: &[u8]) -> Result<()> {
         let lsn = self.lsn.inc();
         self.raw.delete(key, lsn).await

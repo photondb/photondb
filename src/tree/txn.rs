@@ -1,7 +1,9 @@
 use super::Tree;
-use crate::{page::*, page_store::*};
+use crate::{env::Env, page::*, page_store::*};
 
+// The id of the root page is always 0.
 const ROOT_ID: u64 = 0;
+// An invalid id for pages other than the root.
 const NULL_ID: u64 = 0;
 
 pub(super) struct Txn<'a, E> {
@@ -9,12 +11,16 @@ pub(super) struct Txn<'a, E> {
     guard: Guard,
 }
 
-impl<'a, E> Txn<'a, E> {
-    pub(super) fn new(tree: &'a Tree<E>, guard: Guard) -> Self {
-        Self { tree, guard }
+impl<'a, E: Env> Txn<'a, E> {
+    /// Creates a new transaction on the tree.
+    pub(super) fn new(tree: &'a Tree<E>) -> Self {
+        Self {
+            tree,
+            guard: tree.store.guard(),
+        }
     }
 
-    /// Gets the value corresponding to the key.
+    /// Gets the value corresponding to the key from the tree.
     pub(super) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
         let (view, _) = self.find_leaf(&key).await?;
         self.find_value(&key, &view).await
@@ -23,11 +29,10 @@ impl<'a, E> Txn<'a, E> {
     /// Writes the key-value pair to the tree.
     pub(super) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
         let (mut view, parent) = self.find_leaf(&key).await?;
-
-        let mut txn = self.guard.begin();
         // Build a delta page with the given key-value pair.
         let iter = ItemIter::new((key, value));
         let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
+        let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
         builder.build(&mut new_page);
         // Update the corresponding leaf page with the delta.
@@ -39,7 +44,7 @@ impl<'a, E> Txn<'a, E> {
                 Ok(_) => break,
                 Err(addr) => {
                     // The page has been updated by other transactions.
-                    // We can keep retrying as long as the page epoch remains the same.
+                    // We keep retrying as long as the page epoch remains the same.
                     let page = self.guard.read_page(addr).await?;
                     if page.epoch() == view.page.epoch() {
                         view.page = page;
@@ -50,8 +55,8 @@ impl<'a, E> Txn<'a, E> {
             }
         }
 
-        // Try to consolidate the page if it is too long.
-        if new_page.chain_len() as usize >= self.tree.options.page_chain_length {
+        // Try to consolidate the page if the chain is too long.
+        if new_page.chain_len() as usize > self.tree.options.page_chain_length {
             view.page = new_page.into();
             let _ = self.consolidate_page(view, parent).await;
         }
@@ -64,10 +69,12 @@ impl<'a, E> Txn<'a, E> {
     ///
     /// Returns the leaf page and its parent.
     async fn find_leaf(&self, key: &Key<'_>) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
+        // The index, range, and parent of the current page, starting from the root.
         let mut index = Index::new(ROOT_ID);
         let mut range = Range::default();
         let mut parent = None;
         loop {
+            // Read the current page from the store.
             let addr = self.guard.page_addr(index.id);
             let page = self.guard.read_page(addr).await?;
             let view = PageView {
@@ -76,7 +83,7 @@ impl<'a, E> Txn<'a, E> {
                 page,
                 range,
             };
-            // If the page epoch has changed, the page may not contain the expect data
+            // If the page epoch has changed, the page may not contain the data we expect
             // anymore. Try to reconcile pending conflicts and restart the operation.
             if view.page.epoch() != index.epoch {
                 let _ = self.reconcile_page(view, parent).await;
@@ -85,10 +92,11 @@ impl<'a, E> Txn<'a, E> {
             if view.page.tier().is_leaf() {
                 return Ok((view, parent));
             }
+            // Find the child page that may contain the key and update the current page.
             let (child_index, child_range) = self.find_child(key, &view).await?;
             index = child_index;
             range.start = child_range.start;
-            // If the child has no range end, use the parent's instead.
+            // If the child has no range end, use the current one instead.
             if let Some(end) = child_range.end {
                 range.end = Some(end);
             }
@@ -96,7 +104,7 @@ impl<'a, E> Txn<'a, E> {
         }
     }
 
-    /// Walks through the page chain and applies a function on each page.
+    /// Walks through the page chain and applies the function to each page.
     ///
     /// This function returns when it reaches the end of the chain or the
     /// applied function returns true.
@@ -113,6 +121,7 @@ impl<'a, E> Txn<'a, E> {
         }
     }
 
+    /// Creates an iterator over the key-value pairs in the page.
     async fn iter_page<'g>(&'g self, view: &PageView<'g>) -> Result<MergingDataPageIter<'g>> {
         // let mut builder = MergingIterBuilder::with_capacity(view.page.chain_len() as
         // usize);
@@ -135,7 +144,7 @@ impl<'a, E> Txn<'a, E> {
         todo!()
     }
 
-    /// Finds the value corresponding to the key in the given page.
+    /// Finds the value corresponding to the key from the page.
     async fn find_value<'g>(
         &'g self,
         key: &Key<'_>,
@@ -144,6 +153,7 @@ impl<'a, E> Txn<'a, E> {
         let mut value = None;
         self.walk_page(view, |page| {
             debug_assert!(page.tier().is_leaf());
+            // We only care about data pages here.
             if page.kind().is_data() {
                 let page = LeafDataPageRef::from(page);
                 if let Some((_, v)) = page.find(key) {
@@ -159,9 +169,9 @@ impl<'a, E> Txn<'a, E> {
         Ok(value)
     }
 
-    /// Finds the child page that may contain the key in the given page.
+    /// Finds the child page that may contain the key from the page.
     ///
-    /// Returns the index and the range of the child page.
+    /// Returns the index and range of the child page.
     async fn find_child<'g>(
         &'g self,
         key: &Key<'_>,
@@ -171,6 +181,7 @@ impl<'a, E> Txn<'a, E> {
         let mut child_range = Range::default();
         self.walk_page(view, |page| {
             debug_assert!(page.tier().is_inner());
+            // We only care about data pages here.
             if page.kind().is_data() {
                 let mut iter = InnerDataPageIter::from(page);
                 iter.seek_back(key);
@@ -180,6 +191,7 @@ impl<'a, E> Txn<'a, E> {
                 if let Some((end, _)) = iter.next() {
                     child_range.end = Some(end);
                 }
+                return true;
             }
             false
         })
@@ -187,8 +199,9 @@ impl<'a, E> Txn<'a, E> {
         Ok((child_index, child_range))
     }
 
-    async fn split_page(&self, view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
-        // We can only split on base data pages.
+    // Splits the page into two halfs.
+    async fn split_page(&self, mut view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
+        // We can only split base data pages.
         if !view.page.kind().is_data() || view.page.chain_next() != 0 {
             return Err(Error::InvalidArgument);
         }
@@ -210,12 +223,14 @@ impl<'a, E> Txn<'a, E> {
             let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
             builder.build(&mut new_page);
             // Update the left page with the delta.
+            // The page epoch must be updated to indicate the change of the page range.
             new_page.set_epoch(view.page.epoch() + 1);
             new_page.set_chain_len(view.page.chain_len().saturating_add(1));
             new_page.set_chain_next(view.addr);
             txn.update_page(view.id, view.addr, new_addr)
                 .map(|_| {
                     self.tree.stats.success.split_page.inc();
+                    view.page = new_page.into();
                 })
                 .map_err(|_| {
                     self.tree.stats.restart.split_page.inc();
@@ -223,9 +238,12 @@ impl<'a, E> Txn<'a, E> {
                 })?;
         }
 
+        // Try to reconcile the page after a split.
+        let _ = self.reconcile_page(view, parent).await;
         Ok(())
     }
 
+    /// Reconciles any conflicts on the page.
     async fn reconcile_page(&self, view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
         match view.page.kind() {
             PageKind::Data => {}
@@ -240,6 +258,7 @@ impl<'a, E> Txn<'a, E> {
         Ok(())
     }
 
+    // Reconciles a pending split on the page.
     async fn reconcile_split_page(&self, view: PageView<'_>, parent: PageView<'_>) -> Result<()> {
         debug_assert!(view.page.kind().is_split());
         let left_key = view.range.start;
@@ -270,7 +289,9 @@ impl<'a, E> Txn<'a, E> {
             .map_err(|_| Error::Again)
     }
 
+    // Reconciles a pending split on the root page.
     async fn reconcile_split_root(&self, view: PageView<'_>) -> Result<()> {
+        debug_assert_eq!(view.id, ROOT_ID);
         debug_assert!(view.page.kind().is_split());
         let mut txn = self.guard.begin();
         // Move the root to another place.
@@ -291,6 +312,7 @@ impl<'a, E> Txn<'a, E> {
             .map_err(|_| Error::Again)
     }
 
+    /// Consolidates delta pages on the page chain.
     async fn consolidate_page(
         &self,
         view: PageView<'_>,
