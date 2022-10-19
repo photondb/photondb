@@ -273,7 +273,11 @@ where
         }
     }
 
-    pub(crate) fn add(mut self, iter: I) {
+    pub(crate) fn len(&self) -> usize {
+        self.iters.len()
+    }
+
+    pub(crate) fn add(&mut self, iter: I) {
         self.iters.push(Reverse(OrderedIter::new(iter)));
     }
 
