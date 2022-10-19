@@ -25,6 +25,10 @@ pub(crate) struct PagePtr {
 }
 
 impl PagePtr {
+    pub(crate) fn new(ptr: NonNull<u8>, len: usize) -> Self {
+        PagePtr { ptr, len }
+    }
+
     /// Returns the page size.
     pub(crate) fn size(&self) -> usize {
         self.len
@@ -110,7 +114,7 @@ pub(crate) struct PageRef<'a> {
 }
 
 impl<'a> PageRef<'a> {
-    fn new(ptr: PagePtr) -> Self {
+    pub(crate) fn new(ptr: PagePtr) -> Self {
         Self {
             ptr,
             _marker: PhantomData,
