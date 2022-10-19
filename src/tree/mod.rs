@@ -23,7 +23,7 @@ pub(crate) struct Tree<E> {
 impl<E: Env> Tree<E> {
     pub(crate) async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
         let stats = AtomicStats::default();
-        let store = PageStore::open(env, path).await?;
+        let store = PageStore::open(env, path, options.clone()).await?;
         Ok(Self {
             options,
             stats,

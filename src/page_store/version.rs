@@ -11,7 +11,7 @@ use std::{
 
 use crossbeam_epoch::Guard;
 
-use super::{WriteBuffer, FileInfo, PageHandle, Result};
+use super::{FileInfo, PageHandle, Result, WriteBuffer};
 use crate::page::PagePtr;
 
 pub(crate) struct Version {
@@ -27,11 +27,14 @@ pub(crate) struct DeltaVersion {
     pub deleted_pages: Vec<u64>,
 }
 
+#[derive(Default)]
 pub(crate) struct NextVersion {
     raw_version: AtomicPtr<Version>,
 }
 
 pub(crate) struct BufferSet {
+    write_buffer_capacity: u32,
+
     current: AtomicPtr<BufferSetVersion>,
 }
 
@@ -49,6 +52,14 @@ pub(crate) struct BufferSetRef<'a> {
 }
 
 impl Version {
+    pub fn new(write_buffer_capacity: u32) -> Self {
+        Version {
+            buffer_set: Arc::new(BufferSet::new(write_buffer_capacity)),
+            files: HashMap::default(),
+            next: Arc::default(),
+        }
+    }
+
     /// Construct [`Version`] from thread local storage.
     pub fn from_local() -> Rc<Self> {
         // TODO: refresh next version.
@@ -82,6 +93,21 @@ impl Drop for NextVersion {
 }
 
 impl BufferSet {
+    pub fn new(write_buffer_capacity: u32) -> BufferSet {
+        let min_file_id = 0;
+        let buf = WriteBuffer::with_capacity(min_file_id, write_buffer_capacity);
+        let version = Box::new(BufferSetVersion {
+            min_file_id,
+            sealed_buffers: Vec::default(),
+            active_buffer: Arc::new(buf),
+        });
+        let raw = Box::leak(version);
+        BufferSet {
+            write_buffer_capacity,
+            current: AtomicPtr::new(raw),
+        }
+    }
+
     pub fn current(&self) -> BufferSetRef<'_> {
         todo!()
     }
@@ -102,7 +128,14 @@ impl BufferSet {
 
 impl Drop for BufferSet {
     fn drop(&mut self) {
-        todo!("drop internal buffer set version")
+        let raw = self.current.load(Ordering::SeqCst);
+        if !raw.is_null() {
+            unsafe {
+                // Safety: the backing memory is obtained from [`Box::into_raw`] and there no any
+                // references to the memory, which guarrantted by [`BufferSetRef`].
+                drop(Box::from_raw(raw));
+            }
+        }
     }
 }
 
@@ -125,5 +158,15 @@ impl<'a> Deref for BufferSetRef<'a> {
 
     fn deref(&self) -> &Self::Target {
         self.version
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buffer_set_construct_and_drop() {
+        drop(BufferSet::new(1 << 10));
     }
 }

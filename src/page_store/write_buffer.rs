@@ -1,4 +1,7 @@
-use std::{ptr::NonNull, sync::atomic::AtomicU64};
+use std::{
+    ptr::NonNull,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use bitflags::bitflags;
 
@@ -15,11 +18,12 @@ pub(crate) struct WriteBuffer {
     buffer_state: AtomicU64,
 }
 
+#[derive(Default, Debug, Clone)]
 struct BufferState {
     sealed: bool,
 
     /// The number of txn in progress.
-    num_txn: u32,
+    num_writer: u32,
 
     /// The size of the allocated buffers for a [`WriteBuffer`], aligned by 8 bytes.
     allocated: u32,
@@ -60,8 +64,31 @@ pub(crate) enum ReleaseState {
 }
 
 impl WriteBuffer {
-    pub fn with_capacity(size: u32) -> Self {
-        todo!()
+    pub fn with_capacity(file_id: u32, size: u32) -> Self {
+        use std::alloc::{alloc, Layout};
+
+        let buf_size = size as usize;
+        if buf_size <= core::mem::size_of::<usize>() {
+            panic!("The capacity of WriteBuffer is too small");
+        }
+
+        if !buf_size.is_power_of_two() {
+            panic!("The capacity of WriteBuffer is not pow of two");
+        }
+
+        let layout = Layout::from_size_align(buf_size, core::mem::size_of::<usize>())
+            .expect("Invalid layout");
+        let buf = unsafe {
+            // Safety: it is guaranteed that layout has non-zero size.
+            NonNull::new(alloc(layout)).expect("The memory is exhausted")
+        };
+        let default_state = BufferState::default();
+        WriteBuffer {
+            file_id,
+            buf,
+            buf_size,
+            buffer_state: AtomicU64::new(default_state.apply()),
+        }
     }
 
     #[inline]
@@ -145,7 +172,20 @@ impl WriteBuffer {
 
 impl Drop for WriteBuffer {
     fn drop(&mut self) {
-        todo!("check and release buf")
+        use std::alloc::{dealloc, Layout};
+
+        let state = BufferState::load(self.buffer_state.load(Ordering::SeqCst));
+        if state.has_writer() {
+            panic!("Try drop a write buffer that is still in use");
+        }
+
+        let layout = Layout::from_size_align(self.buf_size, core::mem::size_of::<usize>())
+            .expect("Invalid layout");
+        unsafe {
+            // Safety: this memory is allocated in [`WriteBuffer::with_capacity`] and has the same
+            // layout.
+            dealloc(self.buf.as_ptr(), layout);
+        }
     }
 }
 
@@ -162,28 +202,63 @@ unsafe impl Send for WriteBuffer {}
 unsafe impl Sync for WriteBuffer {}
 
 impl BufferState {
-    fn load(val: u64) -> Self {
-        todo!()
+    fn load(mut val: u64) -> Self {
+        let allocated = (val & ((1 << 32) - 1)) as u32;
+        let num_writer = ((val >> 32) & ((1 << 31) - 1)) as u32;
+        let sealed = val & (1 << 63) != 0;
+        BufferState {
+            sealed,
+            num_writer,
+            allocated,
+        }
     }
 
+    #[inline]
+    pub fn has_writer(&self) -> bool {
+        self.num_writer > 0
+    }
+
+    #[inline]
     pub fn set_sealed(&mut self) {
-        todo!()
+        self.sealed = true;
     }
 
+    #[inline]
     pub fn inc_writer(&mut self) {
-        todo!()
+        self.num_writer = self
+            .num_writer
+            .checked_add(1)
+            .expect("inc writer out of range");
     }
 
+    #[inline]
     pub fn dec_writer(&mut self) {
-        todo!()
+        self.num_writer = self
+            .num_writer
+            .checked_sub(1)
+            .expect("dec writer out of range");
     }
 
-    pub fn alloc_size(&mut self, buf_size: u32) -> Result<u32> {
-        todo!()
+    #[inline]
+    pub fn alloc_size(&mut self, required: u32, buf_size: u32) -> Result<u32> {
+        const ALIGN: u32 = core::mem::size_of::<usize>() as u32;
+        debug_assert_eq!(self.allocated % ALIGN, 0);
+        let required = required + (ALIGN - required % ALIGN);
+        if self.allocated + required > buf_size {
+            todo!("out of range")
+        }
+
+        let offset = self.allocated;
+        self.allocated = offset + required;
+        Ok(offset)
     }
 
     fn apply(&self) -> u64 {
-        todo!()
+        assert!(self.num_writer < (1 << 31));
+
+        (if self.sealed { 1 << 63 } else { 0 })
+            | ((self.num_writer as u64) << 32)
+            | (self.allocated as u64)
     }
 }
 
@@ -251,5 +326,40 @@ bitflags! {
         const DELETED_PAGES = 0b0000_0010;
 
         const TOMBSTONE     = 0b1000_0000;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn buffer_state_load_and_apply() {
+        let mut state = BufferState::default();
+        assert!(!state.sealed);
+        assert_eq!(state.num_writer, 0);
+        assert_eq!(state.allocated, 0);
+
+        state.set_sealed();
+        state.inc_writer();
+        state.alloc_size(3, 1024).unwrap();
+        let raw = state.apply();
+
+        let state = BufferState::load(raw);
+        assert!(state.sealed);
+        assert_eq!(state.num_writer, 1);
+        assert_eq!(state.allocated, 8);
+    }
+
+    #[test]
+    fn write_buffer_construct_and_drop() {
+        let buf = WriteBuffer::with_capacity(1, 512);
+        drop(buf);
+    }
+
+    #[test]
+    #[should_panic]
+    fn write_buffer_capacity_is_power_of_two() {
+        WriteBuffer::with_capacity(1, 513);
     }
 }

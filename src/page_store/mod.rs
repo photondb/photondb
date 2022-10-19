@@ -1,6 +1,6 @@
-use std::path::Path;
+use std::{path::Path, sync::Mutex};
 
-use crate::env::Env;
+use crate::{env::Env, Options};
 
 mod error;
 pub(crate) use error::{Error, Result};
@@ -25,12 +25,17 @@ mod page_file;
 use page_file::{FileInfo, FileMeta, PageHandle};
 
 pub(crate) struct PageStore<E> {
+    options: Options,
     env: E,
     table: PageTable,
+
+    /// The global [`Version`] of [`PageStore`], used when tls [`Version`] does not exist. It needs
+    /// to be updated every time a new [`Version`] is installed.
+    version: Mutex<Version>,
 }
 
 impl<E: Env> PageStore<E> {
-    pub(crate) async fn open<P: AsRef<Path>>(env: E, path: P) -> Result<Self> {
+    pub(crate) async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
         todo!()
     }
 
