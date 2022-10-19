@@ -6,7 +6,10 @@ use std::{
 use bitflags::bitflags;
 
 use super::Result;
-use crate::page::{PageBuf, PagePtr, PageRef};
+use crate::{
+    page::{PageBuf, PagePtr, PageRef},
+    page_store::Error,
+};
 
 pub(crate) struct WriteBuffer {
     file_id: u32,
@@ -25,7 +28,8 @@ struct BufferState {
     /// The number of txn in progress.
     num_writer: u32,
 
-    /// The size of the allocated buffers for a [`WriteBuffer`], aligned by 8 bytes.
+    /// The size of the allocated buffers for a [`WriteBuffer`], aligned by 8
+    /// bytes.
     allocated: u32,
 }
 
@@ -57,9 +61,12 @@ pub(crate) struct DeletedPagesRecordRef<'a> {
     size: usize,
 }
 
+/// [`ReleaseState`] indicates that caller whether to notify flush job.
 #[derive(Debug)]
 pub(crate) enum ReleaseState {
+    /// The [`WriteBuffer`] might be active or still exists pending writer.
     None,
+    /// The [`WriteBuffer`] has been sealed and all writers are released.
     Flush,
 }
 
@@ -125,29 +132,61 @@ impl WriteBuffer {
     ///
     /// # Safety
     ///
-    /// Before the writer is released, it must be ensured that all former allocated [`PageBuf`] have
-    /// been released or converted to [`PageRef`] to avoid violating pointer aliasing rules.
+    /// Before the writer is released, it must be ensured that all former
+    /// allocated [`PageBuf`] have been released or converted to [`PageRef`]
+    /// to avoid violating pointer aliasing rules.
     pub unsafe fn release_writer(&self) -> ReleaseState {
         todo!()
     }
 
-    /// Seal the [`WriteBuffer`].
+    /// Seal the [`WriteBuffer`]. `Err(Error::Again)` is returned if the buffer
+    /// has been sealed.
     ///
     /// # Safety
     ///
-    /// Before the writer is released if `release_writer` is set, it must be ensured that all former
-    /// allocated [`PageBuf`] have been released or converted to [`PageRef`] to avoid violating
-    /// pointer aliasing rules.
-    pub unsafe fn seal(&self, release_writer: bool) -> Result<()> {
-        todo!()
+    /// Before the writer is released if `release_writer` is set, it must be
+    /// ensured that all former allocated [`PageBuf`] have been released or
+    /// converted to [`PageRef`] to avoid violating pointer aliasing rules.
+    pub unsafe fn seal(&self, release_writer: bool) -> Result<ReleaseState> {
+        let mut current = self.buffer_state.load(Ordering::Acquire);
+        loop {
+            let mut buffer_state = BufferState::load(current);
+            if buffer_state.sealed {
+                return Err(Error::Again);
+            }
+
+            buffer_state.set_sealed();
+            if release_writer {
+                buffer_state.dec_writer();
+            }
+            let new = buffer_state.apply();
+
+            match self.buffer_state.compare_exchange(
+                current,
+                new,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    if buffer_state.has_writer() {
+                        return Ok(ReleaseState::None);
+                    } else {
+                        return Ok(ReleaseState::Flush);
+                    }
+                }
+                Err(v) => {
+                    current = v;
+                }
+            }
+        }
     }
 
     /// Return an iterator to iterate records in the buffer.
     ///
     /// # Panic
     ///
-    /// This function will panic if the the [`WriteBuffer`] is not flushable, to ensure that pointer
-    /// aliasing rules are not violated.
+    /// This function will panic if the the [`WriteBuffer`] is not flushable, to
+    /// ensure that pointer aliasing rules are not violated.
     pub fn iter(&self) -> impl Iterator + '_ {
         RecordIterator {
             write_buffer: &self,
@@ -163,8 +202,8 @@ impl WriteBuffer {
     ///
     /// # Safety
     ///
-    /// Users need to ensure that the accessed page has no mutable references, so as not to violate
-    /// the rules of pointer aliasing.
+    /// Users need to ensure that the accessed page has no mutable references,
+    /// so as not to violate the rules of pointer aliasing.
     pub unsafe fn page(&self, page_addr: u64) -> PageRef {
         todo!()
     }
@@ -182,8 +221,8 @@ impl Drop for WriteBuffer {
         let layout = Layout::from_size_align(self.buf_size, core::mem::size_of::<usize>())
             .expect("Invalid layout");
         unsafe {
-            // Safety: this memory is allocated in [`WriteBuffer::with_capacity`] and has the same
-            // layout.
+            // Safety: this memory is allocated in [`WriteBuffer::with_capacity`] and has
+            // the same layout.
             dealloc(self.buf.as_ptr(), layout);
         }
     }
@@ -191,14 +230,14 @@ impl Drop for WriteBuffer {
 
 /// # Safety
 ///
-/// [`WriteBuffer`] is [`Send`] since all accesses to the inner buf are guaranteed that the aliases
-/// do not overlap.
+/// [`WriteBuffer`] is [`Send`] since all accesses to the inner buf are
+/// guaranteed that the aliases do not overlap.
 unsafe impl Send for WriteBuffer {}
 
 /// # Safety
 ///
-/// [`WriteBuffer`] is [`Send`] since all accesses to the inner buf are guaranteed that the aliases
-/// do not overlap.
+/// [`WriteBuffer`] is [`Send`] since all accesses to the inner buf are
+/// guaranteed that the aliases do not overlap.
 unsafe impl Sync for WriteBuffer {}
 
 impl BufferState {
@@ -267,10 +306,12 @@ impl RecordHeader {
         todo!()
     }
 
-    /// Returns the total space of the current record, including the [`RecordHeader`].
+    /// Returns the total space of the current record, including the
+    /// [`RecordHeader`].
     ///
-    /// This value is not simply equal to `page_size + size_of::<RecordHeader>()`, because size of
-    /// records need to be aligned by 8 bytes.
+    /// This value is not simply equal to `page_size +
+    /// size_of::<RecordHeader>()`, because size of records need to be
+    /// aligned by 8 bytes.
     pub fn record_size(&self) -> u32 {
         todo!()
     }
@@ -332,6 +373,7 @@ bitflags! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::page_store::Error;
 
     #[test]
     fn buffer_state_load_and_apply() {
@@ -361,5 +403,28 @@ mod tests {
     #[should_panic]
     fn write_buffer_capacity_is_power_of_two() {
         WriteBuffer::with_capacity(1, 513);
+    }
+
+    #[test]
+    fn write_buffer_seal() {
+        let buf = WriteBuffer::with_capacity(1, 512);
+        assert!(matches!(
+            unsafe { buf.seal(false) },
+            Ok(ReleaseState::Flush)
+        ));
+    }
+
+    #[test]
+    fn write_buffer_sealed_seal() {
+        let buf = WriteBuffer::with_capacity(1, 512);
+        unsafe { buf.seal(false) }.unwrap();
+        assert!(matches!(unsafe { buf.seal(false) }, Err(Error::Again)));
+    }
+
+    #[test]
+    #[should_panic]
+    fn write_buffer_empty_writer_release_seal() {
+        let buf = WriteBuffer::with_capacity(1, 512);
+        unsafe { buf.seal(true) };
     }
 }

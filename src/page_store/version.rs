@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     ops::Deref,
     rc::Rc,
@@ -11,8 +10,7 @@ use std::{
 
 use crossbeam_epoch::Guard;
 
-use super::{FileInfo, PageHandle, Result, WriteBuffer};
-use crate::page::PagePtr;
+use super::{FileInfo, Result, WriteBuffer};
 
 pub(crate) struct Version {
     pub buffer_set: Arc<BufferSet>,
@@ -72,7 +70,7 @@ impl Version {
     }
 
     pub fn active_write_buffer_id(&self) -> u32 {
-        todo!()
+        self.buffer_set.current().active_buffer.file_id()
     }
 
     /// Try install new version into
@@ -88,7 +86,14 @@ impl Version {
 
 impl Drop for NextVersion {
     fn drop(&mut self) {
-        todo!("drop raw_version if it is not null")
+        let raw = self.raw_version.load(Ordering::SeqCst);
+        if !raw.is_null() {
+            unsafe {
+                // Safety: the backing memory is obtained from [`Box::into_raw`] and there no
+                // any references to the memory.
+                drop(Box::from_raw(raw));
+            }
+        }
     }
 }
 
@@ -108,6 +113,11 @@ impl BufferSet {
         }
     }
 
+    #[inline]
+    pub fn write_buffer_capacity(&self) -> u32 {
+        self.write_buffer_capacity
+    }
+
     pub fn current(&self) -> BufferSetRef<'_> {
         todo!()
     }
@@ -124,6 +134,10 @@ impl BufferSet {
     pub async fn wait_flushable(&self) {
         todo!()
     }
+
+    pub fn notify_flush_job(&self) {
+        todo!()
+    }
 }
 
 impl Drop for BufferSet {
@@ -131,8 +145,9 @@ impl Drop for BufferSet {
         let raw = self.current.load(Ordering::SeqCst);
         if !raw.is_null() {
             unsafe {
-                // Safety: the backing memory is obtained from [`Box::into_raw`] and there no any
-                // references to the memory, which guarrantted by [`BufferSetRef`].
+                // Safety: the backing memory is obtained from [`Box::into_raw`] and there no
+                // any references to the memory, which guarrantted by
+                // [`BufferSetRef`].
                 drop(Box::from_raw(raw));
             }
         }
@@ -142,7 +157,8 @@ impl Drop for BufferSet {
 impl BufferSetVersion {
     /// Read [`WriteBuffer`] of the specified `file_id`.
     ///
-    /// If the user needs to access the [`WriteBuffer`] for a long time, use `clone` to make a copy.
+    /// If the user needs to access the [`WriteBuffer`] for a long time, use
+    /// `clone` to make a copy.
     pub fn write_buffer(&self, file_id: u32) -> Option<&Arc<WriteBuffer>> {
         todo!()
     }

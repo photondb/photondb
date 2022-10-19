@@ -10,8 +10,8 @@ pub(crate) use info_builder::FileInfoBuilder;
 mod types;
 pub(crate) use types::{FileInfo, FileMeta, PageHandle};
 
-/// [`FileInfoIterator`] is used to traverse [`FileInfo`] to get the [`PageHandle`] of all active
-/// pages.
+/// [`FileInfoIterator`] is used to traverse [`FileInfo`] to get the
+/// [`PageHandle`] of all active pages.
 pub(crate) struct FileInfoIterator<'a> {
     info: &'a FileInfo,
     index: u32,
@@ -62,8 +62,8 @@ pub(crate) mod facade {
         }
 
         /// Open file_reader for a page_file.
-        /// page_store should get file_meta from current version with page_addr before call this
-        /// method.
+        /// page_store should get file_meta from current version with page_addr
+        /// before call this method.
         pub(crate) async fn open_file_reader(
             &self,
             file_meta: Arc<FileMeta>,
