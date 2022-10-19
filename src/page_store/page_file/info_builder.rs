@@ -21,8 +21,8 @@ impl FileInfoBuilder {
     }
 
     /// Recovery file infos for specified file ids.
-    /// It could be used to recovery in-memory `Version`'s `active_files` after it be recoveried
-    /// from manifest files.
+    /// It could be used to recovery in-memory `Version`'s `active_files` after
+    /// it be recoveried from manifest files.
     pub(crate) async fn recovery_base_file_infos(
         &self,
         file_ids: &[u32],
@@ -40,7 +40,8 @@ impl FileInfoBuilder {
 
     // Add new file to exist file infos.
     // It copies the old file infos before add new file.
-    // It could help version to prepare new Version's `active_files` after flush a new page file.
+    // It could help version to prepare new Version's `active_files` after flush a
+    // new page file.
     pub async fn add_file_info(
         &self,
         files: HashMap<u32, FileInfo>,

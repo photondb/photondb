@@ -9,7 +9,8 @@ pub(crate) trait EncodeTo {
     ///
     /// # Safety
     ///
-    /// The `BufWriter` must be initialized with enough space to encode this object.
+    /// The `BufWriter` must be initialized with enough space to encode this
+    /// object.
     unsafe fn encode_to(&self, w: &mut BufWriter);
 }
 
@@ -19,7 +20,8 @@ pub(crate) trait DecodeFrom {
     ///
     /// # Safety
     ///
-    /// The `BufReader` must be initialized with enough data to decode such an object.
+    /// The `BufReader` must be initialized with enough data to decode such an
+    /// object.
     unsafe fn decode_from(r: &mut BufReader) -> Self;
 }
 

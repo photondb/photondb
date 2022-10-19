@@ -29,8 +29,9 @@ pub(crate) struct PageStore<E> {
     env: E,
     table: PageTable,
 
-    /// The global [`Version`] of [`PageStore`], used when tls [`Version`] does not exist. It needs
-    /// to be updated every time a new [`Version`] is installed.
+    /// The global [`Version`] of [`PageStore`], used when tls [`Version`] does
+    /// not exist. It needs to be updated every time a new [`Version`] is
+    /// installed.
     version: Mutex<Version>,
 }
 

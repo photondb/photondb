@@ -21,8 +21,8 @@ const IO_BUFFER_SIZE: u64 = 8192 * 4;
 /// meta block index = {file_offset}
 /// footer = {magic_number} {data block index} {meta block index} {checksum}
 ///
-/// `page_addr`'s high 32 bit always be `file-id`(`PageAddr = {file id} {write buffer index}`), so
-/// it only store lower 32 bit.
+/// `page_addr`'s high 32 bit always be `file-id`(`PageAddr = {file id} {write
+/// buffer index}`), so it only store lower 32 bit.
 pub(crate) struct FileBuilder<W: Write> {
     writer: BufferWriter<W>,
 

@@ -1,6 +1,10 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
-use super::{version::Version, write_buffer::RecordHeader, PageTable, Result};
+use super::{
+    version::Version,
+    write_buffer::{RecordHeader, ReleaseState},
+    PageTable, Result, WriteBuffer,
+};
 use crate::page::{PageBuf, PageRef};
 
 pub(crate) struct Guard {
@@ -74,6 +78,26 @@ impl<'a> PageTxn<'a> {
         // TODO: commit the transaction on success
         todo!()
     }
+
+    fn seal_write_buffer(&mut self) -> Result<()> {
+        let release_state = {
+            let buffer_set = self.guard.version.buffer_set.current();
+            let write_buffer = buffer_set
+                .write_buffer(self.file_id)
+                .expect("The memory buffer should exists");
+            // TODO: add safety condition
+            unsafe { write_buffer.seal(false)? }
+        };
+
+        self.file_id += 1;
+        let capacity = self.guard.version.buffer_set.write_buffer_capacity();
+        let write_buffer = Arc::new(WriteBuffer::with_capacity(self.file_id, capacity));
+        self.guard.version.buffer_set.install(write_buffer);
+        if matches!(release_state, ReleaseState::Flush) {
+            self.guard.version.buffer_set.notify_flush_job();
+        }
+        Ok(())
+    }
 }
 
 impl<'a> Drop for PageTxn<'a> {
@@ -83,5 +107,21 @@ impl<'a> Drop for PageTxn<'a> {
         // 2. cas update write buffer num_writers.
         // 3. return allocated node ids.
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::page_store::{page_table::PageTable, version::Version};
+
+    #[test]
+    #[ignore] // ignore since install write buffer is not implemented.
+    fn page_txn_seal_write_buffer() {
+        let version = Rc::new(Version::new(512));
+        let page_table = PageTable::default();
+        let mut guard = Guard::new(version.clone(), page_table);
+        let mut page_txn = guard.begin();
+        page_txn.seal_write_buffer().unwrap();
     }
 }

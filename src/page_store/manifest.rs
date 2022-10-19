@@ -44,7 +44,8 @@ impl Manifest {
 
     // Record a new version_edit to manifest file.
     // it will rolling file when the file size over `max_file_size`.
-    // so it need pass-in a `version_snapshot` to get current snapshot when it rolling.
+    // so it need pass-in a `version_snapshot` to get current snapshot when it
+    // rolling.
     pub(crate) async fn record_version_edit(
         &mut self,
         ve: VersionEdit,

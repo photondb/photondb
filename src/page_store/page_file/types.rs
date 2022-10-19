@@ -43,8 +43,8 @@ impl FileInfo {
         }
     }
 
-    /// Get the [`PageHandle`] of the corresponding page. Returns `None` if no such active page
-    /// exists.
+    /// Get the [`PageHandle`] of the corresponding page. Returns `None` if no
+    /// such active page exists.
     pub fn get_page_handle(&self, page_addr: u64) -> Option<PageHandle> {
         todo!()
     }

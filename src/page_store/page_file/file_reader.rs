@@ -39,8 +39,9 @@ impl<R: ReadAt> FileReader<R> {
         todo!()
     }
 
-    /// Reads the exact number of bytes from the page specified by `page_addr` to fill `buf`
-    /// the read page size is same as the provided `buf.len()`.
+    /// Reads the exact number of bytes from the page specified by `page_addr`
+    /// to fill `buf` the read page size is same as the provided
+    /// `buf.len()`.
     pub(crate) async fn read_page(&self, page_addr: u64, buf: &mut [u8]) -> Result<()> {
         todo!()
     }
