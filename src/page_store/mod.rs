@@ -20,6 +20,7 @@ mod jobs;
 mod write_buffer;
 use write_buffer::WriteBuffer;
 
+mod manifest;
 mod page_file;
 use page_file::{FileInfo, FileMeta, PageHandle};
 
