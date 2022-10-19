@@ -28,7 +28,7 @@ impl<'a> Iterator for FileInfoIterator<'a> {
 pub(crate) mod facade {
     use std::{path::PathBuf, sync::Arc};
 
-    use photonio::fs::File;
+    use photonio::fs::{File, OpenOptions};
 
     use super::*;
     use crate::page_store::Result;
@@ -39,6 +39,7 @@ pub(crate) mod facade {
         base: PathBuf,
 
         file_prefix: String,
+        use_direct: bool,
     }
 
     impl PageFiles {
@@ -48,17 +49,40 @@ pub(crate) mod facade {
             Self {
                 base: base.into(),
                 file_prefix: file_prefile.into(),
+                use_direct: true,
             }
         }
 
         /// Create file_builder to write a new page_file.
-        pub(crate) async fn new_file_builder(&self, file_id: u32) -> Result<FileBuilder<File>> {
+        pub(crate) async fn new_file_builder(&self, file_id: u32) -> Result<FileBuilder> {
+            // TODO: switch to env in suitable time.
             let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
-            let writer = File::create(path)
+            let flags = self.writer_flags();
+            let writer = OpenOptions::new()
+                .write(true)
+                .custom_flags(flags)
+                .create(true)
+                .truncate(true)
+                .open(path)
                 .await
-                .expect("expect file_id: {file_id}'s file already exist");
-            // todo: need a file sync trait and return addition syncer?
-            Ok(FileBuilder::new(writer))
+                .expect("open file_id: {file_id}'s file fail");
+            Ok(FileBuilder::new(writer, self.use_direct))
+        }
+
+        #[inline]
+        fn writer_flags(&self) -> i32 {
+            const O_DIRECT_LINUX: i32 = 0x4000;
+            const O_DIRECT_AARCH64: i32 = 0x10000;
+            if !self.use_direct {
+                return 0;
+            }
+            if cfg!(not(target_os = "linux")) {
+                0
+            } else if cfg!(target_arch = "aarch64") {
+                O_DIRECT_AARCH64
+            } else {
+                O_DIRECT_LINUX
+            }
         }
 
         /// Open file_reader for a page_file.
@@ -80,6 +104,21 @@ pub(crate) mod facade {
         // Create info_builder to help recovery & mantains version's file_info.
         pub(crate) fn new_info_builder(&self) -> FileInfoBuilder {
             FileInfoBuilder::new(self.base.to_owned(), &self.file_prefix)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[photonio::test]
+        fn test_file_builder() {
+            let base = std::env::temp_dir();
+            let files = PageFiles::new(&base, "testdata");
+            let mut builder = files.new_file_builder(11233).await.unwrap();
+            builder.add_delete_pages(&[1, 2]);
+            builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
+            builder.finish().await.unwrap();
         }
     }
 }

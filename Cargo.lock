@@ -302,8 +302,7 @@ dependencies = [
 [[package]]
 name = "photonio"
 version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b164df38b91bac346c235f7c0e527219997c6ed3dcf4207696e92a65bdcdf32"
+source = "git+https://github.com/zojw/photonio.git?rev=785c2d9#785c2d9933d0ea828200751ca2b19b31832c7a3a"
 dependencies = [
  "photonio-macros",
  "photonio-tokio",
@@ -313,14 +312,12 @@ dependencies = [
 [[package]]
 name = "photonio-base"
 version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9180fe55794634ed0388cf9f2293100a03e39757fbbfdfcc4d248ac7a16b57b"
+source = "git+https://github.com/zojw/photonio.git?rev=785c2d9#785c2d9933d0ea828200751ca2b19b31832c7a3a"
 
 [[package]]
 name = "photonio-macros"
 version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e29bb52a90cd4d4f73a6fd1edcc7c1f3fe7034d7506076e4294e5551afdf100a"
+source = "git+https://github.com/zojw/photonio.git?rev=785c2d9#785c2d9933d0ea828200751ca2b19b31832c7a3a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -330,8 +327,7 @@ dependencies = [
 [[package]]
 name = "photonio-tokio"
 version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5988ea3fb9d3b922942f76e087645b14317e7651828c6cb50ec65b816d92eb9a"
+source = "git+https://github.com/zojw/photonio.git?rev=785c2d9#785c2d9933d0ea828200751ca2b19b31832c7a3a"
 dependencies = [
  "futures",
  "photonio-base",
@@ -341,8 +337,7 @@ dependencies = [
 [[package]]
 name = "photonio-uring"
 version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34821180ea8d6a72564e17c59d44a6161ab81535eb2f5057acc9561bdb2b901f"
+source = "git+https://github.com/zojw/photonio.git?rev=785c2d9#785c2d9933d0ea828200751ca2b19b31832c7a3a"
 dependencies = [
  "futures",
  "io-uring",

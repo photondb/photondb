@@ -1,11 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
-use futures::Future;
-use photonio::io::{Write, WriteExt};
+use photonio::{fs::File, io::WriteExt};
 
 use crate::page_store::Result;
 
-const IO_BUFFER_SIZE: u64 = 8192 * 4;
+const IO_BUFFER_SIZE: usize = 4096 * 4;
 
 /// Builder for a page file.
 ///
@@ -23,17 +22,17 @@ const IO_BUFFER_SIZE: u64 = 8192 * 4;
 ///
 /// `page_addr`'s high 32 bit always be `file-id`(`PageAddr = {file id} {write
 /// buffer index}`), so it only store lower 32 bit.
-pub(crate) struct FileBuilder<W: Write> {
-    writer: BufferWriter<W>,
+pub(crate) struct FileBuilder {
+    writer: BufferedWriter,
 
     index: IndexBlockBuilder,
     meta: MetaBlockBuilder,
 }
 
-impl<W: Write> FileBuilder<W> {
+impl FileBuilder {
     /// Create new file builder for given writer.
-    pub(crate) fn new(writer: W) -> Self {
-        let writer = BufferWriter::new(writer, IO_BUFFER_SIZE);
+    pub(crate) fn new(file: File, use_direct: bool) -> Self {
+        let writer = BufferedWriter::new(file, IO_BUFFER_SIZE, use_direct);
         Self {
             writer,
             index: Default::default(),
@@ -63,11 +62,11 @@ impl<W: Write> FileBuilder<W> {
     pub(crate) async fn finish(&mut self) -> Result<()> {
         self.finish_meta_block().await?;
         self.finish_file_footer().await?;
-        self.writer.flush().await
+        self.writer.flush_and_sync().await
     }
 }
 
-impl<W: Write> FileBuilder<W> {
+impl FileBuilder {
     async fn finish_meta_block(&mut self) -> Result<()> {
         {
             let page_tables = self.meta.finish_page_table_block();
@@ -88,29 +87,6 @@ impl<W: Write> FileBuilder<W> {
         let (data_index, meta_index) = self.index.finish_index_block();
         // TODO: build footer & checksum and write into self.writer.
         Ok(())
-    }
-}
-
-struct BufferWriter<W: Write> {
-    writer: W,
-    offset: u64,
-    // TODO: buffer
-}
-
-impl<W: Write> BufferWriter<W> {
-    fn new(writer: W, buf_size: u64) -> Self {
-        Self { writer, offset: 0 }
-    }
-
-    async fn write(&mut self, buf: &[u8]) -> Result<u64> {
-        let offset = self.offset;
-        self.offset += buf.len() as u64;
-        todo!();
-        Ok(offset)
-    }
-
-    async fn flush(&mut self) -> Result<()> {
-        todo!()
     }
 }
 
@@ -172,4 +148,142 @@ enum MetaBlockKind {
 struct BlockHandler {
     offset: u64,
     length: u64,
+}
+
+const ALIGN_SIZE: usize = 4096;
+const ALIGN_MASK: u64 = 0xffff_f000;
+
+struct BufferedWriter {
+    file: File,
+
+    use_direct_io: bool,
+
+    next_page_offset: u64,
+    actual_data_size: usize,
+
+    buffer: Vec<u8>,
+}
+
+impl BufferedWriter {
+    fn new(file: File, io_batch_size: usize, use_direct_io: bool) -> Self {
+        Self {
+            file,
+            use_direct_io,
+            next_page_offset: 0,
+            actual_data_size: 0,
+            buffer: Self::alloc_buffer(io_batch_size, use_direct_io),
+        }
+    }
+
+    fn alloc_buffer(n: usize, use_direct_io: bool) -> Vec<u8> {
+        if !use_direct_io {
+            return Vec::with_capacity(n);
+        }
+        #[repr(C, align(4096))]
+        struct AlignBlock([u8; ALIGN_SIZE]);
+
+        let block_cnt = (n + ALIGN_SIZE - 1) / ALIGN_SIZE;
+        let mut blocks: Vec<AlignBlock> = Vec::with_capacity(block_cnt);
+        let ptr = blocks.as_mut_ptr();
+        let cap_cnt = blocks.capacity();
+        std::mem::forget(blocks);
+
+        unsafe {
+            Vec::from_raw_parts(
+                ptr as *mut u8,
+                0,
+                cap_cnt * std::mem::size_of::<AlignBlock>(),
+            )
+        }
+    }
+
+    async fn write(&mut self, page: &[u8]) -> Result<u64> {
+        let mut page_consumed = 0;
+        while page_consumed < page.len() {
+            let avaliable_buf = self.buffer.capacity() - self.buffer.len();
+            if avaliable_buf > 0 {
+                let fill_end = (page_consumed + avaliable_buf).min(page.len());
+                self.buffer
+                    .extend_from_slice(&page[page_consumed..fill_end]);
+                page_consumed = fill_end;
+            } else {
+                self.flush().await?;
+            }
+        }
+        let page_offset = self.next_page_offset;
+        self.next_page_offset += page.len() as u64;
+        Ok(page_offset)
+    }
+
+    async fn flush(&mut self) -> Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+        if self.use_direct_io {
+            self.actual_data_size += self.buffer.len();
+            let align_len = Self::aligned_size(self.buffer.len());
+            self.buffer.resize(align_len, 0);
+        }
+        self.file
+            .write_all(&self.buffer)
+            .await
+            .expect("flush page file error");
+        self.buffer.truncate(0);
+        Ok(())
+    }
+
+    fn aligned_size(origin_size: usize) -> usize {
+        ((origin_size + ALIGN_SIZE - 1) as u64 & ALIGN_MASK) as usize
+    }
+
+    async fn flush_and_sync(&mut self) -> Result<()> {
+        self.flush().await?;
+        if self.use_direct_io {
+            self.file
+                .set_len(self.actual_data_size as u64)
+                .await
+                .expect("set set file len fail");
+        }
+        // panic when sync fail, https://wiki.postgresql.org/wiki/Fsync_Errors
+        self.file.sync_all().await.expect("sync file fail");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use photonio::io::ReadAtExt;
+
+    use super::*;
+
+    #[photonio::test]
+    async fn test_buffered_writer() {
+        let (use_direct, flags) = (true, 0x4000);
+        let path1 = std::env::temp_dir().join("buf_test1");
+        {
+            let file1 = photonio::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(flags)
+                .create(true)
+                .truncate(true)
+                .open(path1.to_owned())
+                .await
+                .expect("open file_id: {file_id}'s file fail");
+            let mut bw1 = BufferedWriter::new(file1, 4096 + 1, use_direct);
+            bw1.write(&[1].repeat(10)).await.unwrap(); // only fill buffer
+            bw1.write(&[2].repeat(4096 * 2 + 1)).await.unwrap(); // trigger flush
+            bw1.write(&[3].repeat(4096 * 2 + 1)).await.unwrap(); // trigger flush
+            bw1.flush_and_sync().await.unwrap(); // flush again
+        }
+        {
+            let file2 = photonio::fs::OpenOptions::new()
+                .read(true)
+                .open(path1)
+                .await
+                .expect("open file_id: {file_id}'s file fail");
+            let mut buf = vec![0u8; 1];
+            file2.read_exact_at(&mut buf, 4096 * 3).await.unwrap();
+            assert_eq!(buf[0], 3)
+        }
+    }
 }
