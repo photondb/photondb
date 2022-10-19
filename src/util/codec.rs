@@ -5,11 +5,11 @@ pub(crate) trait EncodeTo {
     /// Returns the exact size to encode this object.
     fn encode_size(&self) -> usize;
 
-    /// Encodes this object to a [`BufWriter`].
+    /// Encodes the object to a [`BufWriter`].
     ///
     /// # Safety
     ///
-    /// The `BufWriter` must be initialized with enough space to encode this
+    /// The `BufWriter` must be initialized with enough space to encode the
     /// object.
     unsafe fn encode_to(&self, w: &mut BufWriter);
 }

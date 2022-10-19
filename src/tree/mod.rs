@@ -5,7 +5,7 @@ use txn::Txn;
 
 mod stats;
 use stats::AtomicStats;
-pub use stats::Stats;
+pub(crate) use stats::Stats;
 
 use crate::{
     env::Env,
@@ -14,6 +14,7 @@ use crate::{
     Options,
 };
 
+/// A latch-free, log-structured tree.
 pub(crate) struct Tree<E> {
     options: Options,
     stats: AtomicStats,
@@ -21,7 +22,7 @@ pub(crate) struct Tree<E> {
 }
 
 impl<E: Env> Tree<E> {
-    /// Opens a tree in the given path.
+    /// Opens a tree in the path.
     pub(crate) async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
         let stats = AtomicStats::default();
         let store = PageStore::open(env, path, options.clone()).await?;
@@ -33,11 +34,10 @@ impl<E: Env> Tree<E> {
     }
 
     fn begin(&self) -> Txn<E> {
-        let guard = self.store.guard();
-        Txn::new(&self, guard)
+        Txn::new(&self)
     }
 
-    /// Gets the value corresponding to the given key and applies the given
+    /// Gets the value corresponding to the key from the tree and applies the
     /// function to it.
     pub(crate) async fn get<F, R>(&self, key: Key<'_>, f: F) -> Result<R>
     where
@@ -59,7 +59,7 @@ impl<E: Env> Tree<E> {
         }
     }
 
-    /// Writes the given key-value pair to this tree.
+    /// Writes the key-value pair to the tree.
     pub(crate) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
         loop {
             let txn = self.begin();
@@ -77,7 +77,7 @@ impl<E: Env> Tree<E> {
         }
     }
 
-    /// Returns the statistics of this tree.
+    /// Returns the statistics of the tree.
     pub(crate) fn stats(&self) -> Stats {
         self.stats.snapshot()
     }
