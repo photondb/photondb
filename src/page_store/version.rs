@@ -50,7 +50,8 @@ pub(crate) struct BufferSetRef<'a> {
 }
 
 impl Version {
-    pub fn new(write_buffer_capacity: u32) -> Self {
+    #[allow(unused)]
+    pub(crate) fn new(write_buffer_capacity: u32) -> Self {
         Version {
             buffer_set: Arc::new(BufferSet::new(write_buffer_capacity)),
             files: HashMap::default(),
@@ -59,27 +60,27 @@ impl Version {
     }
 
     /// Construct [`Version`] from thread local storage.
-    pub fn from_local() -> Rc<Self> {
+    pub(crate) fn from_local() -> Rc<Self> {
         // TODO: refresh next version.
         todo!()
     }
 
     /// Wait and construct next [`Version`].
-    pub async fn wait_next_version(&self) -> Self {
+    pub(crate) async fn wait_next_version(&self) -> Self {
         todo!()
     }
 
-    pub fn active_write_buffer_id(&self) -> u32 {
+    pub(crate) fn active_write_buffer_id(&self) -> u32 {
         self.buffer_set.current().active_buffer.file_id()
     }
 
     /// Try install new version into
-    pub fn install(&self, delta: DeltaVersion) -> Result<()> {
+    pub(crate) fn install(&self, delta: DeltaVersion) -> Result<()> {
         todo!()
     }
 
     /// Fetch the files which obsolated but referenced by the [`Version`].
-    pub fn deleted_files(&self) -> Vec<u32> {
+    pub(crate) fn deleted_files(&self) -> Vec<u32> {
         todo!()
     }
 }
@@ -98,7 +99,7 @@ impl Drop for NextVersion {
 }
 
 impl BufferSet {
-    pub fn new(write_buffer_capacity: u32) -> BufferSet {
+    pub(crate) fn new(write_buffer_capacity: u32) -> BufferSet {
         let min_file_id = 0;
         let buf = WriteBuffer::with_capacity(min_file_id, write_buffer_capacity);
         let version = Box::new(BufferSetVersion {
@@ -114,28 +115,28 @@ impl BufferSet {
     }
 
     #[inline]
-    pub fn write_buffer_capacity(&self) -> u32 {
+    pub(crate) fn write_buffer_capacity(&self) -> u32 {
         self.write_buffer_capacity
     }
 
-    pub fn current(&self) -> BufferSetRef<'_> {
+    pub(crate) fn current(&self) -> BufferSetRef<'_> {
         todo!()
     }
 
-    pub fn install(&self, write_buffer: Arc<WriteBuffer>) {
+    pub(crate) fn install(&self, write_buffer: Arc<WriteBuffer>) {
         // TODO: the file ID should be continuous.
         todo!("install new version via CAS operation")
     }
 
-    pub fn on_flushed(&self, files: &[u32]) {
+    pub(crate) fn on_flushed(&self, files: &[u32]) {
         todo!()
     }
 
-    pub async fn wait_flushable(&self) {
+    pub(crate) async fn wait_flushable(&self) {
         todo!()
     }
 
-    pub fn notify_flush_job(&self) {
+    pub(crate) fn notify_flush_job(&self) {
         todo!()
     }
 }
@@ -159,12 +160,12 @@ impl BufferSetVersion {
     ///
     /// If the user needs to access the [`WriteBuffer`] for a long time, use
     /// `clone` to make a copy.
-    pub fn write_buffer(&self, file_id: u32) -> Option<&Arc<WriteBuffer>> {
+    pub(crate) fn write_buffer(&self, file_id: u32) -> Option<&Arc<WriteBuffer>> {
         todo!()
     }
 
     #[inline]
-    pub fn min_file_id(&self) -> u32 {
+    pub(crate) fn min_file_id(&self) -> u32 {
         self.min_file_id
     }
 }

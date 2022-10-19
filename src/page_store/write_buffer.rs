@@ -1,4 +1,5 @@
 use std::{
+    mem::MaybeUninit,
     ptr::NonNull,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -97,12 +98,57 @@ impl WriteBuffer {
         self.file_id
     }
 
+    #[inline]
     pub(crate) fn is_flushable(&self) -> bool {
-        todo!()
+        self.buffer_state().is_flushable()
     }
 
+    #[inline]
     pub(crate) fn is_sealed(&self) -> bool {
-        todo!()
+        self.buffer_state().sealed
+    }
+
+    /// Allocate pages and record deleted pages in one batch. This operation
+    /// will acquire a writer guard.
+    pub(crate) fn batch(
+        &self,
+        new_page_list: &[(u64 /* page id */, u32 /* page size */)],
+        deleted_pages: &[u64],
+    ) -> Result<(
+        Vec<(u64, &mut RecordHeader, PageBuf)>,
+        Option<&mut RecordHeader>,
+    )> {
+        const ALIGN: u32 = core::mem::size_of::<usize>() as u32;
+        let deleted_pages_size = (deleted_pages.len() * core::mem::size_of::<u64>()) as u32;
+        let need = new_page_list
+            .iter()
+            .map(|(_, v)| record_size(*v))
+            .sum::<u32>()
+            + record_size(deleted_pages_size);
+        debug_assert_eq!(need % ALIGN, 0);
+
+        let mut offset = self.alloc_size(need)?;
+        let mut records = Vec::with_capacity(new_page_list.len());
+        for (page_id, page_size) in new_page_list {
+            let (page_id, page_size) = (*page_id, *page_size);
+            // Safety: here is the only one reference to the record.
+            let (page_addr, header, page_buf) =
+                unsafe { self.new_page_at(offset, page_id, page_size) };
+            offset += header.record_size();
+            records.push((page_addr, header, page_buf));
+        }
+
+        let deleted_pages_header = if !deleted_pages.is_empty() {
+            // Safety: here is the only one reference to the record.
+            let (header, body) =
+                unsafe { self.new_deleted_pages_record_at(offset, deleted_pages.len()) };
+            body.copy_from_slice(deleted_pages);
+            Some(header)
+        } else {
+            None
+        };
+
+        return Ok((records, deleted_pages_header));
     }
 
     /// Allocate new page from the buffer.
@@ -130,7 +176,30 @@ impl WriteBuffer {
     /// allocated [`PageBuf`] have been released or converted to [`PageRef`]
     /// to avoid violating pointer aliasing rules.
     pub(crate) unsafe fn release_writer(&self) -> ReleaseState {
-        todo!()
+        let mut current = self.buffer_state.load(Ordering::Acquire);
+        loop {
+            let mut buffer_state = BufferState::load(current);
+            buffer_state.dec_writer();
+            let new = buffer_state.apply();
+
+            match self.buffer_state.compare_exchange(
+                current,
+                new,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    if buffer_state.is_flushable() {
+                        return ReleaseState::Flush;
+                    } else {
+                        return ReleaseState::None;
+                    }
+                }
+                Err(v) => {
+                    current = v;
+                }
+            }
+        }
     }
 
     /// Seal the [`WriteBuffer`]. `Err(Error::Again)` is returned if the buffer
@@ -146,6 +215,9 @@ impl WriteBuffer {
         loop {
             let mut buffer_state = BufferState::load(current);
             if buffer_state.sealed {
+                if release_writer {
+                    return Ok(self.release_writer());
+                }
                 return Err(Error::Again);
             }
 
@@ -193,42 +265,189 @@ impl WriteBuffer {
     /// # Panic
     ///
     /// Panic if the `page_addr` is not belongs to the [`WriteBuffer`].
+    /// Panic if the `page_addr` is not aligned with
+    /// `core::mem::size_of::<usize>()`.
+    /// Panic if the `page_addr` is not a valid page.
     ///
     /// # Safety
     ///
     /// Users need to ensure that the accessed page has no mutable references,
     /// so as not to violate the rules of pointer aliasing.
     pub(crate) unsafe fn page(&self, page_addr: u64) -> PageRef {
-        todo!()
+        const ALIGN: u32 = core::mem::size_of::<usize>() as u32;
+
+        let file_id = (page_addr >> 32) as u32;
+        let offset = (page_addr & ((1 << 32) - 1)) as u32;
+
+        if file_id != self.file_id {
+            panic!("The specified addr is not belongs to the buffer");
+        }
+
+        if offset % ALIGN != 0 {
+            panic!("The specified addr is not satisfied the align requirement");
+        }
+
+        let offset = offset
+            .checked_sub(core::mem::size_of::<RecordHeader>() as u32)
+            .expect("The specified addr is not a valid page");
+
+        let header = self.record(offset);
+        if let Some(RecordRef::Page(page_ref)) = header.record_ref() {
+            return page_ref;
+        }
+
+        panic!("The specified addr is not a valid page");
     }
 
     /// Construct the reference of [`RecordHeader`] of the corresponding offset.
     ///
     /// # Panic
     ///
-    /// Panic if the offset is not aligned with `core::mem::size_of::<usize>()`.
-    /// Panic if the offset exceeds the size of buffer.
+    /// See [`WriteBuffer::record_uninit`].
     ///
     /// # Safety
     ///
     /// Caller should ensure the specified offset of record has been
     /// initialized.
+    #[inline]
     unsafe fn record(&self, offset: u32) -> &RecordHeader {
+        self.record_uninit(offset).assume_init_ref()
+    }
+
+    /// Construct the reference of [`RecordHeader`] of the corresponding offset.
+    /// The record might uninitialized.
+    ///
+    /// # Panic
+    ///
+    /// Panic if the offset is not aligned with `core::mem::size_of::<usize>()`.
+    /// Panic if the offset exceeds the size of buffer.
+    #[inline]
+    fn record_uninit(&self, offset: u32) -> &MaybeUninit<RecordHeader> {
         let offset = offset as usize;
-        if core::mem::size_of::<usize>() % offset != 0 {
+        if offset % core::mem::size_of::<usize>() != 0 {
             panic!("The specified offset is not aligned with pointer size");
         }
 
         assert!(offset + core::mem::size_of::<RecordHeader>() < self.buf_size);
 
-        // Safety:
-        // 1. Both start and result pointer in bounds.
-        // 2. The computed offset is not exceeded `isize`.
-        &*(self
-            .buf
-            .as_ptr()
-            .offset(offset as isize)
-            .cast::<RecordHeader>())
+        unsafe {
+            // Safety:
+            // 1. Both start and result pointer in bounds.
+            // 2. The computed offset is not exceeded `isize`.
+            &*(self
+                .buf
+                .as_ptr()
+                .offset(offset as isize)
+                .cast::<MaybeUninit<RecordHeader>>())
+        }
+    }
+
+    /// Construct the mutable reference of [`RecordHeader`] of the corresponding
+    /// offset. The record might uninitialized.
+    ///
+    /// # Safety
+    ///
+    /// There should no any references pointer to the target record.
+    #[inline]
+    unsafe fn record_uninit_mut(&self, offset: u32) -> &mut MaybeUninit<RecordHeader> {
+        &mut *(self.record_uninit(offset) as *const _ as *mut _)
+    }
+
+    #[inline]
+    fn buffer_state(&self) -> BufferState {
+        BufferState::load(self.buffer_state.load(Ordering::Acquire))
+    }
+
+    /// Allocate memory and install writer. Returns the address of the first
+    /// byte.
+    fn alloc_size(&self, need: u32) -> Result<u32> {
+        let mut current = self.buffer_state.load(Ordering::Acquire);
+        loop {
+            let mut state = BufferState::load(current);
+            if state.sealed {
+                return Err(Error::Again);
+            }
+
+            state.inc_writer();
+            let offset = state.alloc_size(need, self.buf_size as u32)?;
+            let new = state.apply();
+            match self.buffer_state.compare_exchange(
+                current,
+                new,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Ok(offset);
+                }
+                Err(e) => {
+                    current = e;
+                }
+            }
+        }
+    }
+
+    /// New page at the corresponding offset.
+    ///
+    /// # Safety
+    ///
+    /// Not reference pointer to the target record.
+    unsafe fn new_page_at(
+        &self,
+        offset: u32,
+        page_id: u64,
+        page_size: u32,
+    ) -> (u64, &mut RecordHeader, PageBuf) {
+        // Construct `RecordHeader`.
+        // Safety: here is the only one reference to the record.
+        let header = unsafe { self.record_uninit_mut(offset) };
+        header.write(RecordHeader {
+            page_id,
+            flags: RecordFlags::NORMAL_PAGE.bits(),
+            page_size,
+        });
+        let header = unsafe { header.assume_init_mut() };
+
+        // Compute page addr.
+        let page_offset = offset + core::mem::size_of::<RecordHeader>() as u32;
+        let page_addr = ((self.file_id as u64) << 32) | (page_offset as u64);
+
+        // Construct `PageBuf`.
+        let ptr =
+            unsafe { NonNull::new_unchecked((header as *mut RecordHeader).offset(1).cast::<u8>()) };
+        let addr = PagePtr::new(ptr, page_size as usize);
+        let page_buf = PageBuf::new(addr);
+
+        (page_addr, header, page_buf)
+    }
+
+    /// New deleted pages record at the corresponding offset.
+    ///
+    /// # Safety
+    ///
+    /// Not reference pointer to the target record.
+    unsafe fn new_deleted_pages_record_at(
+        &self,
+        offset: u32,
+        num_deleted_pages: usize,
+    ) -> (&mut RecordHeader, &mut [u64]) {
+        let page_size = (num_deleted_pages * core::mem::size_of::<u64>()) as u32;
+
+        // Safety: here is the only one reference to the record.
+        let header = unsafe { self.record_uninit_mut(offset) };
+        header.write(RecordHeader {
+            page_id: 0,
+            flags: RecordFlags::DELETED_PAGES.bits(),
+            page_size,
+        });
+        let header = unsafe { header.assume_init_mut() };
+
+        let body = unsafe {
+            let ptr = (header as *mut RecordHeader).offset(1).cast::<u64>();
+            std::slice::from_raw_parts_mut(ptr, num_deleted_pages)
+        };
+
+        (header, body)
     }
 }
 
@@ -264,6 +483,7 @@ unsafe impl Send for WriteBuffer {}
 unsafe impl Sync for WriteBuffer {}
 
 impl BufferState {
+    #[inline]
     fn load(val: u64) -> Self {
         let allocated = (val & ((1 << 32) - 1)) as u32;
         let num_writer = ((val >> 32) & ((1 << 31) - 1)) as u32;
@@ -281,7 +501,7 @@ impl BufferState {
     }
 
     #[inline]
-    fn flushable(&self) -> bool {
+    fn is_flushable(&self) -> bool {
         self.sealed && !self.has_writer()
     }
 
@@ -310,7 +530,7 @@ impl BufferState {
     fn alloc_size(&mut self, required: u32, buf_size: u32) -> Result<u32> {
         const ALIGN: u32 = core::mem::size_of::<usize>() as u32;
         debug_assert_eq!(self.allocated % ALIGN, 0);
-        let required = required + (ALIGN - required % ALIGN);
+        let required = next_multiple_of_u32(required, ALIGN);
         if self.allocated + required > buf_size {
             todo!("out of range")
         }
@@ -320,6 +540,7 @@ impl BufferState {
         Ok(offset)
     }
 
+    #[inline]
     fn apply(&self) -> u64 {
         assert!(self.num_writer < (1 << 31));
 
@@ -336,21 +557,14 @@ impl RecordHeader {
     /// This value is not simply equal to `page_size +
     /// size_of::<RecordHeader>()`, because size of records need to be
     /// aligned by 8 bytes.
+    #[inline]
     fn record_size(&self) -> u32 {
-        const ALIGN: u32 = core::mem::size_of::<usize>() as u32;
-        ((self.page_size + ALIGN - 1) / ALIGN) * ALIGN
+        record_size(self.page_size)
     }
 
-    pub(crate) fn is_tombstone(&self) -> bool {
-        todo!()
-    }
-
+    #[inline]
     pub(crate) fn set_tombstone(&mut self) {
-        todo!()
-    }
-
-    pub(crate) fn page_ptr(&self) -> PagePtr {
-        todo!()
+        self.flags = RecordFlags::TOMBSTONE.bits();
     }
 
     #[inline]
@@ -402,7 +616,7 @@ impl<'a> Iterator for RecordIterator<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let buffer_state =
             BufferState::load(self.write_buffer.buffer_state.load(Ordering::Acquire));
-        assert!(buffer_state.flushable());
+        assert!(buffer_state.is_flushable());
 
         loop {
             if self.offset >= buffer_state.allocated {
@@ -413,10 +627,6 @@ impl<'a> Iterator for RecordIterator<'a> {
             let record_header = unsafe { self.write_buffer.record(self.offset) };
 
             self.offset += record_header.record_size();
-            if record_header.is_tombstone() {
-                continue;
-            }
-
             if let Some(record_ref) = record_header.record_ref() {
                 return Some((record_header, record_ref));
             }
@@ -439,6 +649,22 @@ impl<'a> Iterator for DeletedPagesRecordRef<'a> {
     }
 }
 
+#[inline]
+fn next_multiple_of_u32(val: u32, multiple: u32) -> u32 {
+    ((val + multiple - 1) / multiple) * multiple
+}
+
+/// Returns the total space of the current record, including the
+/// [`RecordHeader`].
+///
+/// This value is not simply equal to `page_size + size_of::<RecordHeader>()`,
+/// because size of records need to be aligned by 8 bytes.
+#[inline]
+fn record_size(x: u32) -> u32 {
+    const ALIGN: u32 = core::mem::size_of::<usize>() as u32;
+    core::mem::size_of::<RecordHeader>() as u32 + next_multiple_of_u32(x, ALIGN)
+}
+
 bitflags! {
     struct RecordFlags: u32 {
         const EMPTY         = 0b0000_0000;
@@ -451,6 +677,8 @@ bitflags! {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use crate::page_store::Error;
 
@@ -470,6 +698,49 @@ mod tests {
         assert!(state.sealed);
         assert_eq!(state.num_writer, 1);
         assert_eq!(state.allocated, 8);
+    }
+
+    #[test]
+    fn record_header_record_size() {
+        struct Test {
+            page_size: u32,
+            // Without `RecordHeader`.
+            record_size: u32,
+        }
+
+        let tests = vec![
+            Test {
+                page_size: 1,
+                record_size: 8,
+            },
+            Test {
+                page_size: 8,
+                record_size: 8,
+            },
+            Test {
+                page_size: 15,
+                record_size: 16,
+            },
+            Test {
+                page_size: 16,
+                record_size: 16,
+            },
+        ];
+        for Test {
+            page_size,
+            record_size,
+        } in tests
+        {
+            let header = RecordHeader {
+                page_id: 0,
+                flags: RecordFlags::NORMAL_PAGE.bits(),
+                page_size,
+            };
+            assert_eq!(
+                header.record_size(),
+                core::mem::size_of::<RecordHeader>() as u32 + record_size
+            );
+        }
     }
 
     #[test]
@@ -501,6 +772,15 @@ mod tests {
     }
 
     #[test]
+    fn write_buffer_sealed_but_write_inflights_seal() {
+        // Even if the buffer is sealed, release writer is still needed.
+        let buf = WriteBuffer::with_capacity(1, 1024);
+        buf.batch(&[], &[1]).unwrap();
+        unsafe { buf.seal(false) }.unwrap();
+        assert!(matches!(unsafe { buf.seal(true) }, Ok(ReleaseState::Flush)));
+    }
+
+    #[test]
     #[should_panic]
     fn write_buffer_empty_writer_release_seal() {
         let buf = WriteBuffer::with_capacity(1, 512);
@@ -508,20 +788,40 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn write_buffer_iterate() {
         let buf = WriteBuffer::with_capacity(1, 1024);
 
-        // TODO: add some pages.
+        // 1. add pages
+        buf.batch(
+            &[(1, 2), (3, 4), (5, 6), (7, 8), (9, 10)],
+            &[11, 12, 13, 14, 15],
+        )
+        .unwrap();
+        unsafe { buf.release_writer() };
 
-        unsafe { buf.seal(false) }.unwrap();
+        // 2. add tombstones
+        let (records_header, delete_pages_header) = buf.batch(&[(16, 17)], &[1, 2]).unwrap();
+        records_header
+            .into_iter()
+            .for_each(|(_, h, _)| h.set_tombstone());
+        delete_pages_header.map(|h| h.set_tombstone());
+
+        unsafe { buf.seal(true) }.unwrap();
+
+        let expect_deleted_pages = vec![11, 12, 13, 14, 15];
+        let mut active_pages: HashSet<u64> = vec![1, 3, 5, 7, 9].into_iter().collect();
         for (header, record_ref) in buf.iter() {
             match record_ref {
                 RecordRef::Page(_page) => {
-                    let _ = header.page_id();
+                    let page_id = header.page_id();
+                    assert!(active_pages.remove(&page_id));
                 }
-                RecordRef::DeletedPages(_deleted_pages) => {}
+                RecordRef::DeletedPages(deleted_pages) => {
+                    let deleted_pages: Vec<u64> = deleted_pages.collect();
+                    assert_eq!(deleted_pages, expect_deleted_pages);
+                }
             }
         }
+        assert!(active_pages.is_empty());
     }
 }
