@@ -35,7 +35,11 @@ impl Sequencer {
         Self(AtomicU64::new(value))
     }
 
-    pub(crate) fn next(&self) -> u64 {
+    pub(crate) fn get(&self) -> u64 {
+        self.0.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn inc(&self) -> u64 {
         self.0.fetch_add(1, Ordering::Release)
     }
 }

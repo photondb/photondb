@@ -3,8 +3,8 @@
 #![warn(unreachable_pub)]
 #![feature(io_error_more, type_alias_impl_trait)]
 
-mod db;
-pub use db::Db;
+mod table;
+pub use table::{RawTable, Table};
 
 mod error;
 pub use error::{Error, Result};
@@ -16,17 +16,5 @@ pub mod env;
 
 mod page;
 mod page_store;
-mod table;
 mod tree;
 mod util;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[photonio::test]
-    async fn open() {
-        let opts = Options::new();
-        let _ = Db::open("/tmp", opts).await.unwrap();
-    }
-}

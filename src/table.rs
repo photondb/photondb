@@ -1,40 +1,88 @@
 use std::path::Path;
 
 use crate::{
-    env::Env,
+    env::{Env, Photon},
     page::{Key, Value},
-    page_store::Result,
-    tree::Tree,
-    Options,
+    tree::{Stats, Tree},
+    util::atomic::Sequencer,
+    Options, Result,
 };
 
-pub(crate) struct Table<E> {
+pub struct Table {
+    raw: RawTable<Photon>,
+    lsn: Sequencer,
+}
+
+impl Table {
+    /// Opens a table in the given path.
+    pub async fn open<P: AsRef<Path>>(path: P, options: Options) -> Result<Self> {
+        let raw = RawTable::open(Photon, path, options).await?;
+        Ok(Self {
+            raw,
+            lsn: Sequencer::default(),
+        })
+    }
+
+    /// Gets the value corresponding to the given key from the table.
+    pub async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        let lsn = self.lsn.get();
+        self.raw
+            .get(key, lsn, |value| value.map(|value| value.to_vec()))
+            .await
+    }
+
+    /// Inserts the given key-value pair into the table.
+    pub async fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        let lsn = self.lsn.inc();
+        self.raw.put(key, lsn, value).await
+    }
+
+    /// Deletes the given key from the table.
+    pub async fn delete(&self, key: &[u8]) -> Result<()> {
+        let lsn = self.lsn.inc();
+        self.raw.delete(key, lsn).await
+    }
+
+    /// Returns the statistics of the table.
+    pub fn stats(&self) -> Stats {
+        self.raw.stats()
+    }
+}
+
+pub struct RawTable<E> {
     tree: Tree<E>,
 }
 
-impl<E: Env> Table<E> {
-    pub(crate) async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
+impl<E: Env> RawTable<E> {
+    pub async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
         let tree = Tree::open(env, path, options).await?;
         Ok(Self { tree })
     }
 
-    pub(crate) async fn get<F, R>(&self, key: &[u8], lsn: u64, f: F) -> Result<R>
+    pub async fn get<F, R>(&self, key: &[u8], lsn: u64, f: F) -> Result<R>
     where
         F: FnOnce(Option<&[u8]>) -> R,
     {
         let key = Key::new(key, lsn);
-        self.tree.get(key, f).await
+        let result = self.tree.get(key, f).await?;
+        Ok(result)
     }
 
-    pub(crate) async fn put(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
+    pub async fn put(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
         let key = Key::new(key, lsn);
         let value = Value::Put(value);
-        self.tree.write(key, value).await
+        self.tree.write(key, value).await?;
+        Ok(())
     }
 
-    pub(crate) async fn delete(&self, key: &[u8], lsn: u64) -> Result<()> {
+    pub async fn delete(&self, key: &[u8], lsn: u64) -> Result<()> {
         let key = Key::new(key, lsn);
         let value = Value::Delete;
-        self.tree.write(key, value).await
+        self.tree.write(key, value).await?;
+        Ok(())
+    }
+
+    pub fn stats(&self) -> Stats {
+        self.tree.stats()
     }
 }
