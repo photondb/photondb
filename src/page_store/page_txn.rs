@@ -120,7 +120,7 @@ mod tests {
     fn page_txn_seal_write_buffer() {
         let version = Rc::new(Version::new(512));
         let page_table = PageTable::default();
-        let mut guard = Guard::new(version.clone(), page_table);
+        let guard = Guard::new(version.clone(), page_table);
         let mut page_txn = guard.begin();
         page_txn.seal_write_buffer().unwrap();
     }

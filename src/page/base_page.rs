@@ -89,7 +89,16 @@ impl PagePtr {
 /// A mutable reference to a page.
 pub(crate) struct PageBuf<'a> {
     ptr: PagePtr,
-    _marker: PhantomData<&'a ()>,
+    _marker: PhantomData<&'a mut ()>,
+}
+
+impl<'a> PageBuf<'a> {
+    pub(crate) fn new(ptr: PagePtr) -> Self {
+        PageBuf {
+            ptr,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<'a> Deref for PageBuf<'a> {

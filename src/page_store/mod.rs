@@ -36,6 +36,7 @@ pub(crate) struct PageStore<E> {
 }
 
 impl<E: Env> PageStore<E> {
+    #[allow(unused)]
     pub(crate) async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
         todo!()
     }
