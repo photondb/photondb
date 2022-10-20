@@ -67,7 +67,7 @@ pub(crate) mod facade {
                 .open(path)
                 .await
                 .expect("open file_id: {file_id}'s file fail");
-            Ok(FileBuilder::new(writer, self.use_direct))
+            Ok(FileBuilder::new(file_id, writer, self.use_direct))
         }
 
         #[inline]
@@ -123,12 +123,14 @@ pub(crate) mod facade {
 
     #[cfg(test)]
     mod tests {
+        use std::collections::HashMap;
+
         use super::*;
 
         #[photonio::test]
         fn test_file_builder() {
             let base = std::env::temp_dir();
-            let files = PageFiles::new(&base, "testdata");
+            let files = PageFiles::new(&base, "test_buildler");
             let mut builder = files.new_file_builder(11233).await.unwrap();
             builder.add_delete_pages(&[1, 2]);
             builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
@@ -139,11 +141,11 @@ pub(crate) mod facade {
         fn test_test_simple_write_reader() {
             let files = {
                 let base = std::env::temp_dir();
-                PageFiles::new(&base, "testdata")
+                PageFiles::new(&base, "test_simple_rw")
             };
 
             let file_id = 2;
-            {
+            let ret_info = {
                 let mut b = files.new_file_builder(file_id).await.unwrap();
                 b.add_delete_pages(&[page_addr(1, 0), page_addr(1, 1)]);
                 b.add_page(1, page_addr(2, 2), &[7].repeat(8192))
@@ -155,15 +157,19 @@ pub(crate) mod facade {
                 b.add_page(3, page_addr(2, 4), &[9].repeat(8192 / 3))
                     .await
                     .unwrap();
-                b.finish().await.unwrap();
-            }
+                let info = b.finish().await.unwrap();
+                assert_eq!(info.effective_size(), 8192 + 8192 / 2 + 8192 / 3);
+                info
+            };
             {
                 let file_meta = files.open_file_meta(file_id).await.unwrap(); // normally get from current version, no need reopen.
                 assert_eq!(file_meta.total_page_size(), 8192 + 8192 / 2 + 8192 / 3);
 
                 let reader = files.open_file_reader(file_meta.to_owned()).await.unwrap();
                 let page3 = page_addr(2, 4);
-                let (_, page3_size) = file_meta.get_page_handle(page3).unwrap();
+                let (page3_offset, page3_size) = file_meta.get_page_handle(page3).unwrap();
+                let handle = ret_info.get_page_handle(page3).unwrap();
+                assert_eq!(page3_offset as u32, handle.offset);
                 assert_eq!(page3_size, 8192 / 3);
                 let mut buf = vec![0u8; page3_size];
                 reader.read_page(page3, &mut buf).await.unwrap();
@@ -174,6 +180,87 @@ pub(crate) mod facade {
 
                 let delete_tables = reader.read_delete_pages().await.unwrap();
                 assert_eq!(delete_tables.len(), 2);
+            }
+        }
+
+        #[photonio::test]
+        fn test_file_info_recovery_and_add_new_file() {
+            let files = {
+                let base = std::env::temp_dir();
+                PageFiles::new(&base, "test_recovery")
+            };
+
+            let info_builder = files.new_info_builder();
+            {
+                // test add new files.
+                let mut mock_version = HashMap::new();
+                {
+                    let file_id = 1;
+                    let mut b = files.new_file_builder(file_id).await.unwrap();
+                    b.add_page(1, page_addr(file_id, 0), &[1].repeat(10))
+                        .await
+                        .unwrap();
+                    b.add_page(2, page_addr(file_id, 1), &[2].repeat(10))
+                        .await
+                        .unwrap();
+                    b.add_page(3, page_addr(file_id, 2), &[3].repeat(10))
+                        .await
+                        .unwrap();
+                    let file_info = b.finish().await.unwrap();
+                    mock_version.insert(file_id, file_info);
+                }
+
+                {
+                    // add an additional file with delete file1's page info.
+                    let file_id = 2;
+                    let delete_pages = &[page_addr(1, 0)];
+
+                    let mut b = files.new_file_builder(file_id).await.unwrap();
+                    b.add_page(4, page_addr(file_id, 0), &[1].repeat(10))
+                        .await
+                        .unwrap();
+                    b.add_page(5, page_addr(file_id, 1), &[2].repeat(10))
+                        .await
+                        .unwrap();
+                    b.add_page(6, page_addr(file_id, 4), &[3].repeat(10))
+                        .await
+                        .unwrap();
+                    b.add_delete_pages(delete_pages);
+                    let file_info = b.finish().await.unwrap();
+
+                    let orignal_file1_active_size = mock_version.get(&1).unwrap().effective_size();
+                    mock_version = info_builder
+                        .add_file_info(&mock_version, file_info, delete_pages)
+                        .unwrap();
+
+                    let file1 = mock_version.get(&1).unwrap();
+                    assert_eq!(file1.effective_size(), orignal_file1_active_size - 10);
+                    assert!(file1.get_page_handle(page_addr(1, 0)).is_none());
+                    assert!(file1.get_page_handle(page_addr(1, 1)).is_some());
+
+                    let file2 = mock_version.get(&2).unwrap();
+                    let hd = file2.get_page_handle(page_addr(2, 4)).unwrap();
+                    assert_eq!(hd.size, 10);
+                    assert_eq!(hd.offset, 20);
+                }
+            }
+
+            {
+                // test recovery file_info from folder.
+                let known_files = &[1, 2];
+                let recovery_mock_version = info_builder
+                    .recovery_base_file_infos(known_files)
+                    .await
+                    .unwrap();
+                let file1 = recovery_mock_version.get(&1).unwrap();
+                assert_eq!(file1.effective_size(), 20);
+                assert!(file1.get_page_handle(page_addr(1, 0)).is_none());
+                let file2 = recovery_mock_version.get(&2).unwrap();
+                assert_eq!(file2.effective_size(), 30);
+                let file2 = recovery_mock_version.get(&2).unwrap();
+                let hd = file2.get_page_handle(page_addr(2, 4)).unwrap();
+                assert_eq!(hd.size, 10);
+                assert_eq!(hd.offset, 20);
             }
         }
 

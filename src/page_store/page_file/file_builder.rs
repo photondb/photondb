@@ -1,7 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use photonio::{fs::File, io::WriteExt};
 
+use super::{types::split_page_addr, FileInfo, FileMeta};
 use crate::page_store::{Error, Result};
 
 const IO_BUFFER_SIZE: usize = 4096 * 4;
@@ -23,6 +27,7 @@ const IO_BUFFER_SIZE: usize = 4096 * 4;
 /// `page_addr`'s high 32 bit always be `file-id`(`PageAddr = {file id} {write
 /// buffer index}`), so it only store lower 32 bit.
 pub(crate) struct FileBuilder {
+    file_id: u32,
     writer: BufferedWriter,
 
     index: IndexBlockBuilder,
@@ -33,9 +38,10 @@ pub(crate) struct FileBuilder {
 
 impl FileBuilder {
     /// Create new file builder for given writer.
-    pub(crate) fn new(file: File, use_direct: bool) -> Self {
+    pub(crate) fn new(file_id: u32, file: File, use_direct: bool) -> Self {
         let writer = BufferedWriter::new(file, IO_BUFFER_SIZE, use_direct);
         Self {
+            file_id,
             writer,
             index: Default::default(),
             meta: Default::default(),
@@ -67,10 +73,11 @@ impl FileBuilder {
     }
 
     // Finish build page file.
-    pub(crate) async fn finish(&mut self) -> Result<()> {
+    pub(crate) async fn finish(&mut self) -> Result<FileInfo> {
         self.finish_meta_block().await?;
-        self.finish_file_footer().await?;
-        self.writer.flush_and_sync().await
+        let info = self.finish_file_footer().await?;
+        self.writer.flush_and_sync().await?;
+        Ok(info)
     }
 }
 
@@ -89,7 +96,7 @@ impl FileBuilder {
         Ok(())
     }
 
-    async fn finish_file_footer(&mut self) -> Result<()> {
+    async fn finish_file_footer(&mut self) -> Result<FileInfo> {
         let footer = {
             let mut f = Footer::default();
             f.magic = 142857;
@@ -104,7 +111,27 @@ impl FileBuilder {
         let footer_dat = footer.encode();
         let _ = self.writer.write(&footer_dat).await?;
 
-        Ok(())
+        Ok(self.as_file_info(&footer))
+    }
+
+    fn as_file_info(&self, footer: &Footer) -> FileInfo {
+        let meta = {
+            let (indexes, offsets) = self.index.index_block.as_meta_file_cached(footer);
+            Arc::new(FileMeta::new(self.file_id, indexes, offsets))
+        };
+
+        let active_pages = {
+            let mut active_pages = roaring::RoaringBitmap::new();
+            for (_page_id, page_addr) in &self.meta.page_table.0 {
+                let (_, index) = split_page_addr(*page_addr);
+                active_pages.insert(index);
+            }
+            active_pages
+        };
+
+        let active_size = meta.total_page_size();
+
+        FileInfo::new(active_pages, 0.0, active_size, meta)
     }
 }
 
@@ -383,6 +410,15 @@ impl IndexBlock {
             meta_page_table,
             meta_delete_pages,
         })
+    }
+
+    pub(crate) fn as_meta_file_cached(&self, footer: &Footer) -> (Vec<u64>, BTreeMap<u64, u64>) {
+        let mut indexes = vec![
+            self.meta_page_table.as_ref().unwrap().to_owned(),
+            self.meta_delete_pages.as_ref().unwrap().to_owned(),
+            footer.data_handle.offset, // meta block's end is index_block's start.
+        ];
+        (indexes, self.page_offsets.to_owned())
     }
 }
 
