@@ -3,6 +3,7 @@ use std::path::Path;
 mod txn;
 use txn::Txn;
 
+mod iter;
 mod stats;
 use stats::AtomicStats;
 pub(crate) use stats::Stats;
