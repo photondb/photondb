@@ -191,7 +191,6 @@ pub(crate) mod facade {
             };
 
             let info_builder = files.new_info_builder();
-
             {
                 // test add new files.
                 let mut mock_version = HashMap::new();
@@ -212,6 +211,7 @@ pub(crate) mod facade {
                 }
 
                 {
+                    // add an additional file with delete file1's page info.
                     let file_id = 2;
                     let delete_pages = &[page_addr(1, 0)];
 
@@ -228,15 +228,16 @@ pub(crate) mod facade {
                     b.add_delete_pages(delete_pages);
                     let file_info = b.finish().await.unwrap();
 
-                    let file1_before_add = mock_version.get(&1).unwrap().effective_size();
+                    let orignal_file1_active_size = mock_version.get(&1).unwrap().effective_size();
                     mock_version = info_builder
                         .add_file_info(&mock_version, file_info, delete_pages)
                         .unwrap();
 
                     let file1 = mock_version.get(&1).unwrap();
-                    assert_eq!(file1.effective_size(), file1_before_add - 10);
+                    assert_eq!(file1.effective_size(), orignal_file1_active_size - 10);
                     assert!(file1.get_page_handle(page_addr(1, 0)).is_none());
                     assert!(file1.get_page_handle(page_addr(1, 1)).is_some());
+
                     let file2 = mock_version.get(&2).unwrap();
                     let hd = file2.get_page_handle(page_addr(2, 4)).unwrap();
                     assert_eq!(hd.size, 10);
