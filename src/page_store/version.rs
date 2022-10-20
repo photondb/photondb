@@ -20,9 +20,25 @@ thread_local! {
 #[derive(Clone)]
 pub(crate) struct Version {
     pub buffer_set: Arc<BufferSet>,
-    pub files: HashMap<u32, FileInfo>,
 
+    inner: Arc<VersionInner>,
     next: Arc<NextVersion>,
+}
+
+struct VersionInner {
+    buffers_range: std::ops::Range<u32>,
+
+    /// Holds a reference to all [`WriteBuffer`]s at the time of the version
+    /// creation.
+    ///
+    /// The difference with [`BufferSet`] is that the [`WriteBuffer`] held by
+    /// [`VersionInner`] may have been flushed and [`BufferSet`] has lost access
+    /// to these [`WriteBuffers`]. The advantage of this is that
+    /// implementation don't have to hold the [`BufferSetRef`] for a long time
+    /// throughout the lifetime of the [`Version`].
+    write_buffers: Vec<Arc<WriteBuffer>>,
+    files: HashMap<u32, FileInfo>,
+    deleted_files: HashSet<u32>,
 }
 
 pub(crate) struct DeltaVersion {
@@ -60,13 +76,63 @@ pub(crate) struct BufferSetRef<'a> {
 }
 
 impl Version {
-    #[allow(unused)]
     pub(crate) fn new(write_buffer_capacity: u32) -> Self {
-        Version {
-            buffer_set: Arc::new(BufferSet::new(write_buffer_capacity)),
+        let buffer_set = Arc::new(BufferSet::new(write_buffer_capacity));
+        let (buffers_range, write_buffers) = {
+            let current = buffer_set.current();
+            (current.buffers_range.clone(), current.snapshot())
+        };
+        let inner = Arc::new(VersionInner {
+            buffers_range,
+            write_buffers,
             files: HashMap::default(),
+            deleted_files: HashSet::default(),
+        });
+        Version {
+            buffer_set,
+            inner,
             next: Arc::default(),
         }
+    }
+
+    /// Try install new version into version chains.
+    ///
+    /// TODO: It is assumed that all installations come in [`WriteBuffer`]
+    /// order, so there is no need to consider concurrency issues.
+    pub(crate) fn install(version: Rc<Version>, delta: DeltaVersion) -> Result<()> {
+        let current = version.next.refresh().unwrap_or_else(move || version);
+        let (buffers_range, write_buffers) = {
+            let buffers_ref = current.buffer_set.current();
+            (buffers_ref.buffers_range.clone(), buffers_ref.snapshot())
+        };
+
+        let mut files = current.inner.files.clone();
+        for (id, file_info) in delta.new_files {
+            if files.insert(id, file_info).is_some() {
+                panic!("New files are conflicted");
+            }
+        }
+
+        for page_addr in delta.deleted_pages {
+            let file_id = (page_addr >> 32) as u32;
+            let file_info = files.get_mut(&file_id).expect("File is missing");
+            file_info.deactivate_page(page_addr);
+        }
+
+        let deleted_files = delta.deleted_files;
+        let inner = Arc::new(VersionInner {
+            buffers_range,
+            write_buffers,
+            files,
+            deleted_files,
+        });
+        let new = Box::new(Version {
+            buffer_set: current.buffer_set.clone(),
+            inner,
+            next: Arc::default(),
+        });
+        current.next.install(new);
+        Ok(())
     }
 
     /// Construct [`Version`] from thread local storage.
@@ -102,18 +168,36 @@ impl Version {
         self.buffer_set.current().current_buffer.file_id()
     }
 
-    /// Try install new version into
-    pub(crate) fn install(&self, delta: DeltaVersion) -> Result<()> {
-        todo!()
+    /// Fetch the files which obsolated but referenced by the [`Version`].
+    #[inline]
+    pub(crate) fn deleted_files(&self) -> Vec<u32> {
+        self.inner.deleted_files.iter().cloned().collect()
     }
 
-    /// Fetch the files which obsolated but referenced by the [`Version`].
-    pub(crate) fn deleted_files(&self) -> Vec<u32> {
-        todo!()
+    #[inline]
+    pub(crate) fn files(&self) -> &HashMap<u32, FileInfo> {
+        &self.inner.files
     }
 }
 
 impl NextVersion {
+    /// Install new version.
+    ///
+    /// # Panic
+    ///
+    /// Panic if there has already exists a version.
+    fn install(&self, version: Box<Version>) {
+        let new = Box::into_raw(version);
+        self.raw_version
+            .compare_exchange(
+                std::ptr::null_mut(),
+                new,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .expect("There has already exists a version");
+    }
+
     fn refresh(&self) -> Option<Rc<Version>> {
         let mut new: Option<Rc<Version>> = None;
         let mut raw = self.raw_version.load(Ordering::Acquire);
@@ -198,8 +282,7 @@ impl BufferSet {
             panic!("the buffer {new_file_id} to be installed is not a successor of the previous buffers, expect {next_file_id}.");
         }
 
-        let mut sealed_buffers = current.sealed_buffers.clone();
-        sealed_buffers.push(current.current_buffer.clone());
+        let sealed_buffers = current.snapshot();
         let new = Box::new(BufferSetVersion {
             buffers_range: current.buffers_range.start..(next_file_id + 1),
             sealed_buffers,
@@ -271,6 +354,12 @@ impl BufferSetVersion {
     #[inline]
     pub(crate) fn next_file_id(&self) -> u32 {
         self.buffers_range.end
+    }
+
+    fn snapshot(&self) -> Vec<Arc<WriteBuffer>> {
+        let mut buffers = self.sealed_buffers.clone();
+        buffers.push(self.current_buffer.clone());
+        buffers
     }
 }
 

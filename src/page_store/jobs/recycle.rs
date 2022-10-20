@@ -16,7 +16,7 @@ impl RecycleCtx {
 
     async fn do_recycle(&self, version: &Version) {
         let mut recycle_file_set = HashSet::new();
-        for (_, file) in &version.files {
+        for (_, file) in version.files() {
             if !self.should_recycle_file(file) {
                 continue;
             }
