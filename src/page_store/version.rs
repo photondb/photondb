@@ -37,15 +37,19 @@ pub(crate) struct BufferSet {
 }
 
 pub(crate) struct BufferSetVersion {
-    min_file_id: u32,
-
+    /// The range of the buffers referenced by the version, include
+    /// `current_buffer`.
+    buffers_range: std::ops::Range<u32>,
     sealed_buffers: Vec<Arc<WriteBuffer>>,
-    active_buffer: Arc<WriteBuffer>,
+
+    /// The last write buffer, maybe it's already sealed.
+    current_buffer: Arc<WriteBuffer>,
 }
 
 pub(crate) struct BufferSetRef<'a> {
     version: &'a BufferSetVersion,
     // `guard` is used to ensure that the referenced `BufferSetVersion` will not be released early.
+    #[allow(unused)]
     guard: Guard,
 }
 
@@ -71,7 +75,7 @@ impl Version {
     }
 
     pub(crate) fn active_write_buffer_id(&self) -> u32 {
-        self.buffer_set.current().active_buffer.file_id()
+        self.buffer_set.current().current_buffer.file_id()
     }
 
     /// Try install new version into
@@ -103,9 +107,9 @@ impl BufferSet {
         let min_file_id = 0;
         let buf = WriteBuffer::with_capacity(min_file_id, write_buffer_capacity);
         let version = Box::new(BufferSetVersion {
-            min_file_id,
+            buffers_range: min_file_id..(min_file_id + 1),
             sealed_buffers: Vec::default(),
-            active_buffer: Arc::new(buf),
+            current_buffer: Arc::new(buf),
         });
         let raw = Box::leak(version);
         BufferSet {
@@ -119,13 +123,51 @@ impl BufferSet {
         self.write_buffer_capacity
     }
 
+    /// Obtains a reference of current [`BufferSetVersion`].
     pub(crate) fn current(&self) -> BufferSetRef<'_> {
-        todo!()
+        let guard = buffer_set_guard::pin();
+        let current = unsafe { self.current_without_guard() };
+        BufferSetRef {
+            version: current,
+            guard,
+        }
     }
 
+    /// Install new [`BufferSetVersion`] by replacing `current_buffer` to new
+    /// [`WriteBuffer`].
+    ///
+    /// There are no concurrent requests here, because only the routine that
+    /// seals the previous [`WriteBuffer`] can install the new [`WriteBuffer`].
+    ///
+    /// # Panic
+    ///
+    /// Panic if file IDs are not consecutive.
     pub(crate) fn install(&self, write_buffer: Arc<WriteBuffer>) {
-        // TODO: the file ID should be continuous.
-        todo!("install new version via CAS operation")
+        let guard = buffer_set_guard::pin();
+
+        // Safety: guard by `buffer_set_guard::pin`.
+        let current = unsafe { self.current_without_guard() };
+        let next_file_id = current.buffers_range.end;
+        let new_file_id = write_buffer.file_id();
+        if new_file_id != next_file_id {
+            panic!("the buffer {new_file_id} to be installed is not a successor of the previous buffers, expect {next_file_id}.");
+        }
+
+        let mut sealed_buffers = current.sealed_buffers.clone();
+        sealed_buffers.push(current.current_buffer.clone());
+        let new = Box::new(BufferSetVersion {
+            buffers_range: current.buffers_range.start..(next_file_id + 1),
+            sealed_buffers,
+            current_buffer: write_buffer,
+        });
+
+        let current_ptr = current as *const _ as usize;
+        self.current.store(Box::into_raw(new), Ordering::Release);
+        guard.defer(move || unsafe {
+            // Safety: the backing memory is obtained from [`Box::into_raw`] and there no
+            // any references to the memory, which guarrantted by epoch based reclamation.
+            drop(Box::from_raw(current_ptr as *mut BufferSetVersion));
+        });
     }
 
     pub(crate) fn on_flushed(&self, files: &[u32]) {
@@ -138,6 +180,18 @@ impl BufferSet {
 
     pub(crate) fn notify_flush_job(&self) {
         todo!()
+    }
+
+    /// Obtain current [`BufferSetVersion`].
+    ///
+    /// # Safety
+    ///
+    /// This should be guard by `buffer_set_guard::pin`.
+    unsafe fn current_without_guard(&self) -> &BufferSetVersion {
+        // Safety:
+        // 1. Obtained from `Box::new`, so it is aligned and not null.
+        // 2. There is not mutable references pointer to it.
+        &*self.current.load(Ordering::Acquire)
     }
 }
 
@@ -166,7 +220,12 @@ impl BufferSetVersion {
 
     #[inline]
     pub(crate) fn min_file_id(&self) -> u32 {
-        self.min_file_id
+        self.buffers_range.start
+    }
+
+    #[inline]
+    pub(crate) fn next_file_id(&self) -> u32 {
+        self.buffers_range.end
     }
 }
 
@@ -178,6 +237,40 @@ impl<'a> Deref for BufferSetRef<'a> {
     }
 }
 
+mod buffer_set_guard {
+    use crossbeam_epoch::{Collector, Guard, LocalHandle};
+    use once_cell::sync::Lazy;
+
+    static COLLECTOR: Lazy<Collector> = Lazy::new(Collector::new);
+
+    thread_local! {
+        static HANDLE: LocalHandle = COLLECTOR.register();
+    }
+
+    /// Pins the current thread.
+    #[inline]
+    pub(super) fn pin() -> Guard {
+        with_handle(|handle| handle.pin())
+    }
+
+    /// Returns `true` if the current thread is pinned.
+    #[allow(dead_code)]
+    #[inline]
+    pub(super) fn is_pinned() -> bool {
+        with_handle(|handle| handle.is_pinned())
+    }
+
+    #[inline]
+    fn with_handle<F, R>(mut f: F) -> R
+    where
+        F: FnMut(&LocalHandle) -> R,
+    {
+        HANDLE
+            .try_with(|h| f(h))
+            .unwrap_or_else(|_| f(&COLLECTOR.register()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +278,13 @@ mod tests {
     #[test]
     fn buffer_set_construct_and_drop() {
         drop(BufferSet::new(1 << 10));
+    }
+
+    #[test]
+    fn buffer_set_write_buffer_install() {
+        let buffer_set = BufferSet::new(1 << 10);
+        let file_id = buffer_set.current().next_file_id();
+        let buf = WriteBuffer::with_capacity(file_id, buffer_set.write_buffer_capacity());
+        buffer_set.install(Arc::new(buf));
     }
 }
