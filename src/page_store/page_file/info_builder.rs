@@ -1,8 +1,8 @@
-use std::{collections::HashMap, hash::Hash, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use photonio::fs::File;
 
-use super::{types::split_page_addr, FileInfo, FileMeta, FileReader};
+use super::{types::split_page_addr, FileInfo, FileReader};
 use crate::page_store::Result;
 
 pub(crate) struct FileInfoBuilder {
@@ -42,15 +42,15 @@ impl FileInfoBuilder {
     // It copies the old file infos before add new file.
     // It could help version to prepare new Version's `active_files` after flush a
     // new page file.
-    pub(crate) async fn add_file_info(
+    pub(crate) fn add_file_info(
         &self,
-        files: HashMap<u32, FileInfo>,
-        new_file_id: &u32,
+        files: &HashMap<u32, FileInfo>,
+        new_file_info: FileInfo,
+        new_delete_pages: &[u64],
     ) -> Result<HashMap<u32, FileInfo>> {
         let mut files = files.clone();
-        let (new_file_info, new_delete_pages) = self.recovery_one_file(new_file_id).await?;
-        files.insert(*new_file_id, new_file_info);
-        Self::mantain_file_active_pages(&mut files, &new_delete_pages);
+        files.insert(new_file_info.get_file_id(), new_file_info);
+        Self::mantain_file_active_pages(&mut files, new_delete_pages);
         Ok(files)
     }
 
@@ -64,7 +64,7 @@ impl FileInfoBuilder {
                 .await
                 .expect("read page table error");
             let mut active_pages = roaring::RoaringBitmap::new();
-            for (page_addr, _) in page_table {
+            for (_page_id, page_addr) in page_table {
                 let (_, index) = split_page_addr(page_addr);
                 active_pages.insert(index);
             }
@@ -75,7 +75,7 @@ impl FileInfoBuilder {
 
         let delete_pages = file_reader.read_delete_pages().await?;
 
-        let decline_rate = todo!();
+        let decline_rate = 0.0; // todo:...
         let info = FileInfo::new(active_pages, decline_rate, active_size, meta);
 
         Ok((info, delete_pages))

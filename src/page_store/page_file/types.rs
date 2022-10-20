@@ -48,8 +48,11 @@ impl FileInfo {
     }
 
     /// Get the [`PageHandle`] of the corresponding page. Returns `None` if no
-    /// such page exists.
+    /// such active page exists.
     pub(crate) fn get_page_handle(&self, page_addr: u64) -> Option<PageHandle> {
+        if !self.is_page_active(page_addr) {
+            return None;
+        }
         let (offset, size) = self.meta.get_page_handle(page_addr)?;
         Some(PageHandle {
             offset: offset as u32,
@@ -57,6 +60,13 @@ impl FileInfo {
         })
     }
 
+    #[inline]
+    fn is_page_active(&self, page_addr: u64) -> bool {
+        let index = page_addr as u32;
+        self.active_pages.contains(index)
+    }
+
+    #[inline]
     pub(crate) fn effective_size(&self) -> u32 {
         self.active_size as u32
     }
@@ -68,22 +78,15 @@ impl FileInfo {
 
 pub(crate) struct FileMeta {
     file_id: u32,
-    file_size: u32,
 
     data_offsets: BTreeMap<u64, u64>, // TODO: reduce this size.
     meta_indexes: Vec<u64>,           // [0] -> page_table, [1] ->  delete page, [2], meta_bloc_end
 }
 
 impl FileMeta {
-    pub(crate) fn new(
-        file_id: u32,
-        file_size: u32,
-        indexes: Vec<u64>,
-        offsets: BTreeMap<u64, u64>,
-    ) -> Self {
+    pub(crate) fn new(file_id: u32, indexes: Vec<u64>, offsets: BTreeMap<u64, u64>) -> Self {
         Self {
             file_id,
-            file_size,
             meta_indexes: indexes,
             data_offsets: offsets,
         }
@@ -113,6 +116,7 @@ impl FileMeta {
     }
 
     // Return the total page size(include inactive page).
+    #[inline]
     pub(crate) fn total_page_size(&self) -> usize {
         (**self.meta_indexes.first().as_ref().unwrap()) as usize
     }
