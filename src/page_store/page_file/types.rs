@@ -1,6 +1,9 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use crate::page_store::{Error, Result};
+use crate::{
+    page,
+    page_store::{Error, Result},
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PageHandle {
@@ -48,13 +51,22 @@ impl FileInfo {
     }
 
     /// Get the [`PageHandle`] of the corresponding page. Returns `None` if no
-    /// such page exists.
+    /// such active page exists.
     pub(crate) fn get_page_handle(&self, page_addr: u64) -> Option<PageHandle> {
+        if !self.is_page_active(page_addr) {
+            return None;
+        }
         let (offset, size) = self.meta.get_page_handle(page_addr)?;
         Some(PageHandle {
             offset: offset as u32,
             size: size as u32,
         })
+    }
+
+    #[inline]
+    fn is_page_active(&self, page_addr: u64) -> bool {
+        let index = page_addr as u32;
+        self.active_pages.contains(index)
     }
 
     pub(crate) fn effective_size(&self) -> u32 {
