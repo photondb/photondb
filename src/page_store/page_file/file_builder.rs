@@ -27,6 +27,8 @@ pub(crate) struct FileBuilder {
 
     index: IndexBlockBuilder,
     meta: MetaBlockBuilder,
+
+    last_add_page_id: u64,
 }
 
 impl FileBuilder {
@@ -37,6 +39,7 @@ impl FileBuilder {
             writer,
             index: Default::default(),
             meta: Default::default(),
+            last_add_page_id: 0,
         }
     }
 
@@ -47,6 +50,11 @@ impl FileBuilder {
         page_addr: u64,
         page_content: &[u8],
     ) -> Result<()> {
+        if self.last_add_page_id >= page_id {
+            return Err(Error::InvalidArgument);
+        }
+        self.last_add_page_id = page_id;
+
         let file_offset = self.writer.write(page_content).await?;
         self.index.add_data_block(page_addr, file_offset);
         self.meta.add_page(page_id, page_addr);
@@ -94,16 +102,16 @@ impl FileBuilder {
         };
 
         let footer_dat = footer.encode();
-        self.writer.write(&footer_dat).await?;
+        let _ = self.writer.write(&footer_dat).await?;
 
         Ok(())
     }
 }
 
 #[derive(Default)]
-struct BlockHandler {
-    offset: u64,
-    length: u64,
+pub(crate) struct BlockHandler {
+    pub(crate) offset: u64,
+    pub(crate) length: u64,
 }
 
 impl BlockHandler {
@@ -131,13 +139,18 @@ impl BlockHandler {
 }
 
 #[derive(Default)]
-struct Footer {
+pub(crate) struct Footer {
     magic: u64,
-    data_handle: BlockHandler,
-    meta_handle: BlockHandler,
+    pub(crate) data_handle: BlockHandler,
+    pub(crate) meta_handle: BlockHandler,
 }
 
 impl Footer {
+    #[inline]
+    pub(crate) fn size() -> u32 {
+        (core::mem::size_of::<u64>() * 5) as u32
+    }
+
     fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(core::mem::size_of::<u64>() * 5);
         bytes.extend_from_slice(&self.magic.to_le_bytes());
@@ -146,8 +159,8 @@ impl Footer {
         bytes
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != core::mem::size_of::<u64>() * 5 {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes.len() != Self::size() as usize {
             return Err(Error::Corrupted);
         }
         let mut idx = 0;
@@ -195,7 +208,7 @@ impl MetaBlockBuilder {
 }
 
 #[derive(Default)]
-struct PageTable(BTreeMap<u64, u64>);
+pub(crate) struct PageTable(BTreeMap<u64, u64>);
 
 impl PageTable {
     fn encode(&self) -> Vec<u8> {
@@ -207,7 +220,7 @@ impl PageTable {
         bytes
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         let mut table = BTreeMap::new();
         let mut idx = 0;
         while idx < bytes.len() {
@@ -232,8 +245,14 @@ impl PageTable {
     }
 }
 
+impl From<PageTable> for BTreeMap<u64, u64> {
+    fn from(t: PageTable) -> Self {
+        t.0.to_owned()
+    }
+}
+
 #[derive(Default)]
-struct DeletePages(BTreeSet<u64>);
+pub(crate) struct DeletePages(BTreeSet<u64>);
 
 impl DeletePages {
     fn encode(&self) -> Vec<u8> {
@@ -244,7 +263,7 @@ impl DeletePages {
         bytes
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         let mut pages = BTreeSet::new();
         let mut idx = 0;
         while idx < bytes.len() {
@@ -258,6 +277,12 @@ impl DeletePages {
             idx = end;
         }
         Ok(DeletePages(pages))
+    }
+}
+
+impl From<DeletePages> for Vec<u64> {
+    fn from(d: DeletePages) -> Self {
+        d.0.iter().cloned().collect::<Vec<u64>>()
     }
 }
 
@@ -293,10 +318,10 @@ impl IndexBlockBuilder {
 }
 
 #[derive(Default)]
-struct IndexBlock {
-    page_offsets: BTreeMap<u64, u64>,
-    meta_page_table: Option<u64>,
-    meta_delete_pages: Option<u64>,
+pub(crate) struct IndexBlock {
+    pub(crate) page_offsets: BTreeMap<u64, u64>,
+    pub(crate) meta_page_table: Option<u64>,
+    pub(crate) meta_delete_pages: Option<u64>,
 }
 
 impl IndexBlock {
@@ -317,7 +342,7 @@ impl IndexBlock {
         bytes
     }
 
-    fn decode(data_index_bytes: &[u8], meta_index_bytes: &[u8]) -> Result<Self> {
+    pub(crate) fn decode(data_index_bytes: &[u8], meta_index_bytes: &[u8]) -> Result<Self> {
         let mut page_offsets = BTreeMap::new();
         let mut idx = 0;
         while idx < data_index_bytes.len() {
@@ -463,12 +488,15 @@ impl BufferedWriter {
 
 #[cfg(test)]
 mod tests {
-    use photonio::io::ReadAtExt;
 
     use super::*;
 
     #[photonio::test]
     async fn test_buffered_writer() {
+        use std::os::unix::prelude::OpenOptionsExt;
+
+        use photonio::io::ReadAtExt;
+
         let (use_direct, flags) = (true, 0x4000);
         let path1 = std::env::temp_dir().join("buf_test1");
         {
@@ -494,7 +522,9 @@ mod tests {
                 .expect("open file_id: {file_id}'s file fail");
             let mut buf = vec![0u8; 1];
             file2.read_exact_at(&mut buf, 4096 * 3).await.unwrap();
-            assert_eq!(buf[0], 3)
+            assert_eq!(buf[0], 3);
+            let length = file2.metadata().await.unwrap().len();
+            assert_eq!(length, 10 + (4096 * 2 + 1) * 2)
         }
     }
 }
