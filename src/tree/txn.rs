@@ -55,9 +55,9 @@ impl<'a, E: Env> Txn<'a, E> {
             }
         }
 
-        // Try to consolidate the page if the chain is too long.
-        if new_page.chain_len() as usize > self.tree.options.page_chain_length {
-            view.page = new_page.into();
+        // Try to consolidate the page if it is too long.
+        view.page = new_page.into();
+        if self.should_consolidate_page(view.page) {
             let _ = self.consolidate_page(view, parent).await;
         }
         Ok(())
@@ -261,8 +261,10 @@ impl<'a, E> Txn<'a, E> {
             PageKind::Split => {
                 if let Some(parent) = parent {
                     self.reconcile_split_page(view, parent).await?;
-                } else {
+                } else if view.id == ROOT_ID {
                     self.reconcile_split_root(view).await?;
+                } else {
+                    return Err(Error::InvalidArgument);
                 }
             }
         }
@@ -270,7 +272,11 @@ impl<'a, E> Txn<'a, E> {
     }
 
     // Reconciles a pending split on the page.
-    async fn reconcile_split_page(&self, view: PageView<'_>, parent: PageView<'_>) -> Result<()> {
+    async fn reconcile_split_page(
+        &self,
+        view: PageView<'_>,
+        mut parent: PageView<'_>,
+    ) -> Result<()> {
         let left_key = view.range.start;
         let left_index = Index::with_epoch(view.id, view.page.epoch());
         let (split_key, split_index) = split_delta_from_page(view.page);
@@ -297,7 +303,14 @@ impl<'a, E> Txn<'a, E> {
         new_page.set_chain_len(parent.page.chain_len().saturating_add(1));
         new_page.set_chain_next(parent.addr);
         txn.update_page(parent.id, parent.addr, new_addr)
-            .map_err(|_| Error::Again)
+            .map_err(|_| Error::Again)?;
+
+        // Try to consolidate the parent page if it is too long.
+        parent.page = new_page.into();
+        if self.should_consolidate_page(parent.page) {
+            let _ = self.consolidate_page(parent, None).await;
+        }
+        Ok(())
     }
 
     // Reconciles a pending split on the root page.
@@ -324,7 +337,7 @@ impl<'a, E> Txn<'a, E> {
     /// Consolidates delta pages on the page chain.
     async fn consolidate_page(
         &self,
-        view: PageView<'_>,
+        mut view: PageView<'_>,
         parent: Option<PageView<'_>>,
     ) -> Result<()> {
         let info = self.collect_consolidation_info(&view).await?;
@@ -347,7 +360,8 @@ impl<'a, E> Txn<'a, E> {
             })?;
 
         // Try to split the page if it is too large.
-        if new_page.size() >= self.tree.options.page_size {
+        view.page = new_page.into();
+        if self.should_split_page(view.page) {
             let _ = self.split_page(view, parent);
         }
         Ok(())
@@ -394,6 +408,28 @@ impl<'a, E> Txn<'a, E> {
             page_addrs,
         };
         Ok(info)
+    }
+
+    // Returns true if the page should be split.
+    fn should_split_page(&self, page: PageRef<'_>) -> bool {
+        let mut max_size = self.tree.options.page_size;
+        if page.tier().is_inner() {
+            // Adjust the page size for inner pages.
+            // TODO: do some benchmark to evaluate this.
+            max_size = max_size / 2;
+        }
+        page.size() > max_size
+    }
+
+    // Returns true if the page should be consolidated.
+    fn should_consolidate_page(&self, page: PageRef<'_>) -> bool {
+        let mut max_chain_len = self.tree.options.page_chain_length;
+        if page.tier().is_inner() {
+            // Adjust the chain length for inner pages.
+            // TODO: do some benchmark to evaluate this.
+            max_chain_len = (max_chain_len / 2).max(2);
+        }
+        page.chain_len() as usize > max_chain_len
     }
 }
 
