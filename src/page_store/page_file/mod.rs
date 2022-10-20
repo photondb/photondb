@@ -8,9 +8,8 @@ mod info_builder;
 pub(crate) use info_builder::FileInfoBuilder;
 
 mod types;
-pub(crate) use types::{FileInfo, FileMeta, PageHandle};
-
 pub(crate) use facade::PageFiles;
+pub(crate) use types::{FileInfo, FileMeta, PageHandle};
 
 /// [`FileInfoIterator`] is used to traverse [`FileInfo`] to get the
 /// [`PageHandle`] of all active pages.

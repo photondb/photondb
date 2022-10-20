@@ -1,7 +1,7 @@
 //! A storage engine for modern hardware.
 
 #![warn(unreachable_pub)]
-#![feature(io_error_more, type_alias_impl_trait)]
+#![feature(io_error_more, type_alias_impl_trait, hash_drain_filter)]
 
 mod table;
 pub use table::{RawTable, Table};
