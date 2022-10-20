@@ -67,7 +67,7 @@ pub(crate) mod facade {
                 .open(path)
                 .await
                 .expect("open file_id: {file_id}'s file fail");
-            Ok(FileBuilder::new(writer, self.use_direct))
+            Ok(FileBuilder::new(file_id, writer, self.use_direct))
         }
 
         #[inline]
@@ -143,7 +143,7 @@ pub(crate) mod facade {
             };
 
             let file_id = 2;
-            {
+            let ret_info = {
                 let mut b = files.new_file_builder(file_id).await.unwrap();
                 b.add_delete_pages(&[page_addr(1, 0), page_addr(1, 1)]);
                 b.add_page(1, page_addr(2, 2), &[7].repeat(8192))
@@ -155,15 +155,19 @@ pub(crate) mod facade {
                 b.add_page(3, page_addr(2, 4), &[9].repeat(8192 / 3))
                     .await
                     .unwrap();
-                b.finish().await.unwrap();
-            }
+                let info = b.finish().await.unwrap();
+                assert_eq!(info.effective_size(), 8192 + 8192 / 2 + 8192 / 3);
+                info
+            };
             {
                 let file_meta = files.open_file_meta(file_id).await.unwrap(); // normally get from current version, no need reopen.
                 assert_eq!(file_meta.total_page_size(), 8192 + 8192 / 2 + 8192 / 3);
 
                 let reader = files.open_file_reader(file_meta.to_owned()).await.unwrap();
                 let page3 = page_addr(2, 4);
-                let (_, page3_size) = file_meta.get_page_handle(page3).unwrap();
+                let (page3_offset, page3_size) = file_meta.get_page_handle(page3).unwrap();
+                let handle = ret_info.get_page_handle(page3).unwrap();
+                assert_eq!(page3_offset as u32, handle.offset);
                 assert_eq!(page3_size, 8192 / 3);
                 let mut buf = vec![0u8; page3_size];
                 reader.read_page(page3, &mut buf).await.unwrap();

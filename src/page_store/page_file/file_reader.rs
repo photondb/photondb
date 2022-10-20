@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use photonio::io::{ReadAt, ReadAtExt};
 
 use super::{
-    file_builder::{self, DeletePages, Footer, IndexBlock, PageTable},
+    file_builder::{DeletePages, Footer, IndexBlock, PageTable},
     types::FileMeta,
 };
 use crate::{
@@ -85,10 +85,11 @@ impl<R: ReadAt> FileReader<R> {
         file_id: u32,
     ) -> Result<Arc<FileMeta>> {
         let footer = Self::read_footer(reader, file_size).await?;
-        let (mut indexes, offsets) = Self::read_index_block(reader, footer).await?;
-        Ok(Arc::new(FileMeta::new(
-            file_id, file_size, indexes, offsets,
-        )))
+        let index_block = Self::read_index_block(reader, &footer).await?;
+        Ok({
+            let (indexes, offsets) = index_block.as_meta_file_cached(&footer);
+            Arc::new(FileMeta::new(file_id, file_size, indexes, offsets))
+        })
     }
 
     async fn read_footer(read: &R, file_size: u32) -> Result<Footer> {
@@ -104,13 +105,7 @@ impl<R: ReadAt> FileReader<R> {
         Ok(footer)
     }
 
-    async fn read_index_block(
-        read: &R,
-        footer: Footer,
-    ) -> Result<(
-        Vec<u64>,           /* meta_idx */
-        BTreeMap<u64, u64>, /* data_offsets */
-    )> {
+    async fn read_index_block(read: &R, footer: &Footer) -> Result<IndexBlock> {
         let mut data_idx_bytes = vec![0u8; footer.data_handle.length as usize];
         read.read_exact_at(&mut data_idx_bytes, footer.data_handle.offset)
             .await
@@ -121,17 +116,6 @@ impl<R: ReadAt> FileReader<R> {
             .await
             .expect("read meta page index fail");
 
-        let IndexBlock {
-            page_offsets,
-            meta_page_table,
-            meta_delete_pages,
-        } = IndexBlock::decode(&data_idx_bytes, &meta_idx_bytes)?;
-
-        let mut indexes = Vec::with_capacity(3);
-        indexes.push(meta_page_table.as_ref().unwrap().to_owned());
-        indexes.push(meta_delete_pages.as_ref().unwrap().to_owned());
-        indexes.push(footer.data_handle.offset); // meta block's end is index_block's start.
-
-        Ok((indexes, page_offsets))
+        IndexBlock::decode(&data_idx_bytes, &meta_idx_bytes)
     }
 }
