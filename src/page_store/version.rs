@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     ops::Deref,
     rc::Rc,
@@ -12,6 +13,11 @@ use crossbeam_epoch::Guard;
 
 use super::{FileInfo, Result, WriteBuffer};
 
+thread_local! {
+    static VERSION: RefCell<Option<Rc<Version>>> = RefCell::new(None);
+}
+
+#[derive(Clone)]
 pub(crate) struct Version {
     pub buffer_set: Arc<BufferSet>,
     pub files: HashMap<u32, FileInfo>,
@@ -64,9 +70,27 @@ impl Version {
     }
 
     /// Construct [`Version`] from thread local storage.
-    pub(crate) fn from_local() -> Rc<Self> {
-        // TODO: refresh next version.
-        todo!()
+    pub(crate) fn from_local() -> Option<Rc<Self>> {
+        let current = Self::get_local();
+        if let Some(version) = &current {
+            if let Some(new) = version.next.refresh() {
+                Self::set_local(new.clone());
+                return Some(new);
+            }
+        }
+        current
+    }
+
+    #[inline]
+    pub(crate) fn set_local(version: Rc<Version>) {
+        VERSION.with(move |v| {
+            *v.borrow_mut() = Some(version);
+        });
+    }
+
+    #[inline]
+    fn get_local() -> Option<Rc<Self>> {
+        VERSION.with(|v| v.borrow().clone())
     }
 
     /// Wait and construct next [`Version`].
@@ -86,6 +110,27 @@ impl Version {
     /// Fetch the files which obsolated but referenced by the [`Version`].
     pub(crate) fn deleted_files(&self) -> Vec<u32> {
         todo!()
+    }
+}
+
+impl NextVersion {
+    fn refresh(&self) -> Option<Rc<Version>> {
+        let mut new: Option<Rc<Version>> = None;
+        let mut raw = self.raw_version.load(Ordering::Acquire);
+        loop {
+            // Safety:
+            // 1. It is valid and initialized since obtained from [`Box::into_raw`].
+            // 2. All references are immutable.
+            match unsafe { raw.as_ref() } {
+                None => break,
+                Some(version) => {
+                    let version = Rc::new(version.clone());
+                    raw = version.next.raw_version.load(Ordering::Acquire);
+                    new = Some(version);
+                }
+            }
+        }
+        new
     }
 }
 
