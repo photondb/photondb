@@ -611,7 +611,7 @@ impl RecordHeader {
 }
 
 impl<'a> Iterator for RecordIterator<'a> {
-    type Item = (&'a RecordHeader, RecordRef<'a>);
+    type Item = (u64 /* page_addr */, &'a RecordHeader, RecordRef<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
         let buffer_state =
@@ -623,14 +623,22 @@ impl<'a> Iterator for RecordIterator<'a> {
                 return None;
             }
 
+            let record_offset = self.offset;
             // Safety: the request [`RecordHeader`] has been initialized (checked in above).
-            let record_header = unsafe { self.write_buffer.record(self.offset) };
+            let record_header = unsafe { self.write_buffer.record(record_offset) };
 
             self.offset += record_header.record_size();
             if let Some(record_ref) = record_header.record_ref() {
-                return Some((record_header, record_ref));
+                let page_addr = ((self.write_buffer.file_id as u64) << 32) | (record_offset as u64);
+                return Some((page_addr, record_header, record_ref));
             }
         }
+    }
+}
+
+impl<'a> DeletedPagesRecordRef<'a> {
+    pub(crate) fn as_slice(&self) -> &[u64] {
+        self.deleted_pages
     }
 }
 
@@ -810,7 +818,7 @@ mod tests {
 
         let expect_deleted_pages = vec![11, 12, 13, 14, 15];
         let mut active_pages: HashSet<u64> = vec![1, 3, 5, 7, 9].into_iter().collect();
-        for (header, record_ref) in buf.iter() {
+        for (_, header, record_ref) in buf.iter() {
             match record_ref {
                 RecordRef::Page(_page) => {
                     let page_id = header.page_id();

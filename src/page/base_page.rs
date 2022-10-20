@@ -129,6 +129,13 @@ impl<'a> PageRef<'a> {
             _marker: PhantomData,
         }
     }
+
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        // Safety:
+        // 1. the entire range of memory to access is valid and initialized.
+        // 2. there no any mutable references pointer to the target range.
+        unsafe { std::slice::from_raw_parts(self.ptr.ptr.as_ptr(), self.len) }
+    }
 }
 
 impl<'a> Deref for PageRef<'a> {
