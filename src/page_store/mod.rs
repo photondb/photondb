@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Mutex};
+use std::{path::Path, rc::Rc, sync::Mutex};
 
 use crate::{env::Env, Options};
 
@@ -42,6 +42,15 @@ impl<E: Env> PageStore<E> {
     }
 
     pub(crate) fn guard(&self) -> Guard {
-        Guard::new(Version::from_local(), self.table.clone())
+        Guard::new(self.current_version(), self.table.clone())
+    }
+
+    #[inline]
+    fn current_version(&self) -> Rc<Version> {
+        Version::from_local().unwrap_or_else(|| {
+            let version = { Rc::new(self.version.lock().expect("Poisoned").clone()) };
+            Version::set_local(version);
+            Version::from_local().expect("Already installed")
+        })
     }
 }
