@@ -1,4 +1,8 @@
-use std::{path::Path, rc::Rc, sync::Mutex};
+use std::{
+    path::Path,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 
 use crate::{env::Env, Options};
 
@@ -18,11 +22,11 @@ use version::Version;
 
 mod jobs;
 mod write_buffer;
-use write_buffer::WriteBuffer;
+pub(crate) use write_buffer::{DeletedPagesRecordRef, RecordRef, WriteBuffer};
 
 mod manifest;
 mod page_file;
-use page_file::{FileInfo, FileMeta, PageHandle};
+pub(crate) use page_file::{FileInfo, FileMeta, PageFiles, PageHandle};
 
 pub(crate) struct PageStore<E> {
     options: Options,
@@ -33,6 +37,8 @@ pub(crate) struct PageStore<E> {
     /// not exist. It needs to be updated every time a new [`Version`] is
     /// installed.
     version: Mutex<Version>,
+
+    page_files: Arc<PageFiles>,
 }
 
 impl<E: Env> PageStore<E> {
