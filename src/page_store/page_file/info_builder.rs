@@ -1,8 +1,8 @@
-use std::{collections::HashMap, hash::Hash, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use photonio::fs::File;
 
-use super::{types::split_page_addr, FileInfo, FileMeta, FileReader};
+use super::{types::split_page_addr, FileInfo, FileReader};
 use crate::page_store::Result;
 
 pub(crate) struct FileInfoBuilder {

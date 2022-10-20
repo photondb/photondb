@@ -1,9 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use crate::{
-    page,
-    page_store::{Error, Result},
-};
+use crate::page_store::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PageHandle {
@@ -69,6 +66,7 @@ impl FileInfo {
         self.active_pages.contains(index)
     }
 
+    #[inline]
     pub(crate) fn effective_size(&self) -> u32 {
         self.active_size as u32
     }
@@ -80,22 +78,15 @@ impl FileInfo {
 
 pub(crate) struct FileMeta {
     file_id: u32,
-    file_size: u32,
 
     data_offsets: BTreeMap<u64, u64>, // TODO: reduce this size.
     meta_indexes: Vec<u64>,           // [0] -> page_table, [1] ->  delete page, [2], meta_bloc_end
 }
 
 impl FileMeta {
-    pub(crate) fn new(
-        file_id: u32,
-        file_size: u32,
-        indexes: Vec<u64>,
-        offsets: BTreeMap<u64, u64>,
-    ) -> Self {
+    pub(crate) fn new(file_id: u32, indexes: Vec<u64>, offsets: BTreeMap<u64, u64>) -> Self {
         Self {
             file_id,
-            file_size,
             meta_indexes: indexes,
             data_offsets: offsets,
         }
@@ -125,6 +116,7 @@ impl FileMeta {
     }
 
     // Return the total page size(include inactive page).
+    #[inline]
     pub(crate) fn total_page_size(&self) -> usize {
         (**self.meta_indexes.first().as_ref().unwrap()) as usize
     }

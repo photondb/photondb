@@ -1,12 +1,12 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
 
 use photonio::{fs::File, io::WriteExt};
 
 use super::{types::split_page_addr, FileInfo, FileMeta};
-use crate::page_store::{page_table, Error, Result};
+use crate::page_store::{Error, Result};
 
 const IO_BUFFER_SIZE: usize = 4096 * 4;
 
@@ -117,8 +117,7 @@ impl FileBuilder {
     fn as_file_info(&self, footer: &Footer) -> FileInfo {
         let meta = {
             let (indexes, offsets) = self.index.index_block.as_meta_file_cached(footer);
-            let file_size = self.writer.actual_data_size as u32;
-            Arc::new(FileMeta::new(self.file_id, file_size, indexes, offsets))
+            Arc::new(FileMeta::new(self.file_id, indexes, offsets))
         };
 
         let active_pages = {
