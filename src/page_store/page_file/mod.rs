@@ -56,6 +56,7 @@ pub(crate) mod facade {
         /// Create file_builder to write a new page_file.
         pub(crate) async fn new_file_builder(&self, file_id: u32) -> Result<FileBuilder> {
             // TODO: switch to env in suitable time.
+            use std::os::unix::prelude::OpenOptionsExt;
             let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
             let flags = self.writer_flags();
             let writer = OpenOptions::new()

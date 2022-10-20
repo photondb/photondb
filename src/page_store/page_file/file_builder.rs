@@ -463,12 +463,15 @@ impl BufferedWriter {
 
 #[cfg(test)]
 mod tests {
-    use photonio::io::ReadAtExt;
 
     use super::*;
 
     #[photonio::test]
     async fn test_buffered_writer() {
+        use std::os::unix::prelude::OpenOptionsExt;
+
+        use photonio::io::ReadAtExt;
+
         let (use_direct, flags) = (true, 0x4000);
         let path1 = std::env::temp_dir().join("buf_test1");
         {
@@ -494,7 +497,9 @@ mod tests {
                 .expect("open file_id: {file_id}'s file fail");
             let mut buf = vec![0u8; 1];
             file2.read_exact_at(&mut buf, 4096 * 3).await.unwrap();
-            assert_eq!(buf[0], 3)
+            assert_eq!(buf[0], 3);
+            let length = file2.metadata().await.unwrap().len();
+            assert_eq!(length, 10 + (4096 * 2 + 1) * 2)
         }
     }
 }
