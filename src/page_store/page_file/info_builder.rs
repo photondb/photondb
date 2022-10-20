@@ -42,7 +42,7 @@ impl FileInfoBuilder {
     // It copies the old file infos before add new file.
     // It could help version to prepare new Version's `active_files` after flush a
     // new page file.
-    pub async fn add_file_info(
+    pub(crate) async fn add_file_info(
         &self,
         files: HashMap<u32, FileInfo>,
         new_file_id: &u32,
@@ -96,6 +96,7 @@ impl FileInfoBuilder {
         let raw_file = File::open(&path).await.expect("file {path} not exist");
         let raw_metadata = raw_file.metadata().await.expect("read file metadata file");
         FileReader::open(raw_file, raw_metadata.len() as u32, *file_id)
+            .await
             .expect("open file reader error")
     }
 }

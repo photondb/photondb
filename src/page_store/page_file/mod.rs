@@ -98,13 +98,26 @@ pub(crate) mod facade {
                 .join(format!("{}_{}", self.file_prefix, file_meta.get_file_id()));
             let reader = File::open(path)
                 .await
-                .expect("expect file_id: {file_id}'s file already exist");
+                .expect("open reader for file_id: {file_id} fail");
             FileReader::open_with_meta(reader, file_meta)
         }
 
         // Create info_builder to help recovery & mantains version's file_info.
         pub(crate) fn new_info_builder(&self) -> FileInfoBuilder {
             FileInfoBuilder::new(self.base.to_owned(), &self.file_prefix)
+        }
+
+        pub(self) async fn open_file_meta(&self, file_id: u32) -> Result<Arc<FileMeta>> {
+            let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
+            let reader = File::open(path)
+                .await
+                .expect("open reader for file_id: {file_id} fail");
+            let file_size = reader
+                .metadata()
+                .await
+                .expect("read fs metadata fail")
+                .len();
+            FileReader::open_file_meta(&reader, file_size as u32, file_id).await
         }
     }
 
@@ -120,6 +133,52 @@ pub(crate) mod facade {
             builder.add_delete_pages(&[1, 2]);
             builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
             builder.finish().await.unwrap();
+        }
+
+        #[photonio::test]
+        fn test_test_simple_write_reader() {
+            let files = {
+                let base = std::env::temp_dir();
+                PageFiles::new(&base, "testdata")
+            };
+
+            let file_id = 2;
+            {
+                let mut b = files.new_file_builder(file_id).await.unwrap();
+                b.add_delete_pages(&[page_addr(1, 0), page_addr(1, 1)]);
+                b.add_page(1, page_addr(2, 2), &[7].repeat(8192))
+                    .await
+                    .unwrap();
+                b.add_page(2, page_addr(2, 3), &[8].repeat(8192 / 2))
+                    .await
+                    .unwrap();
+                b.add_page(3, page_addr(2, 4), &[9].repeat(8192 / 3))
+                    .await
+                    .unwrap();
+                b.finish().await.unwrap();
+            }
+            {
+                let file_meta = files.open_file_meta(file_id).await.unwrap(); // normally get from current version, no need reopen.
+                assert_eq!(file_meta.total_page_size(), 8192 + 8192 / 2 + 8192 / 3);
+
+                let reader = files.open_file_reader(file_meta.to_owned()).await.unwrap();
+                let page3 = page_addr(2, 4);
+                let (_, page3_size) = file_meta.get_page_handle(page3).unwrap();
+                assert_eq!(page3_size, 8192 / 3);
+                let mut buf = vec![0u8; page3_size];
+                reader.read_page(page3, &mut buf).await.unwrap();
+                assert_eq!(buf.as_slice(), &[9].repeat(buf.len()));
+
+                let page_table = reader.read_page_table().await.unwrap();
+                assert_eq!(page_table.len(), 3);
+
+                let delete_tables = reader.read_delete_pages().await.unwrap();
+                assert_eq!(delete_tables.len(), 2);
+            }
+        }
+
+        fn page_addr(file_id: u32, index: u32) -> u64 {
+            ((file_id as u64) << 32) | (index as u64)
         }
     }
 }
