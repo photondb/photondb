@@ -1,11 +1,49 @@
-use std::{marker::PhantomData, ops::Deref};
+use std::{cmp::Ordering, marker::PhantomData, ops::Deref};
 
 use super::{
     Key, PageBuf, PageBuilder, PageKind, PageRef, PageTier, RewindableIterator, SeekableIterator,
 };
 use crate::util::codec::{DecodeFrom, EncodeTo};
 
-type SortedItem<'a, V> = (Key<'a>, V);
+pub(crate) struct SortedItem<'a, V>(pub(crate) Key<'a>, pub(crate) V);
+
+impl<'a, V> Eq for SortedItem<'a, V> {}
+
+impl<'a, V> PartialEq for SortedItem<'a, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<'a, V> Ord for SortedItem<'a, V> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+impl<'a, V> PartialOrd for SortedItem<'a, V> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a, V: Clone> Clone for SortedItem<'a, V> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), self.1.clone())
+    }
+}
+
+impl<'a, V> From<(Key<'a>, V)> for SortedItem<'a, V> {
+    fn from((k, v): (Key<'a>, V)) -> Self {
+        Self(k, v)
+    }
+}
+
+impl<'a, V> From<SortedItem<'a, V>> for (Key<'a>, V) {
+    fn from(item: SortedItem<'a, V>) -> Self {
+        (item.0, item.1)
+    }
+}
 
 pub(crate) struct SortedPageBuilder<'a, I, V>
 where
@@ -62,11 +100,7 @@ impl<'a, V> SortedPageRef<'a, V> {
         todo!()
     }
 
-    pub(crate) fn find(&self, target: &Key<'_>) -> Option<SortedItem<'a, V>> {
-        todo!()
-    }
-
-    pub(crate) fn rank(&self, target: &Key<'_>) -> usize {
+    pub(crate) fn rank(&self, target: &Key<'_>) -> Result<usize, usize> {
         todo!()
     }
 
@@ -127,7 +161,7 @@ impl<'a, V> Iterator for SortedPageIter<'a, V> {
 
 impl<'a, V> SeekableIterator<Key<'_>> for SortedPageIter<'a, V> {
     fn seek(&mut self, target: &Key<'_>) {
-        self.next = self.page.rank(target);
+        todo!()
     }
 
     fn seek_back(&mut self, target: &Key<'_>) {
