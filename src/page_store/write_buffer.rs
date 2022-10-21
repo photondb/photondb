@@ -127,7 +127,7 @@ impl WriteBuffer {
             + record_size(deleted_pages_size);
         debug_assert_eq!(need % ALIGN, 0);
 
-        let mut offset = self.alloc_size(need)?;
+        let mut offset = self.alloc_size(need, true)?;
         let mut records = Vec::with_capacity(new_page_list.len());
         for (page_id, page_size) in new_page_list {
             let (page_id, page_size) = (*page_id, *page_size);
@@ -154,10 +154,14 @@ impl WriteBuffer {
     /// Allocate new page from the buffer.
     pub(crate) fn alloc_page(
         &self,
+        page_id: u64,
         page_size: u32,
         acquire_writer: bool,
     ) -> Result<(u64, &mut RecordHeader, PageBuf)> {
-        todo!()
+        let acquire_size = record_size(page_size);
+        let offset = self.alloc_size(acquire_size, acquire_writer)?;
+        // Safety: here is the only one reference to the record.
+        Ok(unsafe { self.new_page_at(offset, page_id, page_size) })
     }
 
     pub(crate) fn save_deleted_pages(
@@ -165,7 +169,13 @@ impl WriteBuffer {
         page_addrs: &[u64],
         acquire_writer: bool,
     ) -> Result<&mut RecordHeader> {
-        todo!()
+        let deleted_pages_size = (page_addrs.len() * core::mem::size_of::<u64>()) as u32;
+        let acquire_size = record_size(deleted_pages_size);
+        let offset = self.alloc_size(acquire_size, acquire_writer)?;
+        // Safety: here is the only one reference to the record.
+        let (header, body) = unsafe { self.new_deleted_pages_record_at(offset, page_addrs.len()) };
+        body.copy_from_slice(page_addrs);
+        Ok(header)
     }
 
     /// Release the writer guard acquired before.
@@ -360,7 +370,7 @@ impl WriteBuffer {
 
     /// Allocate memory and install writer. Returns the address of the first
     /// byte.
-    fn alloc_size(&self, need: u32) -> Result<u32> {
+    fn alloc_size(&self, need: u32, acquire_writer: bool) -> Result<u32> {
         let mut current = self.buffer_state.load(Ordering::Acquire);
         loop {
             let mut state = BufferState::load(current);
@@ -368,7 +378,9 @@ impl WriteBuffer {
                 return Err(Error::Again);
             }
 
-            state.inc_writer();
+            if acquire_writer {
+                state.inc_writer();
+            }
             let offset = state.alloc_size(need, self.buf_size as u32)?;
             let new = state.apply();
             match self.buffer_state.compare_exchange(
@@ -831,5 +843,27 @@ mod tests {
             }
         }
         assert!(active_pages.is_empty());
+    }
+
+    #[test]
+    fn write_buffer_pages_alloc() {
+        let buf = WriteBuffer::with_capacity(1, 1 << 20);
+
+        // 1. alloc normal pages
+        buf.alloc_page(1, 123, true).unwrap();
+
+        // 2. alloc deleted pages
+        buf.save_deleted_pages(&[5, 6, 7], false).unwrap();
+
+        // 3. alloc but set page as tombstone.
+        let (_, header, _) = buf.alloc_page(2, 222, false).unwrap();
+        header.set_tombstone();
+        drop(header);
+
+        let header = buf.save_deleted_pages(&[1, 3, 4], false).unwrap();
+        header.set_tombstone();
+        drop(header);
+
+        unsafe { buf.release_writer() };
     }
 }
