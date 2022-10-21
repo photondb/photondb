@@ -171,6 +171,30 @@ impl Version {
     pub(crate) fn files(&self) -> &HashMap<u32, FileInfo> {
         &self.inner.files
     }
+
+    /// Invoke `f` with the specified [`WriteBuffer`].
+    ///
+    /// # Panic
+    ///
+    /// This function panics if the [`WriteBuffer`] of the specified `file_id`
+    /// is not exists.
+    pub(crate) fn with_write_buffer<F, O>(&self, file_id: u32, f: F) -> O
+    where
+        F: FnOnce(&WriteBuffer) -> O,
+    {
+        if self.inner.buffers_range.contains(&file_id) {
+            let index = (file_id - self.inner.buffers_range.start) as usize;
+            if index >= self.inner.write_buffers.len() {
+                panic!("buffers_range is invalid");
+            }
+            return f(self.inner.write_buffers[index].as_ref());
+        }
+
+        // TODO: load write buffer from version directly.
+        let current = self.buffer_set.current();
+        let write_buffer = current.write_buffer(file_id).expect("No such write buffer");
+        f(write_buffer.as_ref())
+    }
 }
 
 impl NextVersion {
@@ -247,7 +271,7 @@ impl BufferSet {
     }
 
     /// Obtains a reference of current [`BufferSetVersion`].
-    pub(crate) fn current(&self) -> BufferSetRef<'_> {
+    pub(crate) fn current<'a>(&self) -> BufferSetRef<'a> {
         let guard = buffer_set_guard::pin();
         let current = unsafe { self.current_without_guard() };
         BufferSetRef {
@@ -323,7 +347,7 @@ impl BufferSet {
     /// # Safety
     ///
     /// This should be guard by `buffer_set_guard::pin`.
-    unsafe fn current_without_guard(&self) -> &BufferSetVersion {
+    unsafe fn current_without_guard<'a>(&self) -> &'a BufferSetVersion {
         // Safety:
         // 1. Obtained from `Box::new`, so it is aligned and not null.
         // 2. There is not mutable references pointer to it.
@@ -362,7 +386,18 @@ impl BufferSetVersion {
     /// If the user needs to access the [`WriteBuffer`] for a long time, use
     /// `clone` to make a copy.
     pub(crate) fn write_buffer(&self, file_id: u32) -> Option<&Arc<WriteBuffer>> {
-        todo!()
+        if !self.buffers_range.contains(&file_id) {
+            return None;
+        }
+
+        let index = (file_id - self.buffers_range.start) as usize;
+        if index < self.sealed_buffers.len() {
+            Some(&self.sealed_buffers[index])
+        } else if index == self.sealed_buffers.len() {
+            Some(&self.current_buffer)
+        } else {
+            panic!("buffers_range is invalid")
+        }
     }
 
     #[inline]

@@ -1,9 +1,9 @@
-use std::{rc::Rc, sync::Arc};
+use std::{collections::HashMap, rc::Rc, sync::Arc};
 
 use super::{
     version::Version,
     write_buffer::{RecordHeader, ReleaseState},
-    PageTable, Result, WriteBuffer,
+    PageTable, Result, WriteBuffer, NAN_ID,
 };
 use crate::page::{PageBuf, PageRef};
 
@@ -13,19 +13,19 @@ pub(crate) struct Guard {
 }
 
 impl Guard {
-    pub fn new(version: Rc<Version>, page_table: PageTable) -> Self {
+    pub(crate) fn new(version: Rc<Version>, page_table: PageTable) -> Self {
         Guard {
             version,
             page_table,
         }
     }
 
-    pub(crate) fn begin(&self) -> PageTxn<'_> {
+    pub(crate) fn begin(&self) -> PageTxn {
         PageTxn {
             guard: self,
             file_id: self.version.active_write_buffer_id(),
-            records: Vec::default(),
-            deallocated_ids: Vec::default(),
+            records: HashMap::default(),
+            deleted_pages: Vec::default(),
         }
     }
 
@@ -42,24 +42,44 @@ pub(crate) struct PageTxn<'a> {
     guard: &'a Guard,
 
     file_id: u32,
-    records: Vec<&'a mut RecordHeader>,
-    deallocated_ids: Vec<u64>,
+    records: HashMap<u64 /* page addr */, &'a mut RecordHeader>,
+    deleted_pages: Vec<&'a mut RecordHeader>,
 }
 
 impl<'a> PageTxn<'a> {
     pub(crate) fn alloc_page(&mut self, size: usize) -> Result<(u64, PageBuf<'a>)> {
-        todo!()
+        let page_size = size as u32;
+        let (addr, header, buf) = self.alloc_page_inner(page_size)?;
+        self.records.insert(addr, header);
+        Ok((addr, buf))
     }
 
-    pub(crate) fn dealloc_pages(&mut self, addrs: &[u64]) {
-        todo!()
+    /// Dealloc pages allocated from another txn.
+    pub(crate) fn dealloc_pages(&mut self, addrs: &[u64]) -> Result<()> {
+        for addr in addrs {
+            if self.records.contains_key(addr) {
+                panic!("dealloc pages allocated in the same txn is prohibited.")
+            }
+        }
+
+        let header = self.dealloc_pages_inner(addrs)?;
+        self.deleted_pages.push(header);
+        Ok(())
     }
 
     pub(crate) fn insert_page(&mut self, addr: u64) -> u64 {
-        todo!()
+        let header = self.records.get_mut(&addr).expect("no such pages");
+        if header.is_tombstone() {
+            panic!("insert page with tombstone");
+        }
+
+        // TODO: safety conditions
+        let page_id = unsafe { self.guard.page_table.alloc() }.expect("page id is exhausted");
+        header.set_page_id(page_id);
+        page_id
     }
 
-    pub(crate) fn delete_page(&mut self, id: u64) {
+    pub(crate) fn delete_page(&mut self, _id: u64) {
         todo!()
     }
 
@@ -87,6 +107,31 @@ impl<'a> PageTxn<'a> {
             self.guard.version.buffer_set.notify_flush_job();
         }
         Ok(())
+    }
+
+    #[inline]
+    fn is_first_op(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    #[inline]
+    fn alloc_page_inner(&self, page_size: u32) -> Result<(u64, &'a mut RecordHeader, PageBuf<'a>)> {
+        self.guard
+            .version
+            .with_write_buffer(self.file_id, |write_buffer| unsafe {
+                // Safety: [`guard`] guarantees the lifetime of the page reference.
+                write_buffer.alloc_page(NAN_ID, page_size, self.is_first_op())
+            })
+    }
+
+    #[inline]
+    fn dealloc_pages_inner(&self, page_addrs: &[u64]) -> Result<&'a mut RecordHeader> {
+        self.guard
+            .version
+            .with_write_buffer(self.file_id, |write_buffer| unsafe {
+                // Safety: [`guard`] guarantees the lifetime of the page reference.
+                write_buffer.dealloc_pages(page_addrs, self.is_first_op())
+            })
     }
 }
 
