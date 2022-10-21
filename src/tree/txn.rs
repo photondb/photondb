@@ -1,11 +1,6 @@
 use super::{iter::*, Tree};
 use crate::{env::Env, page::*, page_store::*};
 
-// The id of the root page is always 0.
-const ROOT_ID: u64 = 0;
-// An invalid id for pages other than the root.
-const NULL_ID: u64 = 0;
-
 pub(super) struct Txn<'a, E> {
     tree: &'a Tree<E>,
     guard: Guard,
@@ -71,7 +66,7 @@ impl<'a, E> Txn<'a, E> {
     /// Returns the leaf page and its parent.
     async fn find_leaf(&self, key: &Key<'_>) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
         // The index, range, and parent of the current page, starting from the root.
-        let mut index = Index::new(ROOT_ID);
+        let mut index = Index::new(MIN_ID, 0);
         let mut range = Range::default();
         let mut parent = None;
         loop {
@@ -201,8 +196,7 @@ impl<'a, E> Txn<'a, E> {
                 let mut iter = InnerDataPageIter::from(page);
                 iter.seek_back(key);
                 if let Some(SortedItem(start, index)) = iter.next() {
-                    // Ignore placeholders
-                    if index.id != NULL_ID {
+                    if index.id != NAN_ID {
                         let mut range = Range::default();
                         range.start = start;
                         if let Some(SortedItem(end, _)) = iter.next() {
@@ -238,7 +232,7 @@ impl<'a, E> Txn<'a, E> {
                 txn.insert_page(new_addr)
             };
             // Build a delta page with the right index.
-            let delta = SortedItem(split_key, Index::new(right_id));
+            let delta = SortedItem(split_key, Index::new(right_id, 0));
             let builder = SortedPageBuilder::new(view.page.tier(), PageKind::Split)
                 .with_iter(ItemIter::new(delta));
             let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
@@ -271,7 +265,7 @@ impl<'a, E> Txn<'a, E> {
             PageKind::Split => {
                 if let Some(parent) = parent {
                     self.reconcile_split_page(view, parent).await?;
-                } else if view.id == ROOT_ID {
+                } else if view.id == MIN_ID {
                     self.reconcile_split_root(view).await?;
                 } else {
                     return Err(Error::InvalidArgument);
@@ -288,7 +282,7 @@ impl<'a, E> Txn<'a, E> {
         mut parent: PageView<'_>,
     ) -> Result<()> {
         let left_key = view.range.start;
-        let left_index = Index::with_epoch(view.id, view.page.epoch());
+        let left_index = Index::new(view.id, view.page.epoch());
         let (split_key, split_index) = split_delta_from_page(view.page);
         // Build a delta page with the child on the left and the new split page on
         // the right.
@@ -298,7 +292,7 @@ impl<'a, E> Txn<'a, E> {
                 SortedItem(left_key, left_index),
                 SortedItem(split_key, split_index),
                 // This is a placeholder to indicate the range end of the right page.
-                SortedItem(range_end, Index::new(NULL_ID)),
+                SortedItem(range_end, Index::new(NAN_ID, 0)),
             ]
         } else {
             vec![
@@ -328,12 +322,12 @@ impl<'a, E> Txn<'a, E> {
 
     // Reconciles a pending split on the root page.
     async fn reconcile_split_root(&self, view: PageView<'_>) -> Result<()> {
-        debug_assert_eq!(view.id, ROOT_ID);
+        debug_assert_eq!(view.id, MIN_ID);
         // Move the root to another place.
         let mut txn = self.guard.begin();
         let left_id = txn.insert_page(view.addr);
         let left_key = Key::default();
-        let left_index = Index::with_epoch(left_id, view.page.epoch());
+        let left_index = Index::new(left_id, view.page.epoch());
         let (split_key, split_index) = split_delta_from_page(view.page);
         // Build a new root with the original root on the left and the new split page on
         // the right.
@@ -368,8 +362,8 @@ impl<'a, E> Txn<'a, E> {
                 new_page.set_epoch(view.page.epoch());
                 new_page.set_chain_len(cons.last_page.chain_len());
                 new_page.set_chain_next(cons.last_page.chain_next());
-                // TODO: deallocate pages
-                txn.replace_page(view.id, view.addr, new_addr)
+                txn.dealloc_pages(&cons.page_addrs);
+                txn.update_page(view.id, view.addr, new_addr)
                     .map(|_| {
                         self.tree.stats.success.consolidate_page.inc();
                     })

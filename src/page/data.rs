@@ -9,7 +9,7 @@ pub(crate) struct Key<'a> {
 }
 
 impl<'a> Key<'a> {
-    pub(crate) fn new(raw: &'a [u8], lsn: u64) -> Self {
+    pub(crate) const fn new(raw: &'a [u8], lsn: u64) -> Self {
         Self { raw, lsn }
     }
 }
@@ -84,11 +84,7 @@ pub(crate) struct Index {
 }
 
 impl Index {
-    pub(crate) const fn new(id: u64) -> Self {
-        Self { id, epoch: 0 }
-    }
-
-    pub(crate) const fn with_epoch(id: u64, epoch: u64) -> Self {
+    pub(crate) const fn new(id: u64, epoch: u64) -> Self {
         Self { id, epoch }
     }
 }

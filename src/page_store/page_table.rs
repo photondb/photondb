@@ -7,6 +7,10 @@ use std::{
     },
 };
 
+pub(crate) const NAN_ID: u64 = 0;
+pub(crate) const MIN_ID: u64 = 1;
+pub(crate) const MAX_ID: u64 = L2_FANOUT - 1;
+
 /// A table that maps page ids to page addresses.
 #[derive(Clone, Default)]
 pub(crate) struct PageTable {
@@ -39,10 +43,6 @@ impl PageTable {
     }
 }
 
-const NAN: u64 = 0;
-const MIN: u64 = 1;
-const MAX: u64 = L2_FANOUT - 1;
-
 struct Inner {
     // Level 0: [0, L0_FANOUT)
     l0: Box<L0<L0_LEN>>,
@@ -63,8 +63,8 @@ impl Default for Inner {
             l0: Box::default(),
             l1: Box::default(),
             l2: Box::default(),
-            next: AtomicU64::new(MIN),
-            free: AtomicU64::new(NAN),
+            next: AtomicU64::new(MIN_ID),
+            free: AtomicU64::new(NAN_ID),
         }
     }
 }
@@ -84,7 +84,7 @@ impl Inner {
 
     fn alloc(&self) -> Option<u64> {
         let mut id = self.free.load(Ordering::Acquire);
-        while id != NAN {
+        while id != NAN_ID {
             let next = self.index(id).load(Ordering::Acquire);
             match self
                 .free
@@ -94,13 +94,13 @@ impl Inner {
                 Err(actual) => id = actual,
             }
         }
-        if id == NAN {
+        if id == NAN_ID {
             id = self.next.load(Ordering::Relaxed);
-            if id < MAX {
+            if id < MAX_ID {
                 id = self.next.fetch_add(1, Ordering::Relaxed);
             }
         }
-        if id < MAX {
+        if id < MAX_ID {
             Some(id)
         } else {
             None
