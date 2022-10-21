@@ -309,7 +309,7 @@ dependencies = [
 [[package]]
 name = "photonio"
 version = "0.0.4"
-source = "git+https://github.com/photondb/photonio.git?rev=0fb0482#0fb04822664df1965b23ef4a74efe8f93b5c6416"
+source = "git+https://github.com/photondb/photonio.git#58fa9c0bcc4003386b2a078a6c1eec9e2aa7473c"
 dependencies = [
  "photonio-macros",
  "photonio-tokio",
@@ -319,12 +319,12 @@ dependencies = [
 [[package]]
 name = "photonio-base"
 version = "0.0.4"
-source = "git+https://github.com/photondb/photonio.git?rev=0fb0482#0fb04822664df1965b23ef4a74efe8f93b5c6416"
+source = "git+https://github.com/photondb/photonio.git#58fa9c0bcc4003386b2a078a6c1eec9e2aa7473c"
 
 [[package]]
 name = "photonio-macros"
 version = "0.0.4"
-source = "git+https://github.com/photondb/photonio.git?rev=0fb0482#0fb04822664df1965b23ef4a74efe8f93b5c6416"
+source = "git+https://github.com/photondb/photonio.git#58fa9c0bcc4003386b2a078a6c1eec9e2aa7473c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -334,7 +334,7 @@ dependencies = [
 [[package]]
 name = "photonio-tokio"
 version = "0.0.4"
-source = "git+https://github.com/photondb/photonio.git?rev=0fb0482#0fb04822664df1965b23ef4a74efe8f93b5c6416"
+source = "git+https://github.com/photondb/photonio.git#58fa9c0bcc4003386b2a078a6c1eec9e2aa7473c"
 dependencies = [
  "futures",
  "photonio-base",
@@ -344,7 +344,7 @@ dependencies = [
 [[package]]
 name = "photonio-uring"
 version = "0.0.4"
-source = "git+https://github.com/photondb/photonio.git?rev=0fb0482#0fb04822664df1965b23ef4a74efe8f93b5c6416"
+source = "git+https://github.com/photondb/photonio.git#58fa9c0bcc4003386b2a078a6c1eec9e2aa7473c"
 dependencies = [
  "futures",
  "io-uring",
