@@ -3,6 +3,7 @@ use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
     ptr::NonNull,
+    slice,
 };
 
 /// Page format {
@@ -17,6 +18,8 @@ const PAGE_EPOCH_LEN: usize = 6;
 const PAGE_HEADER_LEN: usize = 16;
 
 /// A raw pointer to a page.
+///
+/// This is an unsafe interface for internal use.
 #[derive(Copy, Clone)]
 pub(crate) struct PagePtr {
     ptr: NonNull<u8>,
@@ -24,7 +27,9 @@ pub(crate) struct PagePtr {
 }
 
 impl PagePtr {
-    pub(crate) fn new(ptr: NonNull<u8>, len: usize) -> Self {
+    unsafe fn new(ptr: NonNull<u8>, len: usize) -> Self {
+        debug_assert!(ptr.as_ptr().is_aligned_to(8));
+        debug_assert!(len >= PAGE_HEADER_LEN);
         PagePtr { ptr, len }
     }
 
@@ -85,6 +90,21 @@ impl PagePtr {
     pub(crate) fn set_chain_next(&mut self, addr: u64) {
         unsafe { self.chain_next_ptr().write(addr) }
     }
+
+    /// Returns a byte slice of the page data.
+    pub(crate) fn data(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+
+    /// Returns a byte slice of the page content.
+    pub(super) fn content(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.content_ptr(), self.len - PAGE_HEADER_LEN) }
+    }
+
+    /// Returns a mutable byte slice of the page content.
+    pub(super) fn content_mut(&self) -> &mut [u8] {
+        unsafe { slice::from_raw_parts_mut(self.content_ptr(), self.len - PAGE_HEADER_LEN) }
+    }
 }
 
 impl PagePtr {
@@ -106,6 +126,10 @@ impl PagePtr {
 
     unsafe fn chain_next_ptr(&self) -> *mut u64 {
         (self.as_ptr() as *mut u64).add(1)
+    }
+
+    unsafe fn content_ptr(&self) -> *mut u8 {
+        self.as_ptr().add(PAGE_HEADER_LEN)
     }
 
     fn flags(&self) -> PageFlags {
@@ -132,15 +156,19 @@ impl fmt::Debug for PagePtr {
 /// A mutable reference to a page.
 pub(crate) struct PageBuf<'a> {
     ptr: PagePtr,
-    _marker: PhantomData<&'a mut [u8]>,
+    _marker: PhantomData<&'a mut ()>,
 }
 
 impl<'a> PageBuf<'a> {
-    pub(crate) fn new(ptr: PagePtr) -> Self {
-        PageBuf {
-            ptr,
-            _marker: PhantomData,
-        }
+    /// Creates a page buffer from a byte slice.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the slice is not aligned to 8 bytes, or the
+    /// slice is shorter than `PAGE_HEADER_LEN`.
+    pub(crate) fn new(buf: &'a mut [u8]) -> Self {
+        let ptr = unsafe { NonNull::new_unchecked(buf.as_mut_ptr()) };
+        unsafe { PagePtr::new(ptr, buf.len()).into() }
     }
 }
 
@@ -158,10 +186,12 @@ impl<'a> DerefMut for PageBuf<'a> {
     }
 }
 
-impl<'a> From<&'a mut [u8]> for PageBuf<'a> {
-    fn from(buf: &'a mut [u8]) -> Self {
-        let ptr = unsafe { NonNull::new_unchecked(buf.as_mut_ptr()) };
-        Self::new(PagePtr::new(ptr, buf.len()))
+impl<'a> From<PagePtr> for PageBuf<'a> {
+    fn from(ptr: PagePtr) -> Self {
+        PageBuf {
+            ptr,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -169,22 +199,19 @@ impl<'a> From<&'a mut [u8]> for PageBuf<'a> {
 #[derive(Copy, Clone)]
 pub(crate) struct PageRef<'a> {
     ptr: PagePtr,
-    _marker: PhantomData<&'a [u8]>,
+    _marker: PhantomData<&'a ()>,
 }
 
 impl<'a> PageRef<'a> {
-    pub(crate) fn new(ptr: PagePtr) -> Self {
-        Self {
-            ptr,
-            _marker: PhantomData,
-        }
-    }
-
-    pub(crate) fn as_slice(&self) -> &[u8] {
-        // Safety:
-        // 1. the entire range of memory to access is valid and initialized.
-        // 2. there no any mutable references pointer to the target range.
-        unsafe { std::slice::from_raw_parts(self.ptr.ptr.as_ptr(), self.len) }
+    /// Creates a page buffer from a byte slice.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the slice is not aligned to 8 bytes, or the
+    /// slice is shorter than `PAGE_HEADER_LEN`.
+    pub(crate) fn new(buf: &'a [u8]) -> Self {
+        let ptr = unsafe { NonNull::new_unchecked(buf.as_ptr() as *mut _) };
+        unsafe { PagePtr::new(ptr, buf.len()).into() }
     }
 }
 
@@ -196,16 +223,18 @@ impl<'a> Deref for PageRef<'a> {
     }
 }
 
-impl<'a> From<&'a [u8]> for PageRef<'a> {
-    fn from(buf: &'a [u8]) -> Self {
-        let ptr = unsafe { NonNull::new_unchecked(buf.as_ptr() as *mut _) };
-        Self::new(PagePtr::new(ptr, buf.len()))
+impl<'a> From<PagePtr> for PageRef<'a> {
+    fn from(ptr: PagePtr) -> Self {
+        Self {
+            ptr,
+            _marker: PhantomData,
+        }
     }
 }
 
 impl<'a> From<PageBuf<'a>> for PageRef<'a> {
     fn from(buf: PageBuf<'a>) -> Self {
-        Self::new(buf.ptr)
+        buf.ptr.into()
     }
 }
 
@@ -311,12 +340,20 @@ impl PageBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::alloc::{alloc, Layout};
+
     use super::*;
 
     #[test]
     fn page() {
-        let mut buf = [0u8; PAGE_HEADER_LEN];
-        let mut page = PageBuf::from(buf.as_mut_slice());
+        let layout = Layout::from_size_align(PAGE_HEADER_LEN, 8).unwrap();
+        let mut buf = unsafe {
+            let ptr = alloc(layout);
+            let buf = slice::from_raw_parts_mut(ptr, layout.size());
+            Box::from_raw(buf)
+        };
+
+        let mut page = PageBuf::new(buf.as_mut());
         {
             let builder = PageBuilder::new(PageTier::Leaf, PageKind::Data);
             builder.build(&mut page);

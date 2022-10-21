@@ -425,10 +425,11 @@ impl WriteBuffer {
         let page_addr = ((self.file_id as u64) << 32) | (page_offset as u64);
 
         // Construct `PageBuf`.
-        let ptr =
-            unsafe { NonNull::new_unchecked((header as *mut RecordHeader).offset(1).cast::<u8>()) };
-        let addr = PagePtr::new(ptr, page_size as usize);
-        let page_buf = PageBuf::new(addr);
+        let buf = unsafe {
+            let ptr = (header as *mut RecordHeader).offset(1).cast::<u8>();
+            std::slice::from_raw_parts_mut(ptr, page_size as usize)
+        };
+        let page_buf = PageBuf::new(buf);
 
         (page_addr, header, page_buf)
     }
@@ -592,16 +593,12 @@ impl RecordHeader {
     fn record_ref(&self) -> Option<RecordRef> {
         match RecordFlags::from_bits_truncate(self.flags) {
             RecordFlags::NORMAL_PAGE => {
-                let addr = unsafe {
-                    // Safety: the target address is valid and initialized.
-                    let addr = (self as *const RecordHeader).offset(1).cast::<u8>();
-                    NonNull::new_unchecked(addr as *mut u8)
+                let buf = unsafe {
+                    // Safety: the target pointer is valid and initialized.
+                    let ptr = (self as *const RecordHeader).offset(1).cast::<u8>();
+                    std::slice::from_raw_parts(ptr, self.page_size as usize)
                 };
-                let size = self.page_size;
-                Some(RecordRef::Page(PageRef::new(PagePtr::new(
-                    addr,
-                    size as usize,
-                ))))
+                Some(RecordRef::Page(PageRef::new(buf)))
             }
             RecordFlags::DELETED_PAGES => {
                 let size = self.page_size as usize / core::mem::size_of::<u64>();

@@ -65,7 +65,7 @@ where
         }
     }
 
-    pub(crate) fn with_iter(mut self, iter: I) -> Self {
+    pub(crate) fn with_iter(mut self, mut iter: I) -> Self {
         self.iter = Some(iter);
         self
     }
@@ -75,7 +75,7 @@ where
     }
 
     pub(crate) fn build(&self, page: &mut PageBuf<'_>) {
-        todo!()
+        self.base.build(page);
     }
 }
 
