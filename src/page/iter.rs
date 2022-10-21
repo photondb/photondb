@@ -88,7 +88,7 @@ impl<'a, T: Clone> RewindableIterator for SliceIter<'a, T> {
 
 /// A wrapper to order an [`Iterator`] by its next item and rank.
 #[derive(Debug)]
-struct OrderedIter<I>
+pub(crate) struct OrderedIter<I>
 where
     I: Iterator,
 {
@@ -114,31 +114,31 @@ where
     }
 }
 
-impl<I> Eq for OrderedIter<I>
+impl<I, K, V> Eq for OrderedIter<I>
 where
-    I: Iterator,
-    I::Item: Ord,
+    I: Iterator<Item = (K, V)>,
+    K: Ord,
 {
 }
 
-impl<I> PartialEq for OrderedIter<I>
+impl<I, K, V> PartialEq for OrderedIter<I>
 where
-    I: Iterator,
-    I::Item: Ord,
+    I: Iterator<Item = (K, V)>,
+    K: Ord,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.next == other.next
+        self.cmp(other) == Ordering::Equal
     }
 }
 
-impl<I> Ord for OrderedIter<I>
+impl<I, K, V> Ord for OrderedIter<I>
 where
-    I: Iterator,
-    I::Item: Ord,
+    I: Iterator<Item = (K, V)>,
+    K: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         let mut ord = match (&self.next, &other.next) {
-            (Some(a), Some(b)) => a.cmp(b),
+            (Some(a), Some(b)) => a.0.cmp(&b.0),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
             (None, None) => Ordering::Equal,
@@ -150,10 +150,10 @@ where
     }
 }
 
-impl<I> PartialOrd for OrderedIter<I>
+impl<I, K, V> PartialOrd for OrderedIter<I>
 where
-    I: Iterator,
-    I::Item: Ord,
+    I: Iterator<Item = (K, V)>,
+    K: Ord,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -197,7 +197,7 @@ where
 pub(crate) struct MergingIter<I>
 where
     I: Iterator,
-    I::Item: Ord,
+    OrderedIter<I>: Iterator + Ord,
 {
     heap: BinaryHeap<Reverse<OrderedIter<I>>>,
 }
@@ -205,7 +205,7 @@ where
 impl<I> MergingIter<I>
 where
     I: Iterator,
-    I::Item: Ord,
+    OrderedIter<I>: Iterator + Ord,
 {
     fn init(mut vec: Vec<Reverse<OrderedIter<I>>>) -> Self {
         for iter in vec.iter_mut() {
@@ -230,7 +230,7 @@ where
 impl<I> Iterator for MergingIter<I>
 where
     I: Iterator,
-    I::Item: Ord,
+    OrderedIter<I>: Iterator<Item = I::Item> + Ord,
 {
     type Item = I::Item;
 
@@ -245,8 +245,8 @@ where
 
 impl<I, T> SeekableIterator<T> for MergingIter<I>
 where
-    I: SeekableIterator<T>,
-    I::Item: Ord,
+    I: Iterator,
+    OrderedIter<I>: SeekableIterator<T, Item = I::Item> + Ord,
 {
     fn seek(&mut self, target: &T) {
         self.for_each(|iter| iter.0.seek(target))
@@ -255,8 +255,8 @@ where
 
 impl<I> RewindableIterator for MergingIter<I>
 where
-    I: RewindableIterator,
-    I::Item: Ord,
+    I: Iterator,
+    OrderedIter<I>: RewindableIterator<Item = I::Item> + Ord,
 {
     fn rewind(&mut self) {
         self.for_each(|iter| iter.0.rewind());
@@ -268,15 +268,14 @@ where
 pub(crate) struct MergingIterBuilder<I>
 where
     I: Iterator,
-    I::Item: Ord,
 {
     iters: Vec<Reverse<OrderedIter<I>>>,
 }
 
-impl<I> MergingIterBuilder<I>
+impl<I, K, V> MergingIterBuilder<I>
 where
-    I: Iterator,
-    I::Item: Ord,
+    I: Iterator<Item = (K, V)>,
+    K: Ord,
 {
     pub(crate) fn new() -> Self {
         Self { iters: Vec::new() }
@@ -305,7 +304,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{super::SortedItem, *};
+    use super::*;
 
     #[test]
     fn item_iter() {
@@ -328,48 +327,6 @@ mod tests {
         }
     }
 
-    struct SortedItemIter<I, K, V>(I)
-    where
-        I: Iterator<Item = SortedItem<K, V>>,
-        K: Ord;
-
-    impl<I, K, V> Iterator for SortedItemIter<I, K, V>
-    where
-        I: Iterator<Item = SortedItem<K, V>>,
-        K: Ord,
-    {
-        type Item = (K, V);
-
-        fn next(&mut self) -> Option<Self::Item> {
-            if let Some(SortedItem(k, v)) = self.0.next() {
-                Some((k, v))
-            } else {
-                None
-            }
-        }
-    }
-
-    impl<I, K, V> SeekableIterator<(K, V)> for SortedItemIter<I, K, V>
-    where
-        I: Iterator<Item = SortedItem<K, V>> + SeekableIterator<SortedItem<K, V>>,
-        K: Ord + Clone,
-        V: Clone,
-    {
-        fn seek(&mut self, target: &(K, V)) {
-            self.0.seek(&SortedItem(target.0.clone(), target.1.clone()))
-        }
-    }
-
-    impl<I, K, V> RewindableIterator for SortedItemIter<I, K, V>
-    where
-        I: Iterator<Item = SortedItem<K, V>> + RewindableIterator,
-        K: Ord,
-    {
-        fn rewind(&mut self) {
-            self.0.rewind()
-        }
-    }
-
     #[test]
     fn merging_iter() {
         let input = [
@@ -377,14 +334,7 @@ mod tests {
             vec![(2, "b"), (4, "b")],
             vec![(1, "c"), (2, "c"), (8, "c")],
             vec![(3, "d"), (7, "d")],
-        ]
-        .into_iter()
-        .map(|v| {
-            v.into_iter()
-                .map(|(k, v)| SortedItem(k, v))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+        ];
         let output = [
             (1, "a"),
             (1, "c"),
@@ -402,7 +352,7 @@ mod tests {
         for data in input.iter() {
             builder.add(SliceIter::new(data));
         }
-        let mut iter = SortedItemIter(builder.build());
+        let mut iter = builder.build();
 
         for _ in 0..2 {
             for item in output.iter().copied() {

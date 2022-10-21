@@ -15,16 +15,16 @@ impl<'a, V> MergingPageIter<'a, V> {
 }
 
 impl<'a, V> Iterator for MergingPageIter<'a, V> {
-    type Item = SortedItem<Key<'a>, V>;
+    type Item = (Key<'a>, V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        for SortedItem(key, value) in &mut self.iter {
+        for (key, value) in &mut self.iter {
             if let Some(limit) = self.range_limit {
                 if key >= limit {
                     return None;
                 }
             }
-            return Some(SortedItem(key, value));
+            return Some((key, value));
         }
         None
     }
@@ -51,18 +51,18 @@ impl<'a> MergingLeafPageIter<'a> {
 }
 
 impl<'a> Iterator for MergingLeafPageIter<'a> {
-    type Item = SortedItem<Key<'a>, Value<'a>>;
+    type Item = (Key<'a>, Value<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
         // TODO: We should keep all versions visible at and after the safe LSN.
-        for SortedItem(key, value) in &mut self.iter {
+        for (key, value) in &mut self.iter {
             if let Some(raw) = self.last_raw {
                 if key.raw == raw {
                     continue;
                 }
             }
             self.last_raw = Some(key.raw);
-            return Some(SortedItem(key, value));
+            return Some((key, value));
         }
         None
     }
@@ -89,10 +89,10 @@ impl<'a> MergingInnerPageIter<'a> {
 }
 
 impl<'a> Iterator for MergingInnerPageIter<'a> {
-    type Item = SortedItem<Key<'a>, Index>;
+    type Item = (Key<'a>, Index);
 
     fn next(&mut self) -> Option<Self::Item> {
-        for SortedItem(start, index) in &mut self.iter {
+        for (start, index) in &mut self.iter {
             if index.id == NAN_ID {
                 continue;
             }
@@ -102,7 +102,7 @@ impl<'a> Iterator for MergingInnerPageIter<'a> {
                 }
             }
             self.last_raw = Some(start.raw);
-            return Some(SortedItem(start, index));
+            return Some((start, index));
         }
         None
     }

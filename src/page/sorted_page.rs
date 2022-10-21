@@ -1,49 +1,13 @@
-use std::{cmp::Ordering, marker::PhantomData, ops::Deref};
+use std::{marker::PhantomData, ops::Deref};
 
 use super::{
     Key, PageBuf, PageBuilder, PageKind, PageRef, PageTier, RewindableIterator, SeekableIterator,
 };
 use crate::util::codec::{DecodeFrom, EncodeTo};
 
-/// A tuple sorted by its first field.
-#[derive(Clone, Debug)]
-pub(crate) struct SortedItem<K, V>(pub(crate) K, pub(crate) V);
-
-impl<K: Ord, V> Eq for SortedItem<K, V> {}
-
-impl<K: Ord, V> PartialEq for SortedItem<K, V> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl<K: Ord, V> Ord for SortedItem<K, V> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.cmp(&other.0)
-    }
-}
-
-impl<K: Ord, V> PartialOrd for SortedItem<K, V> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<K, V> From<(K, V)> for SortedItem<K, V> {
-    fn from((k, v): (K, V)) -> Self {
-        Self(k, v)
-    }
-}
-
-impl<K, V> From<SortedItem<K, V>> for (K, V) {
-    fn from(item: SortedItem<K, V>) -> Self {
-        (item.0, item.1)
-    }
-}
-
 pub(crate) struct SortedPageBuilder<'a, I, V>
 where
-    I: RewindableIterator<Item = SortedItem<Key<'a>, V>>,
+    I: RewindableIterator<Item = (Key<'a>, V)>,
 {
     base: PageBuilder,
     iter: Option<I>,
@@ -51,7 +15,7 @@ where
 
 impl<'a, I, V> SortedPageBuilder<'a, I, V>
 where
-    I: RewindableIterator<Item = SortedItem<Key<'a>, V>>,
+    I: RewindableIterator<Item = (Key<'a>, V)>,
     V: EncodeTo + DecodeFrom,
 {
     pub(crate) fn new(tier: PageTier, kind: PageKind) -> Self {
@@ -143,12 +107,12 @@ where
 }
 
 impl<'a, V> Iterator for SortedPageIter<'a, V> {
-    type Item = SortedItem<Key<'a>, V>;
+    type Item = (Key<'a>, V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some((k, v)) = self.page.get(self.next) {
+        if let Some(item) = self.page.get(self.next) {
             self.next += 1;
-            Some(SortedItem(k, v))
+            Some(item)
         } else {
             None
         }
