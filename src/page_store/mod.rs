@@ -14,6 +14,7 @@ pub(crate) use page_txn::{Guard, PageTxn};
 
 mod page_table;
 use page_table::PageTable;
+pub(crate) use page_table::{MAX_ID, MIN_ID, NAN_ID};
 
 mod meta;
 
