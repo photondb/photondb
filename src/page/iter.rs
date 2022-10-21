@@ -72,6 +72,22 @@ impl<'a, T: Clone> Iterator for SliceIter<'a, T> {
     }
 }
 
+impl<'a, T: Clone + Ord> SeekableIterator<T> for SliceIter<'a, T> {
+    fn seek(&mut self, target: &T) {
+        self.next = match self.data.binary_search(target) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+    }
+
+    fn seek_back(&mut self, target: &T) {
+        self.next = match self.data.binary_search(target) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+    }
+}
+
 impl<'a, T: Clone> RewindableIterator for SliceIter<'a, T> {
     fn rewind(&mut self) {
         self.next = 0;
@@ -123,7 +139,12 @@ where
     I::Item: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.next.cmp(&other.next)
+        match (&self.next, &other.next) {
+            (Some(a), Some(b)) => a.cmp(b),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        }
     }
 }
 
@@ -133,7 +154,7 @@ where
     I::Item: Ord,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.next.partial_cmp(&other.next)
+        Some(self.cmp(other))
     }
 }
 
@@ -284,5 +305,65 @@ where
     /// Creates a [`MergingIter`] from the specified iterators.
     pub(crate) fn build(self) -> MergingIter<I> {
         MergingIter::init(self.iters)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn item_iter() {
+        let mut iter = ItemIter::new(1);
+        for _ in 0..2 {
+            assert_eq!(iter.next(), Some(1));
+            assert_eq!(iter.next(), None);
+            iter.rewind();
+        }
+    }
+
+    #[test]
+    fn slice_iter() {
+        let mut iter = SliceIter::new(&[1, 2]);
+        for _ in 0..2 {
+            assert_eq!(iter.next(), Some(1));
+            assert_eq!(iter.next(), Some(2));
+            assert_eq!(iter.next(), None);
+            iter.rewind();
+        }
+    }
+
+    #[test]
+    fn merging_iter() {
+        let input = [[1, 3], [2, 4], [1, 8], [3, 7]];
+        let output = [1, 1, 2, 3, 3, 4, 7, 8];
+
+        let mut builder = MergingIterBuilder::new();
+        for item in input.iter() {
+            builder.add(SliceIter::new(item));
+        }
+        let mut iter = builder.build();
+
+        for _ in 0..2 {
+            for item in output.iter() {
+                assert_eq!(iter.next().as_ref(), Some(item));
+            }
+            assert_eq!(iter.next(), None);
+            iter.rewind();
+        }
+
+        iter.seek(&0);
+        assert_eq!(iter.next(), Some(1));
+        assert_eq!(iter.next(), Some(1));
+        iter.seek(&9);
+        assert_eq!(iter.next(), None);
+        iter.seek(&1);
+        assert_eq!(iter.next(), Some(1));
+        iter.seek(&3);
+        assert_eq!(iter.next(), Some(3));
+        assert_eq!(iter.next(), Some(3));
+        iter.seek(&5);
+        assert_eq!(iter.next(), Some(7));
+        assert_eq!(iter.next(), Some(8));
     }
 }
