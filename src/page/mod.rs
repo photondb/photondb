@@ -14,5 +14,5 @@ pub(crate) use sorted_page::{SortedItem, SortedPageBuilder, SortedPageIter, Sort
 
 pub(crate) type DataPageRef<'a> = SortedPageRef<'a, &'a [u8]>;
 pub(crate) type SplitPageRef<'a> = SortedPageRef<'a, Index>;
-pub(crate) type LeafDataPageIter<'a> = SortedPageIter<'a, Value<'a>>;
-pub(crate) type InnerDataPageIter<'a> = SortedPageIter<'a, Index>;
+pub(crate) type LeafDataPageRef<'a> = SortedPageRef<'a, Value<'a>>;
+pub(crate) type InnerDataPageRef<'a> = SortedPageRef<'a, Index>;
