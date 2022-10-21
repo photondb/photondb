@@ -17,6 +17,7 @@ pub(crate) trait RewindableIterator: Iterator {
     fn rewind(&mut self);
 }
 
+#[derive(Debug)]
 pub(crate) struct ItemIter<T> {
     next: Option<T>,
     item: Option<T>,
@@ -45,6 +46,7 @@ impl<T: Clone> RewindableIterator for ItemIter<T> {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct SliceIter<'a, T> {
     data: &'a [T],
     next: usize,
@@ -84,12 +86,14 @@ impl<'a, T: Clone> RewindableIterator for SliceIter<'a, T> {
     }
 }
 
-/// A wrapper to order an [`Iterator`] by its next item.
+/// A wrapper to order an [`Iterator`] by its next item and rank.
+#[derive(Debug)]
 struct OrderedIter<I>
 where
     I: Iterator,
 {
     iter: I,
+    rank: usize,
     next: Option<I::Item>,
 }
 
@@ -97,8 +101,12 @@ impl<I> OrderedIter<I>
 where
     I: Iterator,
 {
-    fn new(iter: I) -> Self {
-        Self { iter, next: None }
+    fn new(iter: I, rank: usize) -> Self {
+        Self {
+            iter,
+            rank,
+            next: None,
+        }
     }
 
     fn init(&mut self) {
@@ -129,12 +137,16 @@ where
     I::Item: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
-        match (&self.next, &other.next) {
+        let mut ord = match (&self.next, &other.next) {
             (Some(a), Some(b)) => a.cmp(b),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
             (None, None) => Ordering::Equal,
+        };
+        if ord == Ordering::Equal {
+            ord = self.rank.cmp(&other.rank);
         }
+        ord
     }
 }
 
@@ -252,6 +264,7 @@ where
 }
 
 /// Builds a [`MergingIter`] from multiple iterators.
+#[derive(Default)]
 pub(crate) struct MergingIterBuilder<I>
 where
     I: Iterator,
@@ -280,7 +293,8 @@ where
     }
 
     pub(crate) fn add(&mut self, iter: I) {
-        self.iters.push(Reverse(OrderedIter::new(iter)));
+        let rank = self.iters.len();
+        self.iters.push(Reverse(OrderedIter::new(iter, rank)));
     }
 
     /// Creates a [`MergingIter`] from the specified iterators.
@@ -291,7 +305,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{super::SortedItem, *};
 
     #[test]
     fn item_iter() {
@@ -314,37 +328,103 @@ mod tests {
         }
     }
 
+    struct SortedItemIter<I, K, V>(I)
+    where
+        I: Iterator<Item = SortedItem<K, V>>,
+        K: Ord;
+
+    impl<I, K, V> Iterator for SortedItemIter<I, K, V>
+    where
+        I: Iterator<Item = SortedItem<K, V>>,
+        K: Ord,
+    {
+        type Item = (K, V);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if let Some(SortedItem(k, v)) = self.0.next() {
+                Some((k, v))
+            } else {
+                None
+            }
+        }
+    }
+
+    impl<I, K, V> SeekableIterator<(K, V)> for SortedItemIter<I, K, V>
+    where
+        I: Iterator<Item = SortedItem<K, V>> + SeekableIterator<SortedItem<K, V>>,
+        K: Ord + Clone,
+        V: Clone,
+    {
+        fn seek(&mut self, target: &(K, V)) {
+            self.0.seek(&SortedItem(target.0.clone(), target.1.clone()))
+        }
+    }
+
+    impl<I, K, V> RewindableIterator for SortedItemIter<I, K, V>
+    where
+        I: Iterator<Item = SortedItem<K, V>> + RewindableIterator,
+        K: Ord,
+    {
+        fn rewind(&mut self) {
+            self.0.rewind()
+        }
+    }
+
     #[test]
     fn merging_iter() {
-        let input = [[1, 3], [2, 4], [1, 8], [3, 7]];
-        let output = [1, 1, 2, 3, 3, 4, 7, 8];
+        let input = [
+            vec![(1, "a"), (3, "a"), (7, "a")],
+            vec![(2, "b"), (4, "b")],
+            vec![(1, "c"), (2, "c"), (8, "c")],
+            vec![(3, "d"), (7, "d")],
+        ]
+        .into_iter()
+        .map(|v| {
+            v.into_iter()
+                .map(|(k, v)| SortedItem(k, v))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+        let output = [
+            (1, "a"),
+            (1, "c"),
+            (2, "b"),
+            (2, "c"),
+            (3, "a"),
+            (3, "d"),
+            (4, "b"),
+            (7, "a"),
+            (7, "d"),
+            (8, "c"),
+        ];
 
         let mut builder = MergingIterBuilder::new();
-        for item in input.iter() {
-            builder.add(SliceIter::new(item));
+        for data in input.iter() {
+            builder.add(SliceIter::new(data));
         }
-        let mut iter = builder.build();
+        let mut iter = SortedItemIter(builder.build());
 
         for _ in 0..2 {
-            for item in output.iter() {
-                assert_eq!(iter.next().as_ref(), Some(item));
+            for item in output.iter().copied() {
+                assert_eq!(iter.next(), Some(item));
             }
             assert_eq!(iter.next(), None);
             iter.rewind();
         }
 
-        iter.seek(&0);
-        assert_eq!(iter.next(), Some(1));
-        assert_eq!(iter.next(), Some(1));
-        iter.seek(&9);
+        iter.seek(&(0, ""));
+        assert_eq!(iter.next(), Some((1, "a")));
+        assert_eq!(iter.next(), Some((1, "c")));
+        iter.seek(&(9, ""));
         assert_eq!(iter.next(), None);
-        iter.seek(&1);
-        assert_eq!(iter.next(), Some(1));
-        iter.seek(&3);
-        assert_eq!(iter.next(), Some(3));
-        assert_eq!(iter.next(), Some(3));
-        iter.seek(&5);
-        assert_eq!(iter.next(), Some(7));
-        assert_eq!(iter.next(), Some(8));
+        iter.seek(&(1, ""));
+        assert_eq!(iter.next(), Some((1, "a")));
+        iter.seek(&(3, ""));
+        assert_eq!(iter.next(), Some((3, "a")));
+        assert_eq!(iter.next(), Some((3, "d")));
+        iter.seek(&(5, ""));
+        assert_eq!(iter.next(), Some((7, "a")));
+        assert_eq!(iter.next(), Some((7, "d")));
+        assert_eq!(iter.next(), Some((8, "c")));
     }
 }

@@ -5,49 +5,45 @@ use super::{
 };
 use crate::util::codec::{DecodeFrom, EncodeTo};
 
-pub(crate) struct SortedItem<'a, V>(pub(crate) Key<'a>, pub(crate) V);
+/// A tuple sorted by its first field.
+#[derive(Clone, Debug)]
+pub(crate) struct SortedItem<K, V>(pub(crate) K, pub(crate) V);
 
-impl<'a, V> Eq for SortedItem<'a, V> {}
+impl<K: Ord, V> Eq for SortedItem<K, V> {}
 
-impl<'a, V> PartialEq for SortedItem<'a, V> {
+impl<K: Ord, V> PartialEq for SortedItem<K, V> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
 }
 
-impl<'a, V> Ord for SortedItem<'a, V> {
+impl<K: Ord, V> Ord for SortedItem<K, V> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.0.cmp(&other.0)
     }
 }
 
-impl<'a, V> PartialOrd for SortedItem<'a, V> {
+impl<K: Ord, V> PartialOrd for SortedItem<K, V> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<'a, V: Clone> Clone for SortedItem<'a, V> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone(), self.1.clone())
-    }
-}
-
-impl<'a, V> From<(Key<'a>, V)> for SortedItem<'a, V> {
-    fn from((k, v): (Key<'a>, V)) -> Self {
+impl<K, V> From<(K, V)> for SortedItem<K, V> {
+    fn from((k, v): (K, V)) -> Self {
         Self(k, v)
     }
 }
 
-impl<'a, V> From<SortedItem<'a, V>> for (Key<'a>, V) {
-    fn from(item: SortedItem<'a, V>) -> Self {
+impl<K, V> From<SortedItem<K, V>> for (K, V) {
+    fn from(item: SortedItem<K, V>) -> Self {
         (item.0, item.1)
     }
 }
 
 pub(crate) struct SortedPageBuilder<'a, I, V>
 where
-    I: RewindableIterator<Item = SortedItem<'a, V>>,
+    I: RewindableIterator<Item = SortedItem<Key<'a>, V>>,
 {
     base: PageBuilder,
     iter: Option<I>,
@@ -55,7 +51,7 @@ where
 
 impl<'a, I, V> SortedPageBuilder<'a, I, V>
 where
-    I: RewindableIterator<Item = SortedItem<'a, V>>,
+    I: RewindableIterator<Item = SortedItem<Key<'a>, V>>,
     V: EncodeTo + DecodeFrom,
 {
     pub(crate) fn new(tier: PageTier, kind: PageKind) -> Self {
@@ -96,7 +92,7 @@ impl<'a, V> SortedPageRef<'a, V> {
         todo!()
     }
 
-    pub(crate) fn get(&self, index: usize) -> Option<SortedItem<'a, V>> {
+    pub(crate) fn get(&self, index: usize) -> Option<(Key<'a>, V)> {
         todo!()
     }
 
@@ -147,12 +143,12 @@ where
 }
 
 impl<'a, V> Iterator for SortedPageIter<'a, V> {
-    type Item = SortedItem<'a, V>;
+    type Item = SortedItem<Key<'a>, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(item) = self.page.get(self.next) {
+        if let Some((k, v)) = self.page.get(self.next) {
             self.next += 1;
-            Some(item)
+            Some(SortedItem(k, v))
         } else {
             None
         }

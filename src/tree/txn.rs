@@ -167,7 +167,7 @@ impl<'a, E> Txn<'a, E> {
                     Ok(i) => i,
                     Err(i) => i,
                 };
-                if let Some(SortedItem(k, v)) = page.get(index) {
+                if let Some((k, v)) = page.get(index) {
                     if k.raw == key.raw {
                         debug_assert!(k.lsn <= key.lsn);
                         if let Value::Put(v) = v {
@@ -204,11 +204,11 @@ impl<'a, E> Txn<'a, E> {
                     // The `i` item is greater than the key, so the range is [i - 1, i).
                     Err(i) => (i.checked_sub(1).and_then(|i| page.get(i)), page.get(i)),
                 };
-                if let Some(SortedItem(start, index)) = left {
+                if let Some((start, index)) = left {
                     if index.id != NAN_ID {
                         let mut range = Range::default();
                         range.start = start;
-                        if let Some(SortedItem(end, _)) = right {
+                        if let Some((end, _)) = right {
                             range.end = Some(end);
                         }
                         child = Some((index, range));
