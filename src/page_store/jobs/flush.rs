@@ -69,8 +69,8 @@ impl FlushCtx {
                 }
             }
         }
-        builder.finish().await?;
-        Ok((deleted_pages, todo!("read FileInfo after build page file")))
+        let file_info = builder.finish().await?;
+        Ok((deleted_pages, file_info))
     }
 
     async fn save_version_edit(
