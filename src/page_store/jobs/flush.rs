@@ -88,7 +88,7 @@ impl FlushCtx {
                     deleted_pages.extend_from_slice(pages.as_slice());
                 }
                 RecordRef::Page(page) => {
-                    let content = page.as_slice();
+                    let content = page.data();
                     builder
                         .add_page(header.page_id(), page_addr, content)
                         .await?;
