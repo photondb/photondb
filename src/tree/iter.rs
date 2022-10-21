@@ -15,7 +15,7 @@ impl<'a, V> MergingPageIter<'a, V> {
 }
 
 impl<'a, V> Iterator for MergingPageIter<'a, V> {
-    type Item = SortedItem<'a, V>;
+    type Item = SortedItem<Key<'a>, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         for SortedItem(key, value) in &mut self.iter {
@@ -51,7 +51,7 @@ impl<'a> MergingLeafPageIter<'a> {
 }
 
 impl<'a> Iterator for MergingLeafPageIter<'a> {
-    type Item = SortedItem<'a, Value<'a>>;
+    type Item = SortedItem<Key<'a>, Value<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // TODO: We should keep all versions visible at and after the safe LSN.
@@ -89,7 +89,7 @@ impl<'a> MergingInnerPageIter<'a> {
 }
 
 impl<'a> Iterator for MergingInnerPageIter<'a> {
-    type Item = SortedItem<'a, Index>;
+    type Item = SortedItem<Key<'a>, Index>;
 
     fn next(&mut self) -> Option<Self::Item> {
         for SortedItem(start, index) in &mut self.iter {

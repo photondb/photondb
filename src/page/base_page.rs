@@ -357,14 +357,14 @@ mod tests {
         {
             let builder = PageBuilder::new(PageTier::Leaf, PageKind::Data);
             builder.build(&mut page);
-            assert_eq!(page.tier(), PageTier::Leaf);
-            assert_eq!(page.kind(), PageKind::Data);
+            assert!(page.tier().is_leaf());
+            assert!(page.kind().is_data());
         }
         {
             let builder = PageBuilder::new(PageTier::Inner, PageKind::Split);
             builder.build(&mut page);
-            assert_eq!(page.tier(), PageTier::Inner);
-            assert_eq!(page.kind(), PageKind::Split);
+            assert!(page.tier().is_inner());
+            assert!(page.kind().is_split());
         }
 
         assert_eq!(page.epoch(), 0);
