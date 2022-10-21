@@ -162,9 +162,12 @@ impl<'a, E> Txn<'a, E> {
             debug_assert!(page.tier().is_leaf());
             // We only care about data pages here.
             if page.kind().is_data() {
-                let mut iter = LeafDataPageIter::from(page);
-                iter.seek(key);
-                if let Some(SortedItem(k, v)) = iter.next() {
+                let page = LeafDataPageRef::from(page);
+                let index = match page.rank(key) {
+                    Ok(i) => i,
+                    Err(i) => i,
+                };
+                if let Some(SortedItem(k, v)) = page.get(index) {
                     if k.raw == key.raw {
                         debug_assert!(k.lsn <= key.lsn);
                         if let Value::Put(v) = v {
@@ -193,13 +196,19 @@ impl<'a, E> Txn<'a, E> {
             debug_assert!(page.tier().is_inner());
             // We only care about data pages here.
             if page.kind().is_data() {
-                let mut iter = InnerDataPageIter::from(page);
-                iter.seek_back(key);
-                if let Some(SortedItem(start, index)) = iter.next() {
+                let page = InnerDataPageRef::from(page);
+                // Finds the two items that enclose the key.
+                let (left, right) = match page.rank(key) {
+                    // The `i` item is equal to the key, so the range is [i, i + 1).
+                    Ok(i) => (page.get(i), i.checked_add(1).and_then(|i| page.get(i))),
+                    // The `i` item is greater than the key, so the range is [i - 1, i).
+                    Err(i) => (i.checked_sub(1).and_then(|i| page.get(i)), page.get(i)),
+                };
+                if let Some(SortedItem(start, index)) = left {
                     if index.id != NAN_ID {
                         let mut range = Range::default();
                         range.start = start;
-                        if let Some(SortedItem(end, _)) = iter.next() {
+                        if let Some(SortedItem(end, _)) = right {
                             range.end = Some(end);
                         }
                         child = Some((index, range));

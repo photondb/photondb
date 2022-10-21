@@ -27,7 +27,7 @@ pub(crate) struct PagePtr {
 }
 
 impl PagePtr {
-    unsafe fn new(ptr: NonNull<u8>, len: usize) -> Self {
+    fn new(ptr: NonNull<u8>, len: usize) -> Self {
         debug_assert!(ptr.as_ptr().is_aligned_to(8));
         debug_assert!(len >= PAGE_HEADER_LEN);
         PagePtr { ptr, len }
@@ -160,7 +160,7 @@ pub(crate) struct PageBuf<'a> {
 }
 
 impl<'a> PageBuf<'a> {
-    /// Creates a page buffer from a byte slice.
+    /// Creates a mutable page buffer from a byte slice.
     ///
     /// # Panics
     ///
@@ -168,7 +168,7 @@ impl<'a> PageBuf<'a> {
     /// slice is shorter than `PAGE_HEADER_LEN`.
     pub(crate) fn new(buf: &'a mut [u8]) -> Self {
         let ptr = unsafe { NonNull::new_unchecked(buf.as_mut_ptr()) };
-        unsafe { PagePtr::new(ptr, buf.len()).into() }
+        PagePtr::new(ptr, buf.len()).into()
     }
 }
 
@@ -203,7 +203,7 @@ pub(crate) struct PageRef<'a> {
 }
 
 impl<'a> PageRef<'a> {
-    /// Creates a page buffer from a byte slice.
+    /// Creates an immutable page reference from a byte slice.
     ///
     /// # Panics
     ///
@@ -211,7 +211,7 @@ impl<'a> PageRef<'a> {
     /// slice is shorter than `PAGE_HEADER_LEN`.
     pub(crate) fn new(buf: &'a [u8]) -> Self {
         let ptr = unsafe { NonNull::new_unchecked(buf.as_ptr() as *mut _) };
-        unsafe { PagePtr::new(ptr, buf.len()).into() }
+        PagePtr::new(ptr, buf.len()).into()
     }
 }
 
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn page() {
-        let layout = Layout::from_size_align(PAGE_HEADER_LEN, 8).unwrap();
+        let layout = Layout::from_size_align(PAGE_HEADER_LEN + 1, 8).unwrap();
         let mut buf = unsafe {
             let ptr = alloc(layout);
             let buf = slice::from_raw_parts_mut(ptr, layout.size());
@@ -376,5 +376,7 @@ mod tests {
         assert_eq!(page.chain_next(), 0);
         page.set_chain_next(3);
         assert_eq!(page.chain_next(), 3);
+        assert_eq!(page.data().len(), layout.size());
+        assert_eq!(page.content().len(), layout.size() - PAGE_HEADER_LEN);
     }
 }

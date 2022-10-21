@@ -9,9 +9,6 @@ use std::{
 pub(crate) trait SeekableIterator<T>: Iterator {
     /// Positions the iterator at the first item that is at or after `target`.
     fn seek(&mut self, target: &T);
-
-    /// Positions the iterator at the first item that is at or before `target`.
-    fn seek_back(&mut self, target: &T);
 }
 
 /// An extension of [`Iterator`] that can rewind back to the beginning.
@@ -77,14 +74,7 @@ impl<'a, T: Clone + Ord> SeekableIterator<T> for SliceIter<'a, T> {
         self.next = match self.data.binary_search(target) {
             Ok(i) => i,
             Err(i) => i,
-        };
-    }
-
-    fn seek_back(&mut self, target: &T) {
-        self.next = match self.data.binary_search(target) {
-            Ok(i) => i,
-            Err(i) => i,
-        };
+        }
     }
 }
 
@@ -179,11 +169,6 @@ where
         self.iter.seek(target);
         self.next = self.iter.next();
     }
-
-    fn seek_back(&mut self, target: &T) {
-        self.iter.seek_back(target);
-        self.next = self.iter.next();
-    }
 }
 
 impl<I> RewindableIterator for OrderedIter<I>
@@ -252,11 +237,7 @@ where
     I::Item: Ord,
 {
     fn seek(&mut self, target: &T) {
-        self.for_each(|iter| iter.0.seek(target));
-    }
-
-    fn seek_back(&mut self, target: &T) {
-        self.for_each(|iter| iter.0.seek_back(target));
+        self.for_each(|iter| iter.0.seek(target))
     }
 }
 

@@ -163,10 +163,6 @@ impl<'a, V> SeekableIterator<Key<'_>> for SortedPageIter<'a, V> {
     fn seek(&mut self, target: &Key<'_>) {
         todo!()
     }
-
-    fn seek_back(&mut self, target: &Key<'_>) {
-        todo!()
-    }
 }
 
 impl<'a, V> RewindableIterator for SortedPageIter<'a, V> {
