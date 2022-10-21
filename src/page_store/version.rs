@@ -19,7 +19,7 @@ thread_local! {
 
 #[derive(Clone)]
 pub(crate) struct Version {
-    pub buffer_set: Arc<BufferSet>,
+    pub(crate) buffer_set: Arc<BufferSet>,
 
     inner: Arc<VersionInner>,
     next: Arc<NextVersion>,
@@ -42,9 +42,8 @@ struct VersionInner {
 }
 
 pub(crate) struct DeltaVersion {
-    pub new_files: Vec<(u32, FileInfo)>,
-    pub deleted_files: HashSet<u32>,
-    pub deleted_pages: Vec<u64>,
+    pub(crate) files: HashMap<u32, FileInfo>,
+    pub(crate) deleted_files: HashSet<u32>,
 }
 
 #[derive(Default)]
@@ -106,25 +105,11 @@ impl Version {
             (buffers_ref.buffers_range.clone(), buffers_ref.snapshot())
         };
 
-        let mut files = current.inner.files.clone();
-        for (id, file_info) in delta.new_files {
-            if files.insert(id, file_info).is_some() {
-                panic!("New files are conflicted");
-            }
-        }
-
-        for page_addr in delta.deleted_pages {
-            let file_id = (page_addr >> 32) as u32;
-            let file_info = files.get_mut(&file_id).expect("File is missing");
-            file_info.deactivate_page(page_addr);
-        }
-
-        let deleted_files = delta.deleted_files;
         let inner = Arc::new(VersionInner {
             buffers_range,
             write_buffers,
-            files,
-            deleted_files,
+            files: delta.files,
+            deleted_files: delta.deleted_files,
         });
         let new = Box::new(Version {
             buffer_set: current.buffer_set.clone(),

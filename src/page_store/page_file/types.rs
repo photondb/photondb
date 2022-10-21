@@ -38,6 +38,11 @@ impl FileInfo {
         self.meta.get_file_id()
     }
 
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.active_pages.is_empty()
+    }
+
     pub(crate) fn deactivate_page(&mut self, page_addr: u64) {
         let (_, index) = split_page_addr(page_addr);
         if self.active_pages.remove(index) {

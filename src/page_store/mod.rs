@@ -17,15 +17,18 @@ use page_table::PageTable;
 pub(crate) use page_table::{MAX_ID, MIN_ID, NAN_ID};
 
 mod meta;
+pub(crate) use meta::VersionEdit;
 
 mod version;
 use version::Version;
 
 mod jobs;
 mod write_buffer;
-pub(crate) use write_buffer::{DeletedPagesRecordRef, RecordRef, WriteBuffer};
+pub(crate) use write_buffer::{RecordRef, WriteBuffer};
 
 mod manifest;
+pub(crate) use manifest::Manifest;
+
 mod page_file;
 pub(crate) use page_file::{FileInfo, FileMeta, PageFiles, PageHandle};
 
@@ -40,6 +43,7 @@ pub(crate) struct PageStore<E> {
     version: Mutex<Version>,
 
     page_files: Arc<PageFiles>,
+    manifest: Arc<futures::lock::Mutex<Manifest>>,
 }
 
 impl<E: Env> PageStore<E> {
