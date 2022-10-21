@@ -1,10 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
     rc::Rc,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
-
-use futures::lock::Mutex;
 
 use crate::page_store::{
     version::DeltaVersion, FileInfo, Manifest, PageFiles, RecordRef, Result, Version, VersionEdit,
@@ -14,15 +12,40 @@ use crate::page_store::{
 #[allow(dead_code)]
 pub(crate) struct FlushCtx {
     // TODO: cancel task
+    global_version: Arc<Mutex<Version>>,
     page_files: Arc<PageFiles>,
-    manifest: Arc<Mutex<Manifest>>,
+    manifest: Arc<futures::lock::Mutex<Manifest>>,
 }
 
 #[allow(dead_code)]
 impl FlushCtx {
-    pub(crate) async fn run(self, _version: Version) {
+    pub(crate) async fn run(self) {
         loop {
-            todo!("wait flushable write buffers and flush them to disk")
+            let version = self.version();
+            let write_buffer = {
+                let current = version.buffer_set.current();
+                let file_id = current.min_file_id();
+                current
+                    .write_buffer(file_id)
+                    .expect("WriteBuffer must exists")
+                    .clone()
+            };
+
+            // If the [`WriteBuffer`] can be flushed, then it should continue because
+            // [`Notify`] is single permits. But this may also lead to [`WriteBuffer`]
+            // flushed but notified is not consumed, so loop detection is required.
+            while !write_buffer.is_flushable() {
+                version.buffer_set.wait_flushable().await;
+            }
+
+            match self.flush(version, write_buffer.as_ref()).await {
+                Ok(()) => {
+                    self.refresh_version();
+                }
+                Err(err) => {
+                    todo!("flush write buffer: {err}");
+                }
+            }
         }
     }
 
@@ -46,7 +69,10 @@ impl FlushCtx {
             deleted_files,
         };
 
-        Version::install(version, delta)
+        let buffer_set = version.buffer_set.clone();
+        Version::install(version, delta)?;
+        buffer_set.on_flushed(file_id);
+        Ok(())
     }
 
     /// Flush [`WriteBuffer`] to page files and returns deleted pages.
@@ -103,6 +129,17 @@ impl FlushCtx {
             file_info.deactivate_page(page_addr);
         }
         files
+    }
+
+    fn version(&self) -> Rc<Version> {
+        Rc::new(self.global_version.lock().expect("Poisoned").clone())
+    }
+
+    fn refresh_version(&self) {
+        let mut version = self.global_version.lock().expect("Poisoned");
+        if let Some(new) = version.refresh() {
+            *version = <Version as Clone>::clone(&new);
+        }
     }
 }
 

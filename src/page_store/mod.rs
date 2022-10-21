@@ -40,7 +40,7 @@ pub(crate) struct PageStore<E> {
     /// The global [`Version`] of [`PageStore`], used when tls [`Version`] does
     /// not exist. It needs to be updated every time a new [`Version`] is
     /// installed.
-    version: Mutex<Version>,
+    version: Arc<Mutex<Version>>,
 
     page_files: Arc<PageFiles>,
     manifest: Arc<futures::lock::Mutex<Manifest>>,

@@ -106,7 +106,7 @@ mod tests {
     use crate::page_store::{page_table::PageTable, version::Version};
 
     #[test]
-    #[ignore] // ignore since install write buffer is not implemented.
+    #[ignore] // ignore since `PageTxn::drop` is not implemented.
     fn page_txn_seal_write_buffer() {
         let version = Rc::new(Version::new(512));
         let page_table = PageTable::default();
