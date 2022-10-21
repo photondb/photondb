@@ -12,6 +12,7 @@ use std::{
 use crossbeam_epoch::Guard;
 
 use super::{FileInfo, Result, WriteBuffer};
+use crate::util::notify::Notify;
 
 thread_local! {
     static VERSION: RefCell<Option<Rc<Version>>> = RefCell::new(None);
@@ -55,6 +56,8 @@ pub(crate) struct BufferSet {
     write_buffer_capacity: u32,
 
     current: AtomicPtr<BufferSetVersion>,
+
+    flush_notify: Notify,
 }
 
 pub(crate) struct BufferSetVersion {
@@ -144,6 +147,11 @@ impl Version {
         VERSION.with(|v| v.borrow().clone())
     }
 
+    #[inline]
+    pub(crate) fn refresh(&self) -> Option<Rc<Version>> {
+        self.next.refresh()
+    }
+
     /// Wait and construct next [`Version`].
     pub(crate) async fn wait_next_version(&self) -> Self {
         todo!()
@@ -229,6 +237,7 @@ impl BufferSet {
         BufferSet {
             write_buffer_capacity,
             current: AtomicPtr::new(raw),
+            flush_notify: Notify::new(),
         }
     }
 
@@ -274,25 +283,39 @@ impl BufferSet {
             current_buffer: write_buffer,
         });
 
-        let current_ptr = current as *const _ as usize;
-        self.current.store(Box::into_raw(new), Ordering::Release);
-        guard.defer(move || unsafe {
-            // Safety: the backing memory is obtained from [`Box::into_raw`] and there no
-            // any references to the memory, which guarrantted by epoch based reclamation.
-            drop(Box::from_raw(current_ptr as *mut BufferSetVersion));
+        self.switch_version(new, guard);
+    }
+
+    pub(crate) fn on_flushed(&self, file_id: u32) {
+        let guard = buffer_set_guard::pin();
+        // Safety: guarded by `buffer_set_guard::pin`.
+        let current = unsafe { self.current_without_guard() };
+        assert_eq!(current.min_file_id(), file_id);
+
+        let sealed_buffers = {
+            let mut buffers = current.sealed_buffers.clone();
+            let buffer = buffers.pop().expect("Flushable WriteBuffer must be sealed");
+            assert_eq!(buffer.file_id(), file_id);
+            buffers
+        };
+        let current_buffer = current.current_buffer.clone();
+        let new = Box::new(BufferSetVersion {
+            buffers_range: (file_id + 1)..current.buffers_range.end,
+            sealed_buffers,
+            current_buffer,
         });
+
+        self.switch_version(new, guard);
     }
 
-    pub(crate) fn on_flushed(&self, files: &[u32]) {
-        todo!()
-    }
-
+    #[inline]
     pub(crate) async fn wait_flushable(&self) {
-        todo!()
+        self.flush_notify.notified().await;
     }
 
+    #[inline]
     pub(crate) fn notify_flush_job(&self) {
-        todo!()
+        self.flush_notify.notify_one();
     }
 
     /// Obtain current [`BufferSetVersion`].
@@ -305,6 +328,17 @@ impl BufferSet {
         // 1. Obtained from `Box::new`, so it is aligned and not null.
         // 2. There is not mutable references pointer to it.
         &*self.current.load(Ordering::Acquire)
+    }
+
+    /// Switch to the specified `BufferSetVersion`.
+    fn switch_version(&self, new: Box<BufferSetVersion>, guard: Guard) {
+        let current = self.current.load(Ordering::Acquire) as usize;
+        self.current.store(Box::into_raw(new), Ordering::Release);
+        guard.defer(move || unsafe {
+            // Safety: the backing memory is obtained from [`Box::into_raw`] and there no
+            // any references to the memory, which guarrantted by epoch based reclamation.
+            drop(Box::from_raw(current as *mut BufferSetVersion));
+        });
     }
 }
 
@@ -405,5 +439,24 @@ mod tests {
         let file_id = buffer_set.current().next_file_id();
         let buf = WriteBuffer::with_capacity(file_id, buffer_set.write_buffer_capacity());
         buffer_set.install(Arc::new(buf));
+    }
+
+    #[photonio::test]
+    async fn buffer_set_write_buffer_flush_wait_and_notify() {
+        let buffer_set = Arc::new(BufferSet::new(1 << 10));
+        let cloned_buffer_set = buffer_set.clone();
+        let handle = photonio::task::spawn(async move {
+            cloned_buffer_set.wait_flushable().await;
+        });
+
+        // 1. seal previous buffer.
+        unsafe { buffer_set.current().current_buffer.seal(false).unwrap() };
+
+        let file_id = buffer_set.current().next_file_id();
+        let buf = WriteBuffer::with_capacity(file_id, buffer_set.write_buffer_capacity());
+        buffer_set.install(Arc::new(buf));
+
+        buffer_set.notify_flush_job();
+        handle.await.unwrap();
     }
 }
