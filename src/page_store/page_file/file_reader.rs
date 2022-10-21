@@ -2,32 +2,98 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use photonio::io::{ReadAt, ReadAtExt};
 
-use super::{
-    file_builder::{DeletePages, Footer, IndexBlock, PageTable},
-    types::FileMeta,
-};
+use super::{file_builder::*, types::FileMeta};
 use crate::page_store::{Error, Result};
 
-pub(crate) struct FileReader<R: ReadAt> {
+pub(crate) struct PageFileReader<R: ReadAt> {
     reader: R,
+    use_direct: bool,
+}
+
+impl<R: ReadAt> PageFileReader<R> {
+    /// Open page reader.
+    pub(super) fn from(reader: R, use_direct: bool) -> Self {
+        Self { reader, use_direct }
+    }
+
+    /// Reads the exact number of bytes from the page specified by `offset`.
+    pub(crate) async fn read_exact_at(&self, buf: &mut [u8], req_offset: u64) -> Result<()> {
+        if !self.use_direct {
+            self.reader
+                .read_exact_at(buf, req_offset)
+                .await
+                .expect("read page data fail");
+            return Ok(());
+        }
+
+        let align_offset = floor_to_block_lo_pos(req_offset as usize);
+        let offset_ahead = (req_offset as usize) - align_offset;
+        let align_size = ceil_to_block_hi_pos(req_offset as usize + buf.len()) - align_offset;
+
+        let mut tmp_buf = alloc_aligned_buffer(align_size); // TODO: pool this buf?
+        unsafe {
+            tmp_buf.set_len(align_size);
+        }
+
+        Self::inner_read_exact_at(&self.reader, &mut tmp_buf, align_offset as u64)
+            .await
+            .expect("read page data fail");
+
+        buf.copy_from_slice(&tmp_buf[offset_ahead..offset_ahead + buf.len()]);
+
+        Ok(())
+    }
+
+    async fn inner_read_exact_at(r: &R, mut buf: &mut [u8], mut pos: u64) -> std::io::Result<()> {
+        assert!(is_block_aligned_ptr(buf.as_ptr()));
+        assert!(is_block_algined_pos(pos as usize));
+        while !buf.is_empty() {
+            match r.read_at(buf, pos).await {
+                Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+                Ok(n) => {
+                    buf = &mut buf[n..];
+                    pos += n as u64;
+                    if !is_block_algined_pos(n) {
+                        // only happen when end of file.
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(crate) struct MetaReader<R: ReadAt> {
+    reader: PageFileReader<R>,
     file_meta: Arc<FileMeta>,
 }
 
-impl<R: ReadAt> FileReader<R> {
-    /// Open page file reader for given reader.
-    pub(crate) async fn open(reader: R, file_size: u32, file_id: u32) -> Result<Self> {
-        let file_meta = Self::open_file_meta(&reader, file_size, file_id).await?;
-        Self::open_with_meta(reader, file_meta)
+impl<R: ReadAt> MetaReader<R> {
+    // Returns file_meta by read file's footer and index_block.
+    pub(crate) async fn read_file_meta(
+        reader: &PageFileReader<R>,
+        file_size: u32,
+        file_id: u32,
+    ) -> Result<Arc<FileMeta>> {
+        let footer = Self::read_footer(reader, file_size).await?;
+        let index_block = Self::read_index_block(reader, &footer).await?;
+        Ok({
+            let (indexes, offsets) = index_block.as_meta_file_cached(&footer);
+            Arc::new(FileMeta::new(file_id, indexes, offsets))
+        })
     }
 
-    // Open page file reader with exist `file_meta`(e.g. version.active_files.meta).
-    pub(crate) fn open_with_meta(reader: R, file_meta: Arc<FileMeta>) -> Result<Self> {
+    /// Open reader to read meta pages in the file.
+    pub(crate) async fn open(
+        reader: PageFileReader<R>,
+        file_size: u32,
+        file_id: u32,
+    ) -> Result<Self> {
+        let file_meta = Self::read_file_meta(&reader, file_size, file_id).await?;
         Ok(Self { reader, file_meta })
-    }
-
-    //// Returns the file metadata for current reader.
-    pub(crate) fn file_metadata(&self) -> Arc<FileMeta> {
-        self.file_meta.clone()
     }
 
     /// Returns the page table in the file.
@@ -54,42 +120,14 @@ impl<R: ReadAt> FileReader<R> {
         Ok(dels.into())
     }
 
-    /// Reads the exact number of bytes from the page specified by `page_addr`
-    /// to fill `buf` the read page size is same as the provided
-    /// `buf.len()`.
-    pub(crate) async fn read_page(&self, page_addr: u64, buf: &mut [u8]) -> Result<()> {
-        let (offset, page_size) = self
-            .file_meta
-            .get_page_handle(page_addr)
-            .ok_or(Error::InvalidArgument)?;
-        if buf.len() != page_size {
-            return Err(Error::InvalidArgument);
-        }
-
-        self.reader
-            .read_exact_at(buf, offset)
-            .await
-            .expect("read page data fail");
-
-        Ok(())
+    //// Returns the file metadata for current reader.
+    pub(crate) fn file_metadata(&self) -> Arc<FileMeta> {
+        self.file_meta.clone()
     }
 }
 
-impl<R: ReadAt> FileReader<R> {
-    pub(crate) async fn open_file_meta(
-        reader: &R,
-        file_size: u32,
-        file_id: u32,
-    ) -> Result<Arc<FileMeta>> {
-        let footer = Self::read_footer(reader, file_size).await?;
-        let index_block = Self::read_index_block(reader, &footer).await?;
-        Ok({
-            let (indexes, offsets) = index_block.as_meta_file_cached(&footer);
-            Arc::new(FileMeta::new(file_id, indexes, offsets))
-        })
-    }
-
-    async fn read_footer(read: &R, file_size: u32) -> Result<Footer> {
+impl<R: ReadAt> MetaReader<R> {
+    async fn read_footer(read: &PageFileReader<R>, file_size: u32) -> Result<Footer> {
         if file_size <= Footer::size() {
             return Err(Error::Corrupted);
         }
@@ -102,7 +140,7 @@ impl<R: ReadAt> FileReader<R> {
         Ok(footer)
     }
 
-    async fn read_index_block(read: &R, footer: &Footer) -> Result<IndexBlock> {
+    async fn read_index_block(read: &PageFileReader<R>, footer: &Footer) -> Result<IndexBlock> {
         let mut data_idx_bytes = vec![0u8; footer.data_handle.length as usize];
         read.read_exact_at(&mut data_idx_bytes, footer.data_handle.offset)
             .await

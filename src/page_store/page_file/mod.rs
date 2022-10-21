@@ -2,7 +2,7 @@ mod file_builder;
 pub(crate) use file_builder::FileBuilder;
 
 mod file_reader;
-pub(crate) use file_reader::FileReader;
+pub(crate) use file_reader::PageFileReader;
 
 mod info_builder;
 pub(crate) use info_builder::FileInfoBuilder;
@@ -27,11 +27,11 @@ impl<'a> Iterator for FileInfoIterator<'a> {
 }
 
 pub(crate) mod facade {
-    use std::{path::PathBuf, sync::Arc};
+    use std::{os::unix::prelude::OpenOptionsExt, path::PathBuf};
 
     use photonio::fs::{File, OpenOptions};
 
-    use super::*;
+    use super::{file_reader::MetaReader, *};
     use crate::page_store::Result;
 
     /// The facade for page_file module.
@@ -57,9 +57,8 @@ pub(crate) mod facade {
         /// Create file_builder to write a new page_file.
         pub(crate) async fn new_file_builder(&self, file_id: u32) -> Result<FileBuilder> {
             // TODO: switch to env in suitable time.
-            use std::os::unix::prelude::OpenOptionsExt;
             let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
-            let flags = self.writer_flags();
+            let flags = self.direct_flags();
             let writer = OpenOptions::new()
                 .write(true)
                 .custom_flags(flags)
@@ -72,7 +71,7 @@ pub(crate) mod facade {
         }
 
         #[inline]
-        fn writer_flags(&self) -> i32 {
+        fn direct_flags(&self) -> i32 {
             const O_DIRECT_LINUX: i32 = 0x4000;
             const O_DIRECT_AARCH64: i32 = 0x10000;
             if !self.use_direct {
@@ -87,20 +86,19 @@ pub(crate) mod facade {
             }
         }
 
-        /// Open file_reader for a page_file.
-        /// page_store should get file_meta from current version with page_addr
-        /// before call this method.
-        pub(crate) async fn open_file_reader(
-            &self,
-            file_meta: Arc<FileMeta>,
-        ) -> Result<FileReader<File>> {
-            let path = self
-                .base
-                .join(format!("{}_{}", self.file_prefix, file_meta.get_file_id()));
-            let reader = File::open(path)
+        /// Open page_reader for a page_file.
+        /// page_store could get file_id from page_addr's high bit and
+        /// version.active_files.
+        pub(crate) async fn open_page_reader(&self, file_id: u32) -> Result<PageFileReader<File>> {
+            let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
+            let flags = self.direct_flags();
+            let reader = OpenOptions::new()
+                .read(true)
+                .custom_flags(flags)
+                .open(path)
                 .await
                 .expect("open reader for file_id: {file_id} fail");
-            FileReader::open_with_meta(reader, file_meta)
+            Ok(PageFileReader::from(reader, self.use_direct))
         }
 
         // Create info_builder to help recovery & mantains version's file_info.
@@ -108,7 +106,8 @@ pub(crate) mod facade {
             FileInfoBuilder::new(self.base.to_owned(), &self.file_prefix)
         }
 
-        pub(self) async fn open_file_meta(&self, file_id: u32) -> Result<Arc<FileMeta>> {
+        // test helper.
+        pub(self) async fn open_meta_reader(&self, file_id: u32) -> Result<MetaReader<File>> {
             let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
             let reader = File::open(path)
                 .await
@@ -118,7 +117,8 @@ pub(crate) mod facade {
                 .await
                 .expect("read fs metadata fail")
                 .len();
-            FileReader::open_file_meta(&reader, file_size as u32, file_id).await
+            let page_file_reader = PageFileReader::from(reader, true);
+            MetaReader::open(page_file_reader, file_size as u32, file_id).await
         }
     }
 
@@ -136,6 +136,66 @@ pub(crate) mod facade {
             builder.add_delete_pages(&[1, 2]);
             builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
             builder.finish().await.unwrap();
+        }
+
+        #[photonio::test]
+        fn test_read_page() {
+            let files = {
+                let base = std::env::temp_dir();
+                PageFiles::new(&base, "test_dread")
+            };
+            let file_id = 2;
+            let info = {
+                let mut b = files.new_file_builder(file_id).await.unwrap();
+                b.add_delete_pages(&[page_addr(1, 0), page_addr(1, 1)]);
+                b.add_page(1, page_addr(2, 2), &[7].repeat(8192))
+                    .await
+                    .unwrap();
+                b.add_page(2, page_addr(2, 3), &[8].repeat(8192 / 2))
+                    .await
+                    .unwrap();
+                b.add_page(3, page_addr(2, 4), &[9].repeat(8192 / 3))
+                    .await
+                    .unwrap();
+                let info = b.finish().await.unwrap();
+                assert_eq!(info.effective_size(), 8192 + 8192 / 2 + 8192 / 3);
+                info
+            };
+
+            let page_reader = files
+                .open_page_reader(info.meta().get_file_id())
+                .await
+                .unwrap();
+
+            {
+                // read aligned 1st page.
+                let hd = info.get_page_handle(page_addr(2, 2)).unwrap();
+                let mut buf = vec![0u8; hd.size as usize];
+                page_reader
+                    .read_exact_at(&mut buf, hd.offset as u64)
+                    .await
+                    .unwrap();
+            }
+
+            {
+                // read unaligned(need trim end) 2nd page.
+                let hd = info.get_page_handle(page_addr(2, 3)).unwrap();
+                let mut buf = vec![0u8; hd.size as usize];
+                page_reader
+                    .read_exact_at(&mut buf, hd.offset as u64)
+                    .await
+                    .unwrap();
+            }
+
+            {
+                // read unaligned(need trim both start and end) 3rd page.
+                let hd = info.get_page_handle(page_addr(2, 3)).unwrap();
+                let mut buf = vec![0u8; hd.size as usize];
+                page_reader
+                    .read_exact_at(&mut buf, hd.offset as u64)
+                    .await
+                    .unwrap();
+            }
         }
 
         #[photonio::test]
@@ -163,24 +223,37 @@ pub(crate) mod facade {
                 info
             };
             {
-                let file_meta = files.open_file_meta(file_id).await.unwrap(); // normally get from current version, no need reopen.
-                assert_eq!(file_meta.total_page_size(), 8192 + 8192 / 2 + 8192 / 3);
+                let meta = {
+                    let meta_reader = files.open_meta_reader(file_id).await.unwrap();
+                    assert_eq!(
+                        meta_reader.file_metadata().total_page_size(),
+                        8192 + 8192 / 2 + 8192 / 3
+                    );
+                    let page3 = page_addr(2, 4);
+                    let (page3_offset, page3_size) =
+                        meta_reader.file_metadata().get_page_handle(page3).unwrap();
+                    let handle = ret_info.get_page_handle(page3).unwrap();
+                    assert_eq!(page3_offset as u32, handle.offset);
+                    assert_eq!(page3_size, 8192 / 3);
 
-                let reader = files.open_file_reader(file_meta.to_owned()).await.unwrap();
-                let page3 = page_addr(2, 4);
-                let (page3_offset, page3_size) = file_meta.get_page_handle(page3).unwrap();
-                let handle = ret_info.get_page_handle(page3).unwrap();
-                assert_eq!(page3_offset as u32, handle.offset);
-                assert_eq!(page3_size, 8192 / 3);
-                let mut buf = vec![0u8; page3_size];
-                reader.read_page(page3, &mut buf).await.unwrap();
-                assert_eq!(buf.as_slice(), &[9].repeat(buf.len()));
+                    let page_table = meta_reader.read_page_table().await.unwrap();
+                    assert_eq!(page_table.len(), 3);
 
-                let page_table = reader.read_page_table().await.unwrap();
-                assert_eq!(page_table.len(), 3);
+                    let delete_tables = meta_reader.read_delete_pages().await.unwrap();
+                    assert_eq!(delete_tables.len(), 2);
+                    meta_reader.file_metadata()
+                };
 
-                let delete_tables = reader.read_delete_pages().await.unwrap();
-                assert_eq!(delete_tables.len(), 2);
+                {
+                    let (page3_offset, page3_size) = meta.get_page_handle(page_addr(2, 4)).unwrap();
+                    let page_reader = files.open_page_reader(file_id).await.unwrap();
+                    let mut buf = vec![0u8; page3_size];
+                    page_reader
+                        .read_exact_at(&mut buf, page3_offset)
+                        .await
+                        .unwrap();
+                    assert_eq!(buf.as_slice(), &[9].repeat(buf.len()));
+                }
             }
         }
 

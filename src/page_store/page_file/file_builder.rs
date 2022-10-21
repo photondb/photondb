@@ -422,13 +422,10 @@ impl IndexBlock {
     }
 }
 
-const ALIGN_SIZE: usize = 4096;
-const ALIGN_MASK: u64 = 0xffff_f000;
-
 struct BufferedWriter {
     file: File,
 
-    use_direct_io: bool,
+    use_direct: bool,
 
     next_page_offset: u64,
     actual_data_size: usize,
@@ -437,35 +434,18 @@ struct BufferedWriter {
 }
 
 impl BufferedWriter {
-    fn new(file: File, io_batch_size: usize, use_direct_io: bool) -> Self {
+    fn new(file: File, io_batch_size: usize, use_direct: bool) -> Self {
+        let buffer = if use_direct {
+            alloc_aligned_buffer(io_batch_size)
+        } else {
+            Vec::with_capacity(io_batch_size)
+        };
         Self {
             file,
-            use_direct_io,
+            use_direct,
             next_page_offset: 0,
             actual_data_size: 0,
-            buffer: Self::alloc_buffer(io_batch_size, use_direct_io),
-        }
-    }
-
-    fn alloc_buffer(n: usize, use_direct_io: bool) -> Vec<u8> {
-        if !use_direct_io {
-            return Vec::with_capacity(n);
-        }
-        #[repr(C, align(4096))]
-        struct AlignBlock([u8; ALIGN_SIZE]);
-
-        let block_cnt = (n + ALIGN_SIZE - 1) / ALIGN_SIZE;
-        let mut blocks: Vec<AlignBlock> = Vec::with_capacity(block_cnt);
-        let ptr = blocks.as_mut_ptr();
-        let cap_cnt = blocks.capacity();
-        std::mem::forget(blocks);
-
-        unsafe {
-            Vec::from_raw_parts(
-                ptr as *mut u8,
-                0,
-                cap_cnt * std::mem::size_of::<AlignBlock>(),
-            )
+            buffer,
         }
     }
 
@@ -491,9 +471,9 @@ impl BufferedWriter {
         if self.buffer.is_empty() {
             return Ok(());
         }
-        if self.use_direct_io {
+        if self.use_direct {
             self.actual_data_size += self.buffer.len();
-            let align_len = Self::aligned_size(self.buffer.len());
+            let align_len = ceil_to_block_hi_pos(self.buffer.len());
             self.buffer.resize(align_len, 0);
         }
         self.file
@@ -504,13 +484,9 @@ impl BufferedWriter {
         Ok(())
     }
 
-    fn aligned_size(origin_size: usize) -> usize {
-        ((origin_size + ALIGN_SIZE - 1) as u64 & ALIGN_MASK) as usize
-    }
-
     async fn flush_and_sync(&mut self) -> Result<()> {
         self.flush().await?;
-        if self.use_direct_io {
+        if self.use_direct {
             self.file
                 .set_len(self.actual_data_size as u64)
                 .await
@@ -520,6 +496,42 @@ impl BufferedWriter {
         self.file.sync_all().await.expect("sync file fail");
         Ok(())
     }
+}
+
+// TODO: detect block_size for different device.
+const BLOCK_SIZE: usize = 4096;
+
+pub(crate) fn alloc_aligned_buffer(n: usize) -> Vec<u8> {
+    #[repr(C, align(4096))]
+    struct Page([u8; BLOCK_SIZE]);
+
+    let block_cnt = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let mut blocks: Vec<Page> = Vec::with_capacity(block_cnt);
+    let ptr = blocks.as_mut_ptr();
+    let cap_cnt = blocks.capacity();
+    std::mem::forget(blocks);
+
+    unsafe { Vec::from_raw_parts(ptr as *mut u8, 0, cap_cnt * std::mem::size_of::<Page>()) }
+}
+
+#[inline]
+pub(crate) fn floor_to_block_lo_pos(pos: usize) -> usize {
+    pos - (pos & (BLOCK_SIZE - 1))
+}
+
+#[inline]
+pub(crate) fn ceil_to_block_hi_pos(pos: usize) -> usize {
+    ((pos + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE
+}
+
+#[inline]
+pub(crate) fn is_block_algined_pos(pos: usize) -> bool {
+    (pos & (BLOCK_SIZE - 1)) == 0
+}
+
+#[inline]
+pub(crate) fn is_block_aligned_ptr(p: *const u8) -> bool {
+    p.is_aligned_to(BLOCK_SIZE)
 }
 
 #[cfg(test)]
