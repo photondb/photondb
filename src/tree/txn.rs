@@ -405,9 +405,8 @@ impl<'a, E> Txn<'a, E> {
         new_page.set_epoch(view.page.epoch());
         new_page.set_chain_len(cons.last_page.chain_len());
         new_page.set_chain_next(cons.last_page.chain_next());
-        // Deallocate the delta pages if the transaction commits.
-        txn.dealloc_pages(&cons.page_addrs);
-        txn.update_page(view.id, view.addr, new_addr)
+        // Update the page and deallocate the consolidated delta pages.
+        txn.replace_page(view.id, view.addr, new_addr, &cons.page_addrs)
             .map(|_| {
                 self.tree.stats.success.consolidate_page.inc();
                 view.page = new_page.into();

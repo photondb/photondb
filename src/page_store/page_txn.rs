@@ -61,14 +61,6 @@ impl<'a> PageTxn<'a> {
         todo!()
     }
 
-    /// Deallocates some pages.
-    ///
-    /// The deallocated pages will still be valid until no one is able to access
-    /// them. If the transaction aborts, the deallocation will be canceled.
-    pub(crate) fn dealloc_pages(&mut self, addrs: &[u64]) {
-        todo!()
-    }
-
     /// Inserts a new page into the store.
     ///
     /// Returns the id of the inserted page.
@@ -78,18 +70,36 @@ impl<'a> PageTxn<'a> {
         todo!()
     }
 
-    pub(crate) fn delete_page(&mut self, id: u64) {
-        todo!()
-    }
-
-    /// Updates the page address to `new` if its current value is the same as
-    /// `old`.
+    /// Updates the page address to `new_addr` if its current value is the same
+    /// as `old_addr`.
     ///
     /// On success, commits all operations in the transaction.
     /// On failure, returns the transaction and the current address of the page.
-    pub(crate) fn update_page(self, id: u64, old: u64, new: u64) -> Result<(), (Self, u64)> {
-        // TODO: ensure that old < new so that we can recover the page table in order.
-        // TODO: commit the transaction on success
+    pub(crate) fn update_page(
+        self,
+        id: u64,
+        old_addr: u64,
+        new_addr: u64,
+    ) -> Result<(), (Self, u64)> {
+        // TODO: ensure that old_addr < new_addr so that we can recover the page table
+        // in order.
+        todo!()
+    }
+
+    /// This function is similar to [`Self::update_page`], except that it also
+    /// deallocates some pages on success.
+    ///
+    /// The deallocated pages will still be valid until no one is able to access
+    /// them.
+    pub(crate) fn replace_page(
+        self,
+        id: u64,
+        old_addr: u64,
+        new_addr: u64,
+        dealloc_addrs: &[u64],
+    ) -> Result<(), (Self, u64)> {
+        // TODO: ensure that old_addr < new_addr so that we can recover the page table
+        // in order.
         todo!()
     }
 
