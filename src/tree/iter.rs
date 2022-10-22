@@ -36,6 +36,7 @@ impl<'a, V> RewindableIterator for MergingPageIter<'a, V> {
     }
 }
 
+/// An iterator that merges multiple leaf pages for consolidation.
 pub(super) struct MergingLeafPageIter<'a> {
     iter: MergingPageIter<'a, Value<'a>>,
     last_raw: Option<&'a [u8]>,
@@ -74,6 +75,7 @@ impl<'a> RewindableIterator for MergingLeafPageIter<'a> {
     }
 }
 
+/// An iterator that merges multiple inner pages for consolidation.
 pub(super) struct MergingInnerPageIter<'a> {
     iter: MergingPageIter<'a, Index>,
     last_raw: Option<&'a [u8]>,
@@ -93,9 +95,11 @@ impl<'a> Iterator for MergingInnerPageIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         for (start, index) in &mut self.iter {
+            // Skip placeholders
             if index.id == NAN_ID {
                 continue;
             }
+            // Skip overwritten keys.
             if let Some(raw) = self.last_raw {
                 if start.raw == raw {
                     continue;

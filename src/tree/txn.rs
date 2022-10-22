@@ -1,5 +1,10 @@
 use super::{iter::*, Tree};
-use crate::{env::Env, page::*, page_store::*};
+use crate::{
+    env::Env,
+    page::*,
+    page_store::*,
+    util::codec::{DecodeFrom, EncodeTo},
+};
 
 pub(super) struct Txn<'a, E> {
     tree: &'a Tree<E>,
@@ -15,7 +20,7 @@ impl<'a, E: Env> Txn<'a, E> {
         }
     }
 
-    /// Gets the value corresponding to the key from the tree.
+    /// Gets the value corresponding to the key.
     pub(super) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
         let (view, _) = self.find_leaf(&key).await?;
         self.find_value(&key, &view).await
@@ -36,7 +41,10 @@ impl<'a, E: Env> Txn<'a, E> {
             new_page.set_chain_len(view.page.chain_len().saturating_add(1));
             new_page.set_chain_next(view.addr);
             match txn.update_page(view.id, view.addr, new_addr) {
-                Ok(_) => break,
+                Ok(_) => {
+                    view.page = new_page.into();
+                    break;
+                }
                 Err(addr) => {
                     // The page has been updated by other transactions.
                     // We keep retrying as long as the page epoch remains the same.
@@ -51,7 +59,6 @@ impl<'a, E: Env> Txn<'a, E> {
         }
 
         // Try to consolidate the page if it is too long.
-        view.page = new_page.into();
         if self.should_consolidate_page(view.page) {
             let _ = self.consolidate_page(view, parent).await;
         }
@@ -220,13 +227,27 @@ impl<'a, E> Txn<'a, E> {
     }
 
     // Splits the page into two halfs.
-    async fn split_page(&self, mut view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
+    async fn split_page(&self, view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
+        match view.page.tier() {
+            PageTier::Leaf => self.split_page_impl::<Value>(view, parent).await,
+            PageTier::Inner => self.split_page_impl::<Index>(view, parent).await,
+        }
+    }
+
+    async fn split_page_impl<V>(
+        &self,
+        mut view: PageView<'_>,
+        parent: Option<PageView<'_>>,
+    ) -> Result<()>
+    where
+        V: EncodeTo + DecodeFrom,
+    {
         // We can only split base data pages.
         if !view.page.kind().is_data() || view.page.chain_next() != 0 {
             return Err(Error::InvalidArgument);
         }
 
-        let page = DataPageRef::from(view.page);
+        let page = SortedPageRef::<V>::from(view.page);
         if let Some((split_key, right_iter)) = page.split() {
             let mut txn = self.guard.begin();
             // Build and insert the right page.
@@ -312,10 +333,12 @@ impl<'a, E> Txn<'a, E> {
         new_page.set_chain_len(parent.page.chain_len().saturating_add(1));
         new_page.set_chain_next(parent.addr);
         txn.update_page(parent.id, parent.addr, new_addr)
+            .map(|_| {
+                parent.page = new_page.into();
+            })
             .map_err(|_| Error::Again)?;
 
         // Try to consolidate the parent page if it is too long.
-        parent.page = new_page.into();
         if self.should_consolidate_page(parent.page) {
             let _ = self.consolidate_page(parent, None).await;
         }
@@ -346,43 +369,59 @@ impl<'a, E> Txn<'a, E> {
     /// Consolidates delta pages on the page chain.
     async fn consolidate_page(
         &self,
-        mut view: PageView<'_>,
+        view: PageView<'_>,
         parent: Option<PageView<'_>>,
     ) -> Result<()> {
-        macro_rules! consolidate_page_impl {
-            ($iter:ty) => {{
-                let cons = self.build_consolidation(&view).await?;
-                let iter = <$iter>::new(cons.iter);
-                let builder =
-                    SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(iter);
-                let mut txn = self.guard.begin();
-                let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
-                builder.build(&mut new_page);
-                new_page.set_epoch(view.page.epoch());
-                new_page.set_chain_len(cons.last_page.chain_len());
-                new_page.set_chain_next(cons.last_page.chain_next());
-                txn.dealloc_pages(&cons.page_addrs);
-                txn.update_page(view.id, view.addr, new_addr)
-                    .map(|_| {
-                        self.tree.stats.success.consolidate_page.inc();
-                    })
-                    .map_err(|_| {
-                        self.tree.stats.restart.consolidate_page.inc();
-                        Error::Again
-                    })?;
-
-                // Try to split the page if it is too large.
-                view.page = new_page.into();
-                if self.should_split_page(view.page) {
-                    let _ = self.split_page(view, parent);
-                }
-                Ok(())
-            }};
-        }
         match view.page.tier() {
-            PageTier::Leaf => consolidate_page_impl!(MergingLeafPageIter),
-            PageTier::Inner => consolidate_page_impl!(MergingInnerPageIter),
+            PageTier::Leaf => {
+                self.consolidate_page_impl(view, parent, |iter| MergingLeafPageIter::new(iter))
+                    .await
+            }
+            PageTier::Inner => {
+                self.consolidate_page_impl(view, parent, |iter| MergingInnerPageIter::new(iter))
+                    .await
+            }
         }
+    }
+
+    async fn consolidate_page_impl<'g, F, I, V>(
+        &'g self,
+        mut view: PageView<'g>,
+        parent: Option<PageView<'g>>,
+        f: F,
+    ) -> Result<()>
+    where
+        F: Fn(MergingPageIter<'g, V>) -> I,
+        I: RewindableIterator<Item = (Key<'g>, V)>,
+        V: EncodeTo + DecodeFrom,
+    {
+        let cons = self.build_consolidation(&view).await?;
+        let iter = f(cons.iter);
+        let builder = SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(iter);
+        let mut txn = self.guard.begin();
+        // Build a new page from some delta pages.
+        let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+        builder.build(&mut new_page);
+        new_page.set_epoch(view.page.epoch());
+        new_page.set_chain_len(cons.last_page.chain_len());
+        new_page.set_chain_next(cons.last_page.chain_next());
+        // Deallocate the consolidated delta pages.
+        txn.dealloc_pages(&cons.page_addrs);
+        txn.update_page(view.id, view.addr, new_addr)
+            .map(|_| {
+                self.tree.stats.success.consolidate_page.inc();
+                view.page = new_page.into();
+            })
+            .map_err(|_| {
+                self.tree.stats.restart.consolidate_page.inc();
+                Error::Again
+            })?;
+
+        // Try to split the page if it is too large.
+        if self.should_split_page(view.page) {
+            let _ = self.split_page(view, parent);
+        }
+        Ok(())
     }
 
     async fn build_consolidation<'g, V>(

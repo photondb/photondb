@@ -23,7 +23,7 @@ impl Table {
         })
     }
 
-    /// Gets the value corresponding to the key from the table.
+    /// Gets the value corresponding to the key.
     pub async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let lsn = self.lsn.get();
         self.raw

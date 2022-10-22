@@ -38,8 +38,7 @@ impl<E: Env> Tree<E> {
         Txn::new(&self)
     }
 
-    /// Gets the value corresponding to the key from the tree and applies the
-    /// function to it.
+    /// Gets the value corresponding to the key and applies the function to it.
     pub(crate) async fn get<F, R>(&self, key: Key<'_>, f: F) -> Result<R>
     where
         F: FnOnce(Option<&[u8]>) -> R,
