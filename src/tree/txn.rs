@@ -210,11 +210,10 @@ impl<'a, E> Txn<'a, E> {
                 };
                 if let Some((start, index)) = left {
                     if index.id != NAN_ID {
-                        let mut range = Range::default();
-                        range.start = start;
-                        if let Some((end, _)) = right {
-                            range.end = Some(end);
-                        }
+                        let range = Range {
+                            start,
+                            end: right.map(|(end, _)| end),
+                        };
                         child = Some((index, range));
                         return true;
                     }
@@ -374,11 +373,11 @@ impl<'a, E> Txn<'a, E> {
     ) -> Result<()> {
         match view.page.tier() {
             PageTier::Leaf => {
-                self.consolidate_page_impl(view, parent, |iter| MergingLeafPageIter::new(iter))
+                self.consolidate_page_impl(view, parent, MergingLeafPageIter::new)
                     .await
             }
             PageTier::Inner => {
-                self.consolidate_page_impl(view, parent, |iter| MergingInnerPageIter::new(iter))
+                self.consolidate_page_impl(view, parent, MergingInnerPageIter::new)
                     .await
             }
         }
@@ -470,7 +469,7 @@ impl<'a, E> Txn<'a, E> {
         if page.tier().is_inner() {
             // Adjust the page size for inner pages.
             // TODO: do some benchmarks to evaluate this.
-            max_size = max_size / 2;
+            max_size /= 2;
         }
         page.size() > max_size
     }
@@ -481,9 +480,9 @@ impl<'a, E> Txn<'a, E> {
         if page.tier().is_inner() {
             // Adjust the chain length for inner pages.
             // TODO: do some benchmarks to evaluate this.
-            max_chain_len = (max_chain_len / 2).max(2);
+            max_chain_len /= 2;
         }
-        page.chain_len() as usize > max_chain_len
+        page.chain_len() as usize > max_chain_len.max(1)
     }
 }
 
@@ -500,10 +499,9 @@ struct Consolidation<'a, V> {
     page_addrs: Vec<u64>,
 }
 
-fn split_delta_from_page<'a>(page: PageRef<'a>) -> (Key<'a>, Index) {
+fn split_delta_from_page(page: PageRef<'_>) -> (Key<'_>, Index) {
     debug_assert!(page.kind().is_split());
     SplitPageRef::from(page)
         .get(0)
         .expect("split page delta must exist")
-        .into()
 }
