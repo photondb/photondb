@@ -33,11 +33,6 @@ impl PagePtr {
         PagePtr { ptr, len }
     }
 
-    /// Returns the page size.
-    pub(crate) fn size(&self) -> usize {
-        self.len
-    }
-
     /// Returns the page tier.
     pub(crate) fn tier(&self) -> PageTier {
         self.flags().tier()
@@ -91,19 +86,29 @@ impl PagePtr {
         unsafe { self.chain_next_ptr().write(addr) }
     }
 
+    /// Returns the page size.
+    pub(crate) fn size(&self) -> usize {
+        self.len
+    }
+
     /// Returns a byte slice of the page data.
     pub(crate) fn data(&self) -> &[u8] {
         unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 
+    /// Returns the size of the page content.
+    pub(super) fn content_size(&self) -> usize {
+        self.len - PAGE_HEADER_LEN
+    }
+
     /// Returns a byte slice of the page content.
     pub(super) fn content(&self) -> &[u8] {
-        unsafe { slice::from_raw_parts(self.content_ptr(), self.len - PAGE_HEADER_LEN) }
+        unsafe { slice::from_raw_parts(self.content_ptr(), self.content_size()) }
     }
 
     /// Returns a mutable byte slice of the page content.
-    pub(super) fn content_mut(&self) -> &mut [u8] {
-        unsafe { slice::from_raw_parts_mut(self.content_ptr(), self.len - PAGE_HEADER_LEN) }
+    pub(super) fn content_mut(&mut self) -> &mut [u8] {
+        unsafe { slice::from_raw_parts_mut(self.content_ptr(), self.content_size()) }
     }
 }
 

@@ -18,7 +18,7 @@ impl<'a, V> Iterator for MergingPageIter<'a, V> {
     type Item = (Key<'a>, V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        for (key, value) in &mut self.iter {
+        if let Some((key, value)) = self.iter.next() {
             if let Some(limit) = self.range_limit {
                 if key >= limit {
                     return None;

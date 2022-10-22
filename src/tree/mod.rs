@@ -35,7 +35,7 @@ impl<E: Env> Tree<E> {
     }
 
     fn begin(&self) -> Txn<E> {
-        Txn::new(&self)
+        Txn::new(self)
     }
 
     /// Gets the value corresponding to the key and applies the function to it.
