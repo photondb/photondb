@@ -1,5 +1,7 @@
 use crate::util::atomic::Counter;
 
+/// Statistics of a tree.
+#[derive(Clone, Debug, Default)]
 pub struct Stats {
     pub success: TxnStats,
     pub restart: TxnStats,
@@ -20,6 +22,8 @@ impl AtomicStats {
     }
 }
 
+/// Statistics of tree transactions.
+#[derive(Clone, Debug, Default)]
 pub struct TxnStats {
     pub get: u64,
     pub write: u64,

@@ -5,15 +5,12 @@ use super::{
 };
 use crate::util::codec::{DecodeFrom, EncodeTo};
 
-pub(crate) struct SortedPageBuilder<'a, I, V>
-where
-    I: RewindableIterator<Item = (Key<'a>, V)>,
-{
+pub(crate) struct SortedPageBuilder<I> {
     base: PageBuilder,
     iter: Option<I>,
 }
 
-impl<'a, I, V> SortedPageBuilder<'a, I, V>
+impl<'a, I, V> SortedPageBuilder<I>
 where
     I: RewindableIterator<Item = (Key<'a>, V)>,
     V: EncodeTo + DecodeFrom,
@@ -25,7 +22,7 @@ where
         }
     }
 
-    pub(crate) fn with_iter(mut self, mut iter: I) -> Self {
+    pub(crate) fn with_iter(mut self, iter: I) -> Self {
         self.iter = Some(iter);
         self
     }
