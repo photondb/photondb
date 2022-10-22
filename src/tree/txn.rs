@@ -45,9 +45,10 @@ impl<'a, E: Env> Txn<'a, E> {
                     view.page = new_page.into();
                     break;
                 }
-                Err(addr) => {
+                Err((_txn, addr)) => {
                     // The page has been updated by other transactions.
                     // We keep retrying as long as the page epoch remains the same.
+                    txn = _txn;
                     let page = self.guard.read_page(addr).await?;
                     if page.epoch() == view.page.epoch() {
                         view.page = page;
@@ -394,17 +395,17 @@ impl<'a, E> Txn<'a, E> {
         I: RewindableIterator<Item = (Key<'g>, V)>,
         V: EncodeTo + DecodeFrom,
     {
+        // Consolidate some delta pages on the chain.
         let cons = self.build_consolidation(&view).await?;
         let iter = f(cons.iter);
         let builder = SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(iter);
         let mut txn = self.guard.begin();
-        // Build a new page from some delta pages.
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
         builder.build(&mut new_page);
         new_page.set_epoch(view.page.epoch());
         new_page.set_chain_len(cons.last_page.chain_len());
         new_page.set_chain_next(cons.last_page.chain_next());
-        // Deallocate the consolidated delta pages.
+        // Deallocate the delta pages if the transaction commits.
         txn.dealloc_pages(&cons.page_addrs);
         txn.update_page(view.id, view.addr, new_addr)
             .map(|_| {

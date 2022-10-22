@@ -38,6 +38,10 @@ impl Guard {
     }
 }
 
+/// A transaction to manipulate pages in a page store.
+///
+/// On drop, the transaction will be aborted and all its operations will be
+/// rolled back.
 pub(crate) struct PageTxn<'a> {
     guard: &'a Guard,
 
@@ -47,14 +51,29 @@ pub(crate) struct PageTxn<'a> {
 }
 
 impl<'a> PageTxn<'a> {
+    /// Allocates a page buffer with the given size.
+    ///
+    /// Returns the address and buffer of the allocated page.
+    ///
+    /// If the transaction aborts, all pages allocated by this transaction will
+    /// be deallocated.
     pub(crate) fn alloc_page(&mut self, size: usize) -> Result<(u64, PageBuf<'a>)> {
         todo!()
     }
 
+    /// Deallocates some pages.
+    ///
+    /// The deallocated pages will still be valid until no one is able to access
+    /// them. If the transaction aborts, the deallocation will be canceled.
     pub(crate) fn dealloc_pages(&mut self, addrs: &[u64]) {
         todo!()
     }
 
+    /// Inserts a new page into the store.
+    ///
+    /// Returns the id of the inserted page.
+    ///
+    /// If the transaction aborts, the inserted page will be deleted.
     pub(crate) fn insert_page(&mut self, addr: u64) -> u64 {
         todo!()
     }
@@ -63,7 +82,12 @@ impl<'a> PageTxn<'a> {
         todo!()
     }
 
-    pub(crate) fn update_page(&mut self, id: u64, old: u64, new: u64) -> Result<(), u64> {
+    /// Updates the page address to `new` if its current value is the same as
+    /// `old`.
+    ///
+    /// On success, commits all operations in the transaction.
+    /// On failure, returns the transaction and the current address of the page.
+    pub(crate) fn update_page(self, id: u64, old: u64, new: u64) -> Result<(), (Self, u64)> {
         // TODO: ensure that old < new so that we can recover the page table in order.
         // TODO: commit the transaction on success
         todo!()
