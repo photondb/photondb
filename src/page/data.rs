@@ -2,13 +2,17 @@ use std::cmp::Ordering;
 
 use crate::util::codec::{BufReader, BufWriter, DecodeFrom, EncodeTo};
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Key<'a> {
     pub(crate) raw: &'a [u8],
     pub(crate) lsn: u64,
 }
 
 impl<'a> Key<'a> {
+    pub(crate) const fn min() -> Self {
+        Self::new(&[], u64::MAX)
+    }
+
     pub(crate) const fn new(raw: &'a [u8], lsn: u64) -> Self {
         Self { raw, lsn }
     }
@@ -30,10 +34,19 @@ impl PartialOrd for Key<'_> {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Range<'a> {
     pub(crate) start: Key<'a>,
     pub(crate) end: Option<Key<'a>>,
+}
+
+impl<'a> Range<'a> {
+    pub(crate) fn full() -> Self {
+        Self {
+            start: Key::min(),
+            end: None,
+        }
+    }
 }
 
 impl EncodeTo for &[u8] {
@@ -52,7 +65,7 @@ impl DecodeFrom for &[u8] {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Value<'a> {
     Put(&'a [u8]),
     Delete,
@@ -77,14 +90,18 @@ impl DecodeFrom for Value<'_> {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Index {
     pub(crate) id: u64,
     pub(crate) epoch: u64,
 }
 
 impl Index {
-    pub(crate) const fn new(id: u64, epoch: u64) -> Self {
+    pub(crate) const fn new(id: u64) -> Self {
+        Self::with_epoch(id, 0)
+    }
+
+    pub(crate) const fn with_epoch(id: u64, epoch: u64) -> Self {
         Self { id, epoch }
     }
 }

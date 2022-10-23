@@ -1,4 +1,4 @@
-use super::{iter::*, Tree};
+use super::{page::*, Tree};
 use crate::{
     env::Env,
     page::*,
@@ -6,12 +6,12 @@ use crate::{
     util::codec::{DecodeFrom, EncodeTo},
 };
 
-pub(super) struct Txn<'a, E> {
+pub(super) struct TreeTxn<'a, E> {
     tree: &'a Tree<E>,
     guard: Guard,
 }
 
-impl<'a, E: Env> Txn<'a, E> {
+impl<'a, E: Env> TreeTxn<'a, E> {
     /// Creates a new transaction on the tree.
     pub(super) fn new(tree: &'a Tree<E>) -> Self {
         Self {
@@ -67,14 +67,14 @@ impl<'a, E: Env> Txn<'a, E> {
     }
 }
 
-impl<'a, E> Txn<'a, E> {
+impl<'a, E> TreeTxn<'a, E> {
     /// Finds the leaf page that may contain the key.
     ///
     /// Returns the leaf page and its parent.
     async fn find_leaf(&self, key: &Key<'_>) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
         // The index, range, and parent of the current page, starting from the root.
-        let mut index = Index::new(MIN_ID, 0);
-        let mut range = Range::default();
+        let mut index = Index::new(MIN_ID);
+        let mut range = Range::full();
         let mut parent = None;
         loop {
             // Read the current page from the store.
@@ -114,29 +114,28 @@ impl<'a, E> Txn<'a, E> {
     ///
     /// This function returns when it reaches the end of the chain or the
     /// applied function returns true.
-    async fn walk_page<'g, F>(&'g self, view: &PageView<'g>, mut f: F) -> Result<()>
+    async fn walk_page<'g, F>(&'g self, mut page: PageRef<'g>, mut f: F) -> Result<()>
     where
-        F: FnMut(u64, PageRef<'g>) -> bool,
+        F: FnMut(PageRef<'g>) -> bool,
     {
-        let mut addr = view.addr;
-        let mut page = view.page;
         loop {
-            if f(addr, page) || page.chain_next() == 0 {
+            if f(page) || page.chain_next() == 0 {
                 return Ok(());
             }
-            addr = page.chain_next();
-            page = self.guard.read_page(addr).await?;
+            page = self.guard.read_page(page.chain_next()).await?;
         }
     }
 
     #[allow(dead_code)]
     /// Creates an iterator over the key-value pairs in the page.
-    async fn iter_page<'g>(&'g self, view: &PageView<'g>) -> Result<()> {
-        // usize);
+    async fn iter_page<'g, V>(&'g self, page: PageRef<'g>) -> Result<MergingPageIter<'g, V>> {
+        let mut builder = MergingIterBuilder::with_capacity(page.chain_len() as usize);
         let mut range_limit = None;
-        self.walk_page(view, |_, page| {
+        self.walk_page(page, |page| {
             match page.kind() {
-                PageKind::Data => {}
+                PageKind::Data => {
+                    builder.add(SortedPageIter::from(page));
+                }
                 PageKind::Split => {
                     // The split key we first encountered must be the smallest.
                     #[cfg(debug_assertions)]
@@ -153,7 +152,7 @@ impl<'a, E> Txn<'a, E> {
             false
         })
         .await?;
-        Ok(())
+        Ok(MergingPageIter::new(builder.build(), range_limit))
     }
 
     /// Finds the value corresponding to the key from the page.
@@ -163,7 +162,7 @@ impl<'a, E> Txn<'a, E> {
         view: &PageView<'g>,
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
-        self.walk_page(view, |_, page| {
+        self.walk_page(view.page, |page| {
             debug_assert!(page.tier().is_leaf());
             // We only care about data pages here.
             if page.kind().is_data() {
@@ -197,7 +196,7 @@ impl<'a, E> Txn<'a, E> {
         view: &PageView<'g>,
     ) -> Result<Option<(Index, Range<'g>)>> {
         let mut child = None;
-        self.walk_page(view, |_, page| {
+        self.walk_page(view.page, |page| {
             debug_assert!(page.tier().is_inner());
             // We only care about data pages here.
             if page.kind().is_data() {
@@ -259,7 +258,7 @@ impl<'a, E> Txn<'a, E> {
                 txn.insert_page(new_addr)
             };
             // Build a delta page with the right index.
-            let iter = ItemIter::new((split_key, Index::new(right_id, 0)));
+            let iter = ItemIter::new((split_key, Index::new(right_id)));
             let builder = SortedPageBuilder::new(view.page.tier(), PageKind::Split).with_iter(iter);
             let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
             builder.build(&mut new_page);
@@ -308,7 +307,7 @@ impl<'a, E> Txn<'a, E> {
         mut parent: PageView<'_>,
     ) -> Result<()> {
         let left_key = view.range.start;
-        let left_index = Index::new(view.id, view.page.epoch());
+        let left_index = Index::with_epoch(view.id, view.page.epoch());
         let (split_key, split_index) = split_delta_from_page(view.page);
         // Build a delta page with the child on the left and the new split page on
         // the right.
@@ -318,7 +317,7 @@ impl<'a, E> Txn<'a, E> {
                 (left_key, left_index),
                 (split_key, split_index),
                 // This is a placeholder to indicate the range end of the right page.
-                (range_end, Index::new(NAN_ID, 0)),
+                (range_end, Index::new(NAN_ID)),
             ]
         } else {
             vec![(left_key, left_index), (split_key, split_index)]
@@ -351,8 +350,8 @@ impl<'a, E> Txn<'a, E> {
         // Move the root to another place.
         let mut txn = self.guard.begin();
         let left_id = txn.insert_page(view.addr);
-        let left_key = Key::default();
-        let left_index = Index::new(left_id, view.page.epoch());
+        let left_key = Key::min();
+        let left_index = Index::with_epoch(left_id, view.page.epoch());
         let (split_key, split_index) = split_delta_from_page(view.page);
         // Build a new root with the original root on the left and the new split page on
         // the right.
@@ -429,11 +428,12 @@ impl<'a, E> Txn<'a, E> {
     ) -> Result<Consolidation<'g, V>> {
         let chain_len = view.page.chain_len() as usize;
         let mut builder = MergingIterBuilder::with_capacity(chain_len);
-        let mut last_page = view.page;
         let mut page_size = 0;
+        let mut last_page = view.page;
+        let mut next_addr = view.addr;
         let mut page_addrs = Vec::with_capacity(chain_len);
         let mut range_limit = None;
-        self.walk_page(view, |addr, page| {
+        self.walk_page(view.page, |page| {
             match page.kind() {
                 PageKind::Data => {
                     // TODO: do some benchmarks to evaluate this.
@@ -442,7 +442,6 @@ impl<'a, E> Txn<'a, E> {
                     }
                     builder.add(SortedPageIter::from(page));
                     page_size += page.size();
-                    page_addrs.push(addr);
                 }
                 PageKind::Split => {
                     if range_limit.is_none() {
@@ -451,7 +450,9 @@ impl<'a, E> Txn<'a, E> {
                     }
                 }
             }
+            page_addrs.push(next_addr);
             last_page = page;
+            next_addr = page.chain_next();
             false
         })
         .await?;
