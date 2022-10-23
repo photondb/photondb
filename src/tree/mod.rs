@@ -1,12 +1,13 @@
 use std::path::Path;
 
-mod txn;
-use txn::Txn;
+mod page;
 
-mod iter;
 mod stats;
 use stats::AtomicStats;
 pub(crate) use stats::Stats;
+
+mod tree_txn;
+use tree_txn::TreeTxn;
 
 use crate::{
     env::Env,
@@ -34,8 +35,8 @@ impl<E: Env> Tree<E> {
         })
     }
 
-    fn begin(&self) -> Txn<E> {
-        Txn::new(self)
+    fn begin(&self) -> TreeTxn<E> {
+        TreeTxn::new(self)
     }
 
     /// Gets the value corresponding to the key and applies the function to it.

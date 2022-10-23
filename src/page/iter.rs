@@ -17,7 +17,7 @@ pub(crate) trait RewindableIterator: Iterator {
     fn rewind(&mut self);
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ItemIter<T> {
     next: Option<T>,
     item: Option<T>,
@@ -46,7 +46,7 @@ impl<T: Clone> RewindableIterator for ItemIter<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct SliceIter<'a, T> {
     data: &'a [T],
     next: usize,
@@ -277,10 +277,6 @@ where
     I: Iterator<Item = (K, V)>,
     K: Ord,
 {
-    pub(crate) fn new() -> Self {
-        Self { iters: Vec::new() }
-    }
-
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             iters: Vec::with_capacity(capacity),
@@ -348,7 +344,7 @@ mod tests {
             (8, "c"),
         ];
 
-        let mut builder = MergingIterBuilder::new();
+        let mut builder = MergingIterBuilder::default();
         for data in input.iter() {
             builder.add(SliceIter::new(data));
         }
