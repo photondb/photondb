@@ -148,7 +148,7 @@ pub(crate) mod facade {
 
     #[cfg(test)]
     mod tests {
-        use std::collections::HashMap;
+        use std::{collections::HashMap, os::fd::AsFd};
 
         use super::*;
 

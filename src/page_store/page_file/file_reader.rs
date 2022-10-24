@@ -39,7 +39,7 @@ impl<R: ReadAt> PageFileReader<R> {
         let mut align_buf = AlignBuffer::new(align_buf_size, self.align_size); // TODO: pool this buf?
         let mut read_buf = align_buf.as_bytes_mut();
 
-        self.inner_read_exact_at(&self.reader, &mut read_buf, align_offset as u64)
+        self.inner_read_exact_at(&self.reader, read_buf, align_offset as u64)
             .await
             .expect("read page data fail");
 

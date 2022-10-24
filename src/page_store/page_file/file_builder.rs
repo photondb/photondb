@@ -104,14 +104,18 @@ impl FileBuilder {
 
     async fn finish_file_footer(&mut self) -> Result<FileInfo> {
         let footer = {
-            let mut f = Footer::default();
-            f.magic = 142857;
             let (data_index, meta_index) = self.index.finish_index_block();
-            f.data_handle.offset = self.writer.write(&data_index).await?;
-            f.data_handle.length = data_index.len() as u64;
-            f.meta_handle.offset = self.writer.write(&meta_index).await?;
-            f.meta_handle.length = meta_index.len() as u64;
-            f
+            Footer {
+                magic: 142857,
+                data_handle: BlockHandler {
+                    offset: { self.writer.write(&data_index).await? },
+                    length: data_index.len() as u64,
+                },
+                meta_handle: BlockHandler {
+                    offset: { self.writer.write(&meta_index).await? },
+                    length: meta_index.len() as u64,
+                },
+            }
         };
 
         let footer_dat = footer.encode();
@@ -176,7 +180,6 @@ impl BlockHandler {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct Footer {
     magic: u64,
     pub(crate) data_handle: BlockHandler,
@@ -285,7 +288,7 @@ impl PageTable {
 
 impl From<PageTable> for BTreeMap<u64, u64> {
     fn from(t: PageTable) -> Self {
-        t.0.to_owned()
+        t.0
     }
 }
 
