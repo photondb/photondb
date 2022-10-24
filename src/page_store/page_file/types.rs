@@ -139,6 +139,12 @@ impl FileMeta {
         (**self.meta_indexes.first().as_ref().unwrap()) as usize
     }
 
+    // Return the block_size for the file's device.
+    #[inline]
+    pub(crate) fn block_size(&self) -> usize {
+        self.block_size
+    }
+
     pub(crate) fn get_page_table_meta_page(
         &self,
     ) -> Result<(u64 /* offset */, usize /* length */)> {

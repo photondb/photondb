@@ -79,7 +79,10 @@ impl Guard {
                 .expect("The addr is not belongs to the target page file");
 
             // TODO: cache page file reader for speed up.
-            let reader = self.page_files.open_page_reader(file_id).await?;
+            let reader = self
+                .page_files
+                .open_page_reader(file_id, file_info.meta().block_size())
+                .await?;
             let mut buf = vec![0u8; handle.size as usize];
             reader.read_exact_at(&mut buf, handle.offset as u64).await?;
 
