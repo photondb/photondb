@@ -65,27 +65,31 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
         Ok(())
     }
-}
 
-impl<'a, E> TreeTxn<'a, E> {
+    pub(super) async fn page_view<'g>(&'g self, id: u64, range: Range<'g>) -> Result<PageView<'g>> {
+        let addr = self.guard.page_addr(id);
+        let page = self.guard.read_page(addr).await?;
+        Ok(PageView {
+            id,
+            addr,
+            page,
+            range,
+        })
+    }
+
     /// Finds the leaf page that may contain the key.
     ///
     /// Returns the leaf page and its parent.
-    async fn find_leaf(&self, key: &Key<'_>) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
+    pub(super) async fn find_leaf(
+        &self,
+        key: &Key<'_>,
+    ) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
         // The index, range, and parent of the current page, starting from the root.
-        let mut index = Index::new(MIN_ID);
+        let mut index = Index::new(MIN_ID, 0);
         let mut range = Range::full();
         let mut parent = None;
         loop {
-            // Read the current page from the store.
-            let addr = self.guard.page_addr(index.id);
-            let page = self.guard.read_page(addr).await?;
-            let view = PageView {
-                id: index.id,
-                addr,
-                page,
-                range,
-            };
+            let view = self.page_view(index.id, range).await?;
             // If the page epoch has changed, the page may not contain the data we expect
             // anymore. Try to reconcile pending conflicts and restart the operation.
             if view.page.epoch() != index.epoch {
@@ -126,12 +130,14 @@ impl<'a, E> TreeTxn<'a, E> {
         }
     }
 
-    #[allow(dead_code)]
     /// Creates an iterator over the key-value pairs in the page.
-    async fn iter_page<'g, V>(&'g self, page: PageRef<'g>) -> Result<MergingPageIter<'g, V>> {
-        let mut builder = MergingIterBuilder::with_capacity(page.chain_len() as usize);
+    pub(super) async fn iter_page<'g, V>(
+        &'g self,
+        view: &PageView<'g>,
+    ) -> Result<MergingPageIter<'g, V>> {
+        let mut builder = MergingIterBuilder::with_capacity(view.page.chain_len() as usize);
         let mut range_limit = None;
-        self.walk_page(page, |page| {
+        self.walk_page(view.page, |page| {
             match page.kind() {
                 PageKind::Data => {
                     builder.add(SortedPageIter::from(page));
@@ -258,7 +264,7 @@ impl<'a, E> TreeTxn<'a, E> {
                 txn.insert_page(new_addr)
             };
             // Build a delta page with the right index.
-            let iter = ItemIter::new((split_key, Index::new(right_id)));
+            let iter = ItemIter::new((split_key, Index::new(right_id, 0)));
             let builder = SortedPageBuilder::new(view.page.tier(), PageKind::Split).with_iter(iter);
             let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
             builder.build(&mut new_page);
@@ -307,7 +313,7 @@ impl<'a, E> TreeTxn<'a, E> {
         mut parent: PageView<'_>,
     ) -> Result<()> {
         let left_key = view.range.start;
-        let left_index = Index::with_epoch(view.id, view.page.epoch());
+        let left_index = Index::new(view.id, view.page.epoch());
         let (split_key, split_index) = split_delta_from_page(view.page);
         // Build a delta page with the child on the left and the new split page on
         // the right.
@@ -317,7 +323,7 @@ impl<'a, E> TreeTxn<'a, E> {
                 (left_key, left_index),
                 (split_key, split_index),
                 // This is a placeholder to indicate the range end of the right page.
-                (range_end, Index::new(NAN_ID)),
+                (range_end, Index::new(NAN_ID, 0)),
             ]
         } else {
             vec![(left_key, left_index), (split_key, split_index)]
@@ -351,7 +357,7 @@ impl<'a, E> TreeTxn<'a, E> {
         let mut txn = self.guard.begin();
         let left_id = txn.insert_page(view.addr);
         let left_key = Key::min();
-        let left_index = Index::with_epoch(left_id, view.page.epoch());
+        let left_index = Index::new(left_id, view.page.epoch());
         let (split_key, split_index) = split_delta_from_page(view.page);
         // Build a new root with the original root on the left and the new split page on
         // the right.
@@ -485,13 +491,6 @@ impl<'a, E> TreeTxn<'a, E> {
         }
         page.chain_len() as usize > max_chain_len.max(1)
     }
-}
-
-struct PageView<'a> {
-    id: u64,
-    addr: u64,
-    page: PageRef<'a>,
-    range: Range<'a>,
 }
 
 struct Consolidation<'a, V> {

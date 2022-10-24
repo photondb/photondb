@@ -194,6 +194,7 @@ where
 }
 
 /// An iterator that merges multiple ordered iterators into one.
+#[derive(Default)]
 pub(crate) struct MergingIter<I>
 where
     I: Iterator,
