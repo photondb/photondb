@@ -1,5 +1,12 @@
 use crate::{page::*, page_store::*};
 
+pub(super) struct PageView<'a> {
+    pub(super) id: u64,
+    pub(super) addr: u64,
+    pub(super) page: PageRef<'a>,
+    pub(super) range: Range<'a>,
+}
+
 pub(super) struct MergingPageIter<'a, V> {
     iter: MergingIter<SortedPageIter<'a, V>>,
     range_limit: Option<Key<'a>>,
@@ -27,6 +34,12 @@ impl<'a, V> Iterator for MergingPageIter<'a, V> {
             return Some((key, value));
         }
         None
+    }
+}
+
+impl<'a, V> SeekableIterator<Key<'_>> for MergingPageIter<'a, V> {
+    fn seek(&mut self, target: &Key<'_>) {
+        self.iter.seek(target);
     }
 }
 

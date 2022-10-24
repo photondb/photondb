@@ -97,11 +97,7 @@ pub(crate) struct Index {
 }
 
 impl Index {
-    pub(crate) const fn new(id: u64) -> Self {
-        Self::with_epoch(id, 0)
-    }
-
-    pub(crate) const fn with_epoch(id: u64, epoch: u64) -> Self {
+    pub(crate) const fn new(id: u64, epoch: u64) -> Self {
         Self { id, epoch }
     }
 }
