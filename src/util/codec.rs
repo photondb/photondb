@@ -2,7 +2,7 @@ use std::{mem, slice};
 
 /// Encodes an object to a buffer.
 pub(crate) trait EncodeTo {
-    /// Returns the exact size to encode this object.
+    /// Returns the exact size to encode the object.
     fn encode_size(&self) -> usize;
 
     /// Encodes the object to a [`BufWriter`].

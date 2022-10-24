@@ -15,16 +15,16 @@ impl<'a, V> MergingPageIter<'a, V> {
 }
 
 impl<'a, V> Iterator for MergingPageIter<'a, V> {
-    type Item = SortedItem<'a, V>;
+    type Item = (Key<'a>, V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        for SortedItem(key, value) in &mut self.iter {
+        if let Some((key, value)) = self.iter.next() {
             if let Some(limit) = self.range_limit {
                 if key >= limit {
                     return None;
                 }
             }
-            return Some(SortedItem(key, value));
+            return Some((key, value));
         }
         None
     }
@@ -36,6 +36,7 @@ impl<'a, V> RewindableIterator for MergingPageIter<'a, V> {
     }
 }
 
+/// An iterator that merges multiple leaf pages for consolidation.
 pub(super) struct MergingLeafPageIter<'a> {
     iter: MergingPageIter<'a, Value<'a>>,
     last_raw: Option<&'a [u8]>,
@@ -51,18 +52,18 @@ impl<'a> MergingLeafPageIter<'a> {
 }
 
 impl<'a> Iterator for MergingLeafPageIter<'a> {
-    type Item = SortedItem<'a, Value<'a>>;
+    type Item = (Key<'a>, Value<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
         // TODO: We should keep all versions visible at and after the safe LSN.
-        for SortedItem(key, value) in &mut self.iter {
+        for (key, value) in &mut self.iter {
             if let Some(raw) = self.last_raw {
                 if key.raw == raw {
                     continue;
                 }
             }
             self.last_raw = Some(key.raw);
-            return Some(SortedItem(key, value));
+            return Some((key, value));
         }
         None
     }
@@ -74,6 +75,7 @@ impl<'a> RewindableIterator for MergingLeafPageIter<'a> {
     }
 }
 
+/// An iterator that merges multiple inner pages for consolidation.
 pub(super) struct MergingInnerPageIter<'a> {
     iter: MergingPageIter<'a, Index>,
     last_raw: Option<&'a [u8]>,
@@ -89,20 +91,22 @@ impl<'a> MergingInnerPageIter<'a> {
 }
 
 impl<'a> Iterator for MergingInnerPageIter<'a> {
-    type Item = SortedItem<'a, Index>;
+    type Item = (Key<'a>, Index);
 
     fn next(&mut self) -> Option<Self::Item> {
-        for SortedItem(start, index) in &mut self.iter {
+        for (start, index) in &mut self.iter {
+            // Skip placeholders
             if index.id == NAN_ID {
                 continue;
             }
+            // Skip overwritten keys.
             if let Some(raw) = self.last_raw {
                 if start.raw == raw {
                     continue;
                 }
             }
             self.last_raw = Some(start.raw);
-            return Some(SortedItem(start, index));
+            return Some((start, index));
         }
         None
     }

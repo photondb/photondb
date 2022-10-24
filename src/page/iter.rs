@@ -9,9 +9,6 @@ use std::{
 pub(crate) trait SeekableIterator<T>: Iterator {
     /// Positions the iterator at the first item that is at or after `target`.
     fn seek(&mut self, target: &T);
-
-    /// Positions the iterator at the first item that is at or before `target`.
-    fn seek_back(&mut self, target: &T);
 }
 
 /// An extension of [`Iterator`] that can rewind back to the beginning.
@@ -20,6 +17,7 @@ pub(crate) trait RewindableIterator: Iterator {
     fn rewind(&mut self);
 }
 
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ItemIter<T> {
     next: Option<T>,
     item: Option<T>,
@@ -48,6 +46,7 @@ impl<T: Clone> RewindableIterator for ItemIter<T> {
     }
 }
 
+#[derive(Clone, Debug, Default)]
 pub(crate) struct SliceIter<'a, T> {
     data: &'a [T],
     next: usize,
@@ -77,14 +76,7 @@ impl<'a, T: Clone + Ord> SeekableIterator<T> for SliceIter<'a, T> {
         self.next = match self.data.binary_search(target) {
             Ok(i) => i,
             Err(i) => i,
-        };
-    }
-
-    fn seek_back(&mut self, target: &T) {
-        self.next = match self.data.binary_search(target) {
-            Ok(i) => i,
-            Err(i) => i,
-        };
+        }
     }
 }
 
@@ -94,12 +86,14 @@ impl<'a, T: Clone> RewindableIterator for SliceIter<'a, T> {
     }
 }
 
-/// A wrapper to order an [`Iterator`] by its next item.
-struct OrderedIter<I>
+/// A wrapper to order an [`Iterator`] by its next item and rank.
+#[derive(Debug)]
+pub(crate) struct OrderedIter<I>
 where
     I: Iterator,
 {
     iter: I,
+    rank: usize,
     next: Option<I::Item>,
 }
 
@@ -107,8 +101,12 @@ impl<I> OrderedIter<I>
 where
     I: Iterator,
 {
-    fn new(iter: I) -> Self {
-        Self { iter, next: None }
+    fn new(iter: I, rank: usize) -> Self {
+        Self {
+            iter,
+            rank,
+            next: None,
+        }
     }
 
     fn init(&mut self) {
@@ -116,42 +114,46 @@ where
     }
 }
 
-impl<I> Eq for OrderedIter<I>
+impl<I, K, V> Eq for OrderedIter<I>
 where
-    I: Iterator,
-    I::Item: Ord,
+    I: Iterator<Item = (K, V)>,
+    K: Ord,
 {
 }
 
-impl<I> PartialEq for OrderedIter<I>
+impl<I, K, V> PartialEq for OrderedIter<I>
 where
-    I: Iterator,
-    I::Item: Ord,
+    I: Iterator<Item = (K, V)>,
+    K: Ord,
 {
     fn eq(&self, other: &Self) -> bool {
-        self.next == other.next
+        self.cmp(other) == Ordering::Equal
     }
 }
 
-impl<I> Ord for OrderedIter<I>
+impl<I, K, V> Ord for OrderedIter<I>
 where
-    I: Iterator,
-    I::Item: Ord,
+    I: Iterator<Item = (K, V)>,
+    K: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
-        match (&self.next, &other.next) {
-            (Some(a), Some(b)) => a.cmp(b),
+        let mut ord = match (&self.next, &other.next) {
+            (Some(a), Some(b)) => a.0.cmp(&b.0),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
             (None, None) => Ordering::Equal,
+        };
+        if ord == Ordering::Equal {
+            ord = self.rank.cmp(&other.rank);
         }
+        ord
     }
 }
 
-impl<I> PartialOrd for OrderedIter<I>
+impl<I, K, V> PartialOrd for OrderedIter<I>
 where
-    I: Iterator,
-    I::Item: Ord,
+    I: Iterator<Item = (K, V)>,
+    K: Ord,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -179,11 +181,6 @@ where
         self.iter.seek(target);
         self.next = self.iter.next();
     }
-
-    fn seek_back(&mut self, target: &T) {
-        self.iter.seek_back(target);
-        self.next = self.iter.next();
-    }
 }
 
 impl<I> RewindableIterator for OrderedIter<I>
@@ -200,7 +197,7 @@ where
 pub(crate) struct MergingIter<I>
 where
     I: Iterator,
-    I::Item: Ord,
+    OrderedIter<I>: Iterator + Ord,
 {
     heap: BinaryHeap<Reverse<OrderedIter<I>>>,
 }
@@ -208,7 +205,7 @@ where
 impl<I> MergingIter<I>
 where
     I: Iterator,
-    I::Item: Ord,
+    OrderedIter<I>: Iterator + Ord,
 {
     fn init(mut vec: Vec<Reverse<OrderedIter<I>>>) -> Self {
         for iter in vec.iter_mut() {
@@ -233,7 +230,7 @@ where
 impl<I> Iterator for MergingIter<I>
 where
     I: Iterator,
-    I::Item: Ord,
+    OrderedIter<I>: Iterator<Item = I::Item> + Ord,
 {
     type Item = I::Item;
 
@@ -248,22 +245,18 @@ where
 
 impl<I, T> SeekableIterator<T> for MergingIter<I>
 where
-    I: SeekableIterator<T>,
-    I::Item: Ord,
+    I: Iterator,
+    OrderedIter<I>: SeekableIterator<T, Item = I::Item> + Ord,
 {
     fn seek(&mut self, target: &T) {
-        self.for_each(|iter| iter.0.seek(target));
-    }
-
-    fn seek_back(&mut self, target: &T) {
-        self.for_each(|iter| iter.0.seek_back(target));
+        self.for_each(|iter| iter.0.seek(target))
     }
 }
 
 impl<I> RewindableIterator for MergingIter<I>
 where
-    I: RewindableIterator,
-    I::Item: Ord,
+    I: Iterator,
+    OrderedIter<I>: RewindableIterator<Item = I::Item> + Ord,
 {
     fn rewind(&mut self) {
         self.for_each(|iter| iter.0.rewind());
@@ -271,23 +264,19 @@ where
 }
 
 /// Builds a [`MergingIter`] from multiple iterators.
+#[derive(Default)]
 pub(crate) struct MergingIterBuilder<I>
 where
     I: Iterator,
-    I::Item: Ord,
 {
     iters: Vec<Reverse<OrderedIter<I>>>,
 }
 
-impl<I> MergingIterBuilder<I>
+impl<I, K, V> MergingIterBuilder<I>
 where
-    I: Iterator,
-    I::Item: Ord,
+    I: Iterator<Item = (K, V)>,
+    K: Ord,
 {
-    pub(crate) fn new() -> Self {
-        Self { iters: Vec::new() }
-    }
-
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             iters: Vec::with_capacity(capacity),
@@ -299,7 +288,8 @@ where
     }
 
     pub(crate) fn add(&mut self, iter: I) {
-        self.iters.push(Reverse(OrderedIter::new(iter)));
+        let rank = self.iters.len();
+        self.iters.push(Reverse(OrderedIter::new(iter, rank)));
     }
 
     /// Creates a [`MergingIter`] from the specified iterators.
@@ -335,35 +325,52 @@ mod tests {
 
     #[test]
     fn merging_iter() {
-        let input = [[1, 3], [2, 4], [1, 8], [3, 7]];
-        let output = [1, 1, 2, 3, 3, 4, 7, 8];
+        let input = [
+            vec![(1, "a"), (3, "a"), (7, "a")],
+            vec![(2, "b"), (4, "b")],
+            vec![(1, "c"), (2, "c"), (8, "c")],
+            vec![(3, "d"), (7, "d")],
+        ];
+        let output = [
+            (1, "a"),
+            (1, "c"),
+            (2, "b"),
+            (2, "c"),
+            (3, "a"),
+            (3, "d"),
+            (4, "b"),
+            (7, "a"),
+            (7, "d"),
+            (8, "c"),
+        ];
 
-        let mut builder = MergingIterBuilder::new();
-        for item in input.iter() {
-            builder.add(SliceIter::new(item));
+        let mut builder = MergingIterBuilder::default();
+        for data in input.iter() {
+            builder.add(SliceIter::new(data));
         }
         let mut iter = builder.build();
 
         for _ in 0..2 {
-            for item in output.iter() {
-                assert_eq!(iter.next().as_ref(), Some(item));
+            for item in output.iter().copied() {
+                assert_eq!(iter.next(), Some(item));
             }
             assert_eq!(iter.next(), None);
             iter.rewind();
         }
 
-        iter.seek(&0);
-        assert_eq!(iter.next(), Some(1));
-        assert_eq!(iter.next(), Some(1));
-        iter.seek(&9);
+        iter.seek(&(0, ""));
+        assert_eq!(iter.next(), Some((1, "a")));
+        assert_eq!(iter.next(), Some((1, "c")));
+        iter.seek(&(9, ""));
         assert_eq!(iter.next(), None);
-        iter.seek(&1);
-        assert_eq!(iter.next(), Some(1));
-        iter.seek(&3);
-        assert_eq!(iter.next(), Some(3));
-        assert_eq!(iter.next(), Some(3));
-        iter.seek(&5);
-        assert_eq!(iter.next(), Some(7));
-        assert_eq!(iter.next(), Some(8));
+        iter.seek(&(1, ""));
+        assert_eq!(iter.next(), Some((1, "a")));
+        iter.seek(&(3, ""));
+        assert_eq!(iter.next(), Some((3, "a")));
+        assert_eq!(iter.next(), Some((3, "d")));
+        iter.seek(&(5, ""));
+        assert_eq!(iter.next(), Some((7, "a")));
+        assert_eq!(iter.next(), Some((7, "d")));
+        assert_eq!(iter.next(), Some((8, "c")));
     }
 }

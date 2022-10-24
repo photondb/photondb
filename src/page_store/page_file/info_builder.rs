@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use photonio::fs::File;
 
-use super::{types::split_page_addr, FileInfo, FileReader};
+use super::{file_reader::MetaReader, types::split_page_addr, FileInfo, PageFileReader};
 use crate::page_store::Result;
 
 pub(crate) struct FileInfoBuilder {
@@ -55,11 +55,11 @@ impl FileInfoBuilder {
     }
 
     async fn recovery_one_file(&self, file_id: &u32) -> Result<(FileInfo, Vec<u64>)> {
-        let file_reader = self.open_file_reader(file_id).await;
-        let meta = file_reader.file_metadata();
+        let meta_reader = self.open_meta_reader(file_id).await;
+        let meta = meta_reader.file_metadata();
 
         let active_pages = {
-            let page_table = file_reader
+            let page_table = meta_reader
                 .read_page_table()
                 .await
                 .expect("read page table error");
@@ -73,7 +73,7 @@ impl FileInfoBuilder {
 
         let active_size = meta.total_page_size();
 
-        let delete_pages = file_reader.read_delete_pages().await?;
+        let delete_pages = meta_reader.read_delete_pages().await?;
 
         let decline_rate = 0.0; // todo:...
         let info = FileInfo::new(active_pages, decline_rate, active_size, meta);
@@ -91,12 +91,17 @@ impl FileInfoBuilder {
         }
     }
 
-    async fn open_file_reader(&self, file_id: &u32) -> FileReader<File> {
+    #[inline]
+    async fn open_meta_reader(&self, file_id: &u32) -> MetaReader<File> {
         let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
         let raw_file = File::open(&path).await.expect("file {path} not exist");
         let raw_metadata = raw_file.metadata().await.expect("read file metadata file");
-        FileReader::open(raw_file, raw_metadata.len() as u32, *file_id)
-            .await
-            .expect("open file reader error")
+        MetaReader::open(
+            PageFileReader::from(raw_file, false),
+            raw_metadata.len() as u32,
+            *file_id,
+        )
+        .await
+        .expect("open file reader error")
     }
 }

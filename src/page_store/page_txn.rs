@@ -38,6 +38,10 @@ impl Guard {
     }
 }
 
+/// A transaction to manipulate pages in a page store.
+///
+/// On drop, the transaction will be aborted and all its operations will be
+/// rolled back.
 pub(crate) struct PageTxn<'a> {
     guard: &'a Guard,
 
@@ -47,6 +51,12 @@ pub(crate) struct PageTxn<'a> {
 }
 
 impl<'a> PageTxn<'a> {
+    /// Allocates a page buffer with the given size.
+    ///
+    /// Returns the address and buffer of the allocated page.
+    ///
+    /// If the transaction aborts, all pages allocated by this transaction will
+    /// be deallocated.
     pub(crate) fn alloc_page(&mut self, size: usize) -> Result<(u64, PageBuf<'a>)> {
         let page_size = size as u32;
         let (addr, header, buf) = self.alloc_page_inner(page_size)?;
@@ -54,19 +64,11 @@ impl<'a> PageTxn<'a> {
         Ok((addr, buf))
     }
 
-    /// Dealloc pages allocated from another txn.
-    pub(crate) fn dealloc_pages(&mut self, addrs: &[u64]) -> Result<()> {
-        for addr in addrs {
-            if self.records.contains_key(addr) {
-                panic!("dealloc pages allocated in the same txn is prohibited.")
-            }
-        }
-
-        let header = self.dealloc_pages_inner(addrs)?;
-        self.deleted_pages.push(header);
-        Ok(())
-    }
-
+    /// Inserts a new page into the store.
+    ///
+    /// Returns the id of the inserted page.
+    ///
+    /// If the transaction aborts, the inserted page will be deleted.
     pub(crate) fn insert_page(&mut self, addr: u64) -> u64 {
         let header = self.records.get_mut(&addr).expect("no such pages");
         if header.is_tombstone() {
@@ -79,13 +81,36 @@ impl<'a> PageTxn<'a> {
         page_id
     }
 
-    pub(crate) fn delete_page(&mut self, _id: u64) {
+    /// Updates the page address to `new_addr` if its current value is the same
+    /// as `old_addr`.
+    ///
+    /// On success, commits all operations in the transaction.
+    /// On failure, returns the transaction and the current address of the page.
+    pub(crate) fn update_page(
+        self,
+        id: u64,
+        old_addr: u64,
+        new_addr: u64,
+    ) -> Result<(), (Self, u64)> {
+        // TODO: ensure that old_addr < new_addr so that we can recover the page table
+        // in order.
         todo!()
     }
 
-    pub(crate) fn update_page(&mut self, id: u64, old: u64, new: u64) -> Result<(), u64> {
-        // TODO: ensure that old < new so that we can recover the page table in order.
-        // TODO: commit the transaction on success
+    /// This function is similar to [`Self::update_page`], except that it also
+    /// deallocates some pages on success.
+    ///
+    /// The deallocated pages will still be valid until no one is able to access
+    /// them.
+    pub(crate) fn replace_page(
+        self,
+        id: u64,
+        old_addr: u64,
+        new_addr: u64,
+        dealloc_addrs: &[u64],
+    ) -> Result<(), (Self, u64)> {
+        // TODO: ensure that old_addr < new_addr so that we can recover the page table
+        // in order.
         todo!()
     }
 
