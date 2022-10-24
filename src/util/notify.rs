@@ -37,6 +37,11 @@ impl Notify {
         // Ignore if there has already exists a permit.
         self.sender.clone().try_send(()).unwrap_or_default();
     }
+
+    /// Notifies all waiting or incoming task.
+    pub(crate) fn notify_all(&self) {
+        self.sender.clone().close_channel();
+    }
 }
 
 impl Default for Notify {
