@@ -1,9 +1,10 @@
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
-use crate::page_store::Version;
+use crate::page_store::{PageFiles, Result, Version};
 
 pub(crate) struct CleanupCtx {
     // TODO: cancel task
+    page_files: Arc<PageFiles>,
 }
 
 impl CleanupCtx {
@@ -13,16 +14,17 @@ impl CleanupCtx {
 
             let mut next_version = version.wait_next_version().await;
             std::mem::swap(&mut next_version, &mut version);
-            wait_version_released(next_version).await;
+            next_version.wait_version_released().await;
 
             // Now it is safety to cleanup the version.
-            todo!()
+            self.clean_obsolated_files(deleted_files).await;
         }
     }
-}
 
-async fn wait_version_released(version: Version) {
-    version.wait_version_released().await;
-
-    todo!()
+    #[inline]
+    async fn clean_obsolated_files(&self, files: Vec<u32>) {
+        if let Err(err) = self.page_files.remove_files(files).await {
+            todo!("{err}");
+        }
+    }
 }

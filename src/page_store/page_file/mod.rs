@@ -120,6 +120,22 @@ pub(crate) mod facade {
             let page_file_reader = PageFileReader::from(reader, true);
             MetaReader::open(page_file_reader, file_size as u32, file_id).await
         }
+
+        pub(crate) async fn remove_files(&self, files: Vec<u32>) -> Result<()> {
+            for file_id in files {
+                // FIXME: handle error.
+                self.remove_file(file_id).await?;
+            }
+            Ok(())
+        }
+
+        async fn remove_file(&self, file_id: u32) -> Result<()> {
+            let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
+            photonio::fs::remove_file(&path)
+                .await
+                .expect("remove file failed");
+            Ok(())
+        }
     }
 
     #[cfg(test)]
