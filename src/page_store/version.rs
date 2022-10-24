@@ -157,10 +157,6 @@ impl Version {
         todo!()
     }
 
-    pub(crate) fn active_write_buffer_id(&self) -> u32 {
-        self.buffer_set.current().current_buffer.file_id()
-    }
-
     /// Fetch the files which obsolated but referenced by the [`Version`].
     #[inline]
     pub(crate) fn deleted_files(&self) -> Vec<u32> {
@@ -381,6 +377,11 @@ impl Drop for BufferSet {
 }
 
 impl BufferSetVersion {
+    #[inline]
+    pub(crate) fn last_writer_buffer(&self) -> &WriteBuffer {
+        self.current_buffer.as_ref()
+    }
+
     /// Read [`WriteBuffer`] of the specified `file_id`.
     ///
     /// If the user needs to access the [`WriteBuffer`] for a long time, use
