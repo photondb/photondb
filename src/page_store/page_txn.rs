@@ -39,8 +39,16 @@ impl Guard {
         }
     }
 
+    #[inline]
     pub(crate) fn page_addr(&self, id: u64) -> u64 {
-        todo!()
+        let page_addr = self.page_table.get(id);
+        if page_addr == 0 {
+            // All pages are accessed gradually starting from `MIN_ID`. If a page addr is
+            // the default value, there must be some concurrency problems or other potential
+            // errors.
+            panic!("No such page exists");
+        }
+        page_addr
     }
 
     pub(crate) async fn read_page(&self, addr: u64) -> Result<PageRef<'_>> {
