@@ -1,22 +1,30 @@
-use std::{collections::HashMap, rc::Rc, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use super::{
     version::Version,
     write_buffer::{RecordHeader, ReleaseState},
-    Error, PageTable, Result, WriteBuffer, NAN_ID,
+    Error, PageFiles, PageTable, Result, WriteBuffer, NAN_ID,
 };
 use crate::page::{PageBuf, PageRef};
 
 pub(crate) struct Guard {
     version: Rc<Version>,
     page_table: PageTable,
+    page_files: Arc<PageFiles>,
+    owned_pages: RefCell<Vec<Vec<u8>>>,
 }
 
 impl Guard {
-    pub(crate) fn new(version: Rc<Version>, page_table: PageTable) -> Self {
+    pub(crate) fn new(
+        version: Rc<Version>,
+        page_table: PageTable,
+        page_files: Arc<PageFiles>,
+    ) -> Self {
         Guard {
             version,
             page_table,
+            page_files,
+            owned_pages: RefCell::default(),
         }
     }
 
@@ -51,8 +59,40 @@ impl Guard {
         page_addr
     }
 
-    pub(crate) async fn read_page(&self, addr: u64) -> Result<PageRef<'_>> {
-        todo!()
+    pub(crate) async fn read_page(&self, addr: u64) -> Result<PageRef> {
+        let file_id = (addr >> 32) as u32;
+        if self.version.contains_write_buffer(file_id) {
+            let page_ref = self
+                .version
+                .with_write_buffer(file_id, |write_buffer| unsafe {
+                    // FIXME: ensure there no any mutable references.
+                    // Safety: all mutable references are released.
+                    write_buffer.page(addr)
+                });
+            Ok(page_ref)
+        } else {
+            let Some(file_info) = self.version.files().get(&file_id) else {
+                panic!("File {file_id} is not exists");
+            };
+            let handle = file_info
+                .get_page_handle(addr)
+                .expect("The addr is not belongs to the target page file");
+
+            // TODO: cache page file reader for speed up.
+            let reader = self.page_files.open_page_reader(file_id).await?;
+            let mut buf = vec![0u8; handle.size as usize];
+            reader.read_exact_at(&mut buf, handle.offset as u64).await?;
+
+            let mut owned_pages = self.owned_pages.borrow_mut();
+            owned_pages.push(buf);
+            let page = owned_pages.last().expect("Verified");
+            let page = page.as_slice();
+
+            Ok(PageRef::new(unsafe {
+                // Safety: the lifetime is guarranted by `guard`.
+                std::slice::from_raw_parts(page.as_ptr(), page.len())
+            }))
+        }
     }
 }
 
@@ -271,9 +311,14 @@ mod tests {
 
     #[test]
     fn page_txn_update_page() {
+        let files = {
+            let base = std::env::temp_dir();
+            Arc::new(PageFiles::new(&base, "test_page_txn_update_page"))
+        };
+
         let version = Rc::new(Version::new(512));
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), page_table);
+        let guard = Guard::new(version.clone(), page_table, files);
         let mut page_txn = guard.begin();
         let (addr, _) = page_txn.alloc_page(123).unwrap();
         let id = page_txn.insert_page(addr);
@@ -283,9 +328,14 @@ mod tests {
 
     #[test]
     fn page_txn_failed_update_page() {
+        let files = {
+            let base = std::env::temp_dir();
+            Arc::new(PageFiles::new(&base, "test_page_txn_failed_update_page"))
+        };
+
         let version = Rc::new(Version::new(1 << 10));
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), page_table);
+        let guard = Guard::new(version.clone(), page_table, files);
 
         // insert old page.
         let mut page_txn = guard.begin();
@@ -302,9 +352,14 @@ mod tests {
 
     #[test]
     fn page_txn_replace_page() {
+        let files = {
+            let base = std::env::temp_dir();
+            Arc::new(PageFiles::new(&base, "test_page_txn_replace_page"))
+        };
+
         let version = Rc::new(Version::new(1 << 10));
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), page_table);
+        let guard = Guard::new(version.clone(), page_table, files);
         let mut page_txn = guard.begin();
         let (addr, _) = page_txn.alloc_page(123).unwrap();
         let id = page_txn.insert_page(addr);
@@ -314,9 +369,14 @@ mod tests {
 
     #[test]
     fn page_txn_seal_write_buffer() {
+        let files = {
+            let base = std::env::temp_dir();
+            Arc::new(PageFiles::new(&base, "test_page_seal_write_buffer"))
+        };
+
         let version = Rc::new(Version::new(512));
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), page_table);
+        let guard = Guard::new(version.clone(), page_table, files);
         let mut page_txn = guard.begin();
         page_txn.seal_write_buffer();
     }
