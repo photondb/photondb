@@ -8,7 +8,7 @@ use bitflags::bitflags;
 
 use super::Result;
 use crate::{
-    page::{PageBuf, PagePtr, PageRef},
+    page::{PageBuf, PageRef},
     page_store::Error,
 };
 

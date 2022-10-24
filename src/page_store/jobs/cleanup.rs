@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::page_store::Version;
 
 pub(crate) struct CleanupCtx {
@@ -20,5 +22,7 @@ impl CleanupCtx {
 }
 
 async fn wait_version_released(version: Version) {
+    version.wait_version_released().await;
+
     todo!()
 }

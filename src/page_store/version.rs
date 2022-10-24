@@ -5,11 +5,12 @@ use std::{
     rc::Rc,
     sync::{
         atomic::{AtomicPtr, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
 use crossbeam_epoch::Guard;
+use futures::channel::oneshot;
 
 use super::{FileInfo, Result, WriteBuffer};
 use crate::util::notify::Notify;
@@ -47,9 +48,13 @@ pub(crate) struct DeltaVersion {
     pub(crate) deleted_files: HashSet<u32>,
 }
 
-#[derive(Default)]
 pub(crate) struct NextVersion {
     raw_version: AtomicPtr<Version>,
+
+    new_version_notify: Notify,
+
+    cleanup_guard: oneshot::Sender<()>,
+    cleanup_handle: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
 pub(crate) struct BufferSet {
@@ -102,7 +107,11 @@ impl Version {
     /// TODO: It is assumed that all installations come in [`WriteBuffer`]
     /// order, so there is no need to consider concurrency issues.
     pub(crate) fn install(version: Rc<Version>, delta: DeltaVersion) -> Result<()> {
-        let current = version.next.refresh().unwrap_or_else(move || version);
+        let current = version
+            .next
+            .refresh()
+            .map(Rc::new)
+            .unwrap_or_else(move || version);
         let (buffers_range, write_buffers) = {
             let buffers_ref = current.buffer_set.current();
             (buffers_ref.buffers_range.clone(), buffers_ref.snapshot())
@@ -128,6 +137,7 @@ impl Version {
         let current = Self::get_local();
         if let Some(version) = &current {
             if let Some(new) = version.next.refresh() {
+                let new = Rc::new(new);
                 Self::set_local(new.clone());
                 return Some(new);
             }
@@ -148,13 +158,29 @@ impl Version {
     }
 
     #[inline]
-    pub(crate) fn refresh(&self) -> Option<Rc<Version>> {
+    pub(crate) fn refresh(&self) -> Option<Version> {
         self.next.refresh()
     }
 
     /// Wait and construct next [`Version`].
     pub(crate) async fn wait_next_version(&self) -> Self {
-        todo!()
+        self.next.new_version_notify.notified().await;
+        self.refresh().expect("New version has been installed")
+    }
+
+    /// Wait until all reference pointed to the [`Version`] has been released.
+    ///
+    /// There can only be one waiter per [`Version`].
+    pub(crate) async fn wait_version_released(self) {
+        let handle = {
+            self.next
+                .cleanup_handle
+                .lock()
+                .expect("Poisoned")
+                .take()
+                .expect("There can only be one waiter per version")
+        };
+        handle.await.unwrap_or_default();
     }
 
     /// Fetch the files which obsolated but referenced by the [`Version`].
@@ -209,10 +235,12 @@ impl NextVersion {
                 Ordering::Acquire,
             )
             .expect("There has already exists a version");
+
+        self.new_version_notify.notify_all();
     }
 
-    fn refresh(&self) -> Option<Rc<Version>> {
-        let mut new: Option<Rc<Version>> = None;
+    fn refresh(&self) -> Option<Version> {
+        let mut new: Option<Version> = None;
         let mut raw = self.raw_version.load(Ordering::Acquire);
         loop {
             // Safety:
@@ -221,13 +249,25 @@ impl NextVersion {
             match unsafe { raw.as_ref() } {
                 None => break,
                 Some(version) => {
-                    let version = Rc::new(version.clone());
+                    let version = version.clone();
                     raw = version.next.raw_version.load(Ordering::Acquire);
                     new = Some(version);
                 }
             }
         }
         new
+    }
+}
+
+impl Default for NextVersion {
+    fn default() -> Self {
+        let (sender, receiver) = oneshot::channel();
+        NextVersion {
+            raw_version: AtomicPtr::default(),
+            new_version_notify: Notify::default(),
+            cleanup_guard: sender,
+            cleanup_handle: Mutex::new(Some(receiver)),
+        }
     }
 }
 
