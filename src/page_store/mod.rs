@@ -53,7 +53,11 @@ impl<E: Env> PageStore<E> {
     }
 
     pub(crate) fn guard(&self) -> Guard {
-        Guard::new(self.current_version(), self.table.clone())
+        Guard::new(
+            self.current_version(),
+            self.table.clone(),
+            self.page_files.clone(),
+        )
     }
 
     #[inline]

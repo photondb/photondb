@@ -294,7 +294,7 @@ impl WriteBuffer {
     ///
     /// Users need to ensure that the accessed page has no mutable references,
     /// so as not to violate the rules of pointer aliasing.
-    pub(crate) unsafe fn page(&self, page_addr: u64) -> PageRef {
+    pub(crate) unsafe fn page<'a>(&self, page_addr: u64) -> PageRef<'a> {
         const ALIGN: u32 = core::mem::size_of::<usize>() as u32;
 
         let file_id = (page_addr >> 32) as u32;
@@ -611,7 +611,7 @@ impl RecordHeader {
         self.page_id = page_id;
     }
 
-    fn record_ref(&self) -> Option<RecordRef> {
+    fn record_ref<'a>(&self) -> Option<RecordRef<'a>> {
         match RecordFlags::from_bits_truncate(self.flags) {
             RecordFlags::NORMAL_PAGE => {
                 let buf = unsafe {

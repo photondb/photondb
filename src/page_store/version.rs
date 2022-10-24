@@ -217,6 +217,12 @@ impl Version {
         let write_buffer = current.write_buffer(file_id).expect("No such write buffer");
         f(write_buffer.as_ref())
     }
+
+    #[inline]
+    pub(crate) fn contains_write_buffer(&self, file_id: u32) -> bool {
+        self.inner.buffers_range.contains(&file_id)
+            || self.buffer_set.current().write_buffer(file_id).is_some()
+    }
 }
 
 impl NextVersion {

@@ -1,5 +1,6 @@
 use prost::{alloc::vec::Vec, Message};
 
+#[allow(unreachable_pub)]
 #[derive(Clone, PartialEq, Message)]
 pub(crate) struct VersionEdit {
     #[prost(uint32, repeated, tag = "1")]
