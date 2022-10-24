@@ -152,23 +152,34 @@ impl WriteBuffer {
     }
 
     /// Allocate new page from the buffer.
-    pub(crate) fn alloc_page(
+    ///
+    /// # Safety
+    ///
+    /// The user needs to ensure that the [`WriteBuffer`] is valid for as long
+    /// as the page reference is still held.
+    pub(crate) unsafe fn alloc_page<'a>(
         &self,
         page_id: u64,
         page_size: u32,
         acquire_writer: bool,
-    ) -> Result<(u64, &mut RecordHeader, PageBuf)> {
+    ) -> Result<(u64, &'a mut RecordHeader, PageBuf<'a>)> {
         let acquire_size = record_size(page_size);
         let offset = self.alloc_size(acquire_size, acquire_writer)?;
         // Safety: here is the only one reference to the record.
         Ok(unsafe { self.new_page_at(offset, page_id, page_size) })
     }
 
-    pub(crate) fn save_deleted_pages(
+    /// Deallocate pages.
+    ///
+    /// # Safety
+    ///
+    /// The user needs to ensure that the [`WriteBuffer`] is valid for as long
+    /// as the page reference is still held.
+    pub(crate) unsafe fn dealloc_pages<'a>(
         &self,
         page_addrs: &[u64],
         acquire_writer: bool,
-    ) -> Result<&mut RecordHeader> {
+    ) -> Result<&'a mut RecordHeader> {
         let deleted_pages_size = (page_addrs.len() * core::mem::size_of::<u64>()) as u32;
         let acquire_size = record_size(deleted_pages_size);
         let offset = self.alloc_size(acquire_size, acquire_writer)?;
@@ -359,7 +370,7 @@ impl WriteBuffer {
     ///
     /// There should no any references pointer to the target record.
     #[inline]
-    unsafe fn record_uninit_mut(&self, offset: u32) -> &mut MaybeUninit<RecordHeader> {
+    unsafe fn record_uninit_mut<'a>(&self, offset: u32) -> &'a mut MaybeUninit<RecordHeader> {
         &mut *(self.record_uninit(offset) as *const _ as *mut _)
     }
 
@@ -404,12 +415,12 @@ impl WriteBuffer {
     /// # Safety
     ///
     /// Not reference pointer to the target record.
-    unsafe fn new_page_at(
+    unsafe fn new_page_at<'a>(
         &self,
         offset: u32,
         page_id: u64,
         page_size: u32,
-    ) -> (u64, &mut RecordHeader, PageBuf) {
+    ) -> (u64, &'a mut RecordHeader, PageBuf<'a>) {
         // Construct `RecordHeader`.
         // Safety: here is the only one reference to the record.
         let header = unsafe { self.record_uninit_mut(offset) };
@@ -439,11 +450,11 @@ impl WriteBuffer {
     /// # Safety
     ///
     /// Not reference pointer to the target record.
-    unsafe fn new_deleted_pages_record_at(
+    unsafe fn new_deleted_pages_record_at<'a>(
         &self,
         offset: u32,
         num_deleted_pages: usize,
-    ) -> (&mut RecordHeader, &mut [u64]) {
+    ) -> (&'a mut RecordHeader, &'a mut [u64]) {
         let page_size = (num_deleted_pages * core::mem::size_of::<u64>()) as u32;
 
         // Safety: here is the only one reference to the record.
@@ -576,6 +587,11 @@ impl RecordHeader {
     }
 
     #[inline]
+    pub(crate) fn is_tombstone(&self) -> bool {
+        self.flags == RecordFlags::TOMBSTONE.bits()
+    }
+
+    #[inline]
     pub(crate) fn set_tombstone(&mut self) {
         self.flags = RecordFlags::TOMBSTONE.bits();
     }
@@ -588,6 +604,11 @@ impl RecordHeader {
     #[inline]
     pub(crate) fn page_id(&self) -> u64 {
         self.page_id
+    }
+
+    #[inline]
+    pub(crate) fn set_page_id(&mut self, page_id: u64) {
+        self.page_id = page_id;
     }
 
     fn record_ref(&self) -> Option<RecordRef> {
@@ -810,7 +831,7 @@ mod tests {
 
         // 1. add pages
         buf.batch(
-            &[(1, 2), (3, 4), (5, 6), (7, 8), (9, 10)],
+            &[(1, 20), (3, 40), (5, 60), (7, 80), (9, 100)],
             &[11, 12, 13, 14, 15],
         )
         .unwrap();
@@ -847,17 +868,17 @@ mod tests {
         let buf = WriteBuffer::with_capacity(1, 1 << 20);
 
         // 1. alloc normal pages
-        buf.alloc_page(1, 123, true).unwrap();
+        unsafe { buf.alloc_page(1, 123, true) }.unwrap();
 
         // 2. alloc deleted pages
-        buf.save_deleted_pages(&[5, 6, 7], false).unwrap();
+        unsafe { buf.dealloc_pages(&[5, 6, 7], false) }.unwrap();
 
         // 3. alloc but set page as tombstone.
-        let (_, header, _) = buf.alloc_page(2, 222, false).unwrap();
+        let (_, header, _) = unsafe { buf.alloc_page(2, 222, false) }.unwrap();
         header.set_tombstone();
         drop(header);
 
-        let header = buf.save_deleted_pages(&[1, 3, 4], false).unwrap();
+        let header = unsafe { buf.dealloc_pages(&[1, 3, 4], false) }.unwrap();
         header.set_tombstone();
         drop(header);
 
