@@ -1,8 +1,11 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf};
 
 use photonio::fs::File;
 
-use super::{file_reader::MetaReader, types::split_page_addr, FileInfo, PageFileReader};
+use super::{
+    file_builder::logical_block_size, file_reader::MetaReader, types::split_page_addr, FileInfo,
+    PageFileReader,
+};
 use crate::page_store::Result;
 
 pub(crate) struct FileInfoBuilder {
@@ -96,8 +99,9 @@ impl FileInfoBuilder {
         let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
         let raw_file = File::open(&path).await.expect("file {path} not exist");
         let raw_metadata = raw_file.metadata().await.expect("read file metadata file");
+        let block_size = logical_block_size(&raw_metadata).await;
         MetaReader::open(
-            PageFileReader::from(raw_file, false),
+            PageFileReader::from(raw_file, false, block_size),
             raw_metadata.len() as u32,
             *file_id,
         )

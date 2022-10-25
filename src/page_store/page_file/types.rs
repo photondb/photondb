@@ -96,14 +96,22 @@ pub(crate) struct FileMeta {
 
     data_offsets: BTreeMap<u64, u64>, // TODO: reduce this size.
     meta_indexes: Vec<u64>,           // [0] -> page_table, [1] ->  delete page, [2], meta_bloc_end
+
+    block_size: usize,
 }
 
 impl FileMeta {
-    pub(crate) fn new(file_id: u32, indexes: Vec<u64>, offsets: BTreeMap<u64, u64>) -> Self {
+    pub(crate) fn new(
+        file_id: u32,
+        indexes: Vec<u64>,
+        offsets: BTreeMap<u64, u64>,
+        block_size: usize,
+    ) -> Self {
         Self {
             file_id,
             meta_indexes: indexes,
             data_offsets: offsets,
+            block_size,
         }
     }
 
@@ -134,6 +142,12 @@ impl FileMeta {
     #[inline]
     pub(crate) fn total_page_size(&self) -> usize {
         (**self.meta_indexes.first().as_ref().unwrap()) as usize
+    }
+
+    // Return the block_size for the file's device.
+    #[inline]
+    pub(crate) fn block_size(&self) -> usize {
+        self.block_size
     }
 
     pub(crate) fn get_page_table_meta_page(

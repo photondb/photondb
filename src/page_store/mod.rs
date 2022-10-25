@@ -30,7 +30,7 @@ mod manifest;
 pub(crate) use manifest::Manifest;
 
 mod page_file;
-pub(crate) use page_file::{FileInfo, FileMeta, PageFiles, PageHandle};
+pub(crate) use page_file::{FileInfo, PageFiles, PageHandle};
 
 pub(crate) struct PageStore<E> {
     options: Options,

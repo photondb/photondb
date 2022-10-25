@@ -16,7 +16,7 @@ pub(crate) mod facade {
 
     use photonio::fs::{File, OpenOptions};
 
-    use super::{file_reader::MetaReader, *};
+    use super::{file_builder::logical_block_size, file_reader::MetaReader, *};
     use crate::page_store::Result;
 
     /// The facade for page_file module.
@@ -52,7 +52,14 @@ pub(crate) mod facade {
                 .open(path)
                 .await
                 .expect("open file_id: {file_id}'s file fail");
-            Ok(FileBuilder::new(file_id, writer, self.use_direct))
+            let metadata = writer.metadata().await.expect("open file metata fail");
+            let block_size = logical_block_size(&metadata).await;
+            Ok(FileBuilder::new(
+                file_id,
+                writer,
+                self.use_direct,
+                block_size,
+            ))
         }
 
         #[inline]
@@ -72,18 +79,22 @@ pub(crate) mod facade {
         }
 
         /// Open page_reader for a page_file.
-        /// page_store could get file_id from page_addr's high bit and
-        /// version.active_files.
-        pub(crate) async fn open_page_reader(&self, file_id: u32) -> Result<PageFileReader<File>> {
+        /// page_store could get file_id & block_size from page_addr's high bit
+        /// and version.active_files.
+        pub(crate) async fn open_page_reader(
+            &self,
+            file_id: u32,
+            block_size: usize,
+        ) -> Result<PageFileReader<File>> {
             let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
             let flags = self.direct_flags();
-            let reader = OpenOptions::new()
+            let file = OpenOptions::new()
                 .read(true)
                 .custom_flags(flags)
                 .open(path)
                 .await
                 .expect("open reader for file_id: {file_id} fail");
-            Ok(PageFileReader::from(reader, self.use_direct))
+            Ok(PageFileReader::from(file, self.use_direct, block_size))
         }
 
         // Create info_builder to help recovery & mantains version's file_info.
@@ -94,16 +105,13 @@ pub(crate) mod facade {
         // test helper.
         pub(self) async fn open_meta_reader(&self, file_id: u32) -> Result<MetaReader<File>> {
             let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
-            let reader = File::open(path)
+            let file = File::open(path)
                 .await
                 .expect("open reader for file_id: {file_id} fail");
-            let file_size = reader
-                .metadata()
-                .await
-                .expect("read fs metadata fail")
-                .len();
-            let page_file_reader = PageFileReader::from(reader, true);
-            MetaReader::open(page_file_reader, file_size as u32, file_id).await
+            let raw_metadata = file.metadata().await.expect("read fs metadata fail");
+            let block_size = logical_block_size(&raw_metadata).await;
+            let page_file_reader = PageFileReader::from(file, true, block_size);
+            MetaReader::open(page_file_reader, raw_metadata.len() as u32, file_id).await
         }
 
         pub(crate) async fn remove_files(&self, files: Vec<u32>) -> Result<()> {
@@ -125,7 +133,7 @@ pub(crate) mod facade {
 
     #[cfg(test)]
     mod tests {
-        use std::collections::HashMap;
+        use std::{collections::HashMap, os::fd::AsFd};
 
         use super::*;
 
@@ -164,7 +172,7 @@ pub(crate) mod facade {
             };
 
             let page_reader = files
-                .open_page_reader(info.meta().get_file_id())
+                .open_page_reader(info.meta().get_file_id(), 4096)
                 .await
                 .unwrap();
 
@@ -247,7 +255,7 @@ pub(crate) mod facade {
 
                 {
                     let (page3_offset, page3_size) = meta.get_page_handle(page_addr(2, 4)).unwrap();
-                    let page_reader = files.open_page_reader(file_id).await.unwrap();
+                    let page_reader = files.open_page_reader(file_id, 4096).await.unwrap();
                     let mut buf = vec![0u8; page3_size];
                     page_reader
                         .read_exact_at(&mut buf, page3_offset)
