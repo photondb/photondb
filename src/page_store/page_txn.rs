@@ -309,8 +309,14 @@ impl<'a> Drop for PageTxn<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use crate::page_store::{page_table::PageTable, version::Version};
+
+    fn new_version(size: u32) -> Version {
+        Version::new(size, 1, HashMap::default(), HashSet::new())
+    }
 
     #[test]
     fn page_txn_update_page() {
@@ -319,7 +325,7 @@ mod tests {
             Arc::new(PageFiles::new(&base, "test_page_txn_update_page"))
         };
 
-        let version = Rc::new(Version::new(512));
+        let version = Rc::new(new_version(512));
         let page_table = PageTable::default();
         let guard = Guard::new(version.clone(), page_table, files);
         let mut page_txn = guard.begin();
@@ -336,7 +342,7 @@ mod tests {
             Arc::new(PageFiles::new(&base, "test_page_txn_failed_update_page"))
         };
 
-        let version = Rc::new(Version::new(1 << 10));
+        let version = Rc::new(new_version(1 << 10));
         let page_table = PageTable::default();
         let guard = Guard::new(version.clone(), page_table, files);
 
@@ -360,7 +366,7 @@ mod tests {
             Arc::new(PageFiles::new(&base, "test_page_txn_replace_page"))
         };
 
-        let version = Rc::new(Version::new(1 << 10));
+        let version = Rc::new(new_version(1 << 10));
         let page_table = PageTable::default();
         let guard = Guard::new(version.clone(), page_table, files);
         let mut page_txn = guard.begin();
@@ -377,7 +383,7 @@ mod tests {
             Arc::new(PageFiles::new(&base, "test_page_seal_write_buffer"))
         };
 
-        let version = Rc::new(Version::new(512));
+        let version = Rc::new(new_version(512));
         let page_table = PageTable::default();
         let guard = Guard::new(version.clone(), page_table, files);
         let mut page_txn = guard.begin();

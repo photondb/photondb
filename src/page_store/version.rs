@@ -83,8 +83,13 @@ pub(crate) struct BufferSetRef<'a> {
 }
 
 impl Version {
-    pub(crate) fn new(write_buffer_capacity: u32) -> Self {
-        let buffer_set = Arc::new(BufferSet::new(write_buffer_capacity));
+    pub(crate) fn new(
+        write_buffer_capacity: u32,
+        next_file_id: u32,
+        files: HashMap<u32, FileInfo>,
+        deleted_files: HashSet<u32>,
+    ) -> Self {
+        let buffer_set = Arc::new(BufferSet::new(next_file_id, write_buffer_capacity));
         let (buffers_range, write_buffers) = {
             let current = buffer_set.current();
             (current.buffers_range.clone(), current.snapshot())
@@ -92,8 +97,8 @@ impl Version {
         let inner = Arc::new(VersionInner {
             buffers_range,
             write_buffers,
-            files: HashMap::default(),
-            deleted_files: HashSet::default(),
+            files,
+            deleted_files,
         });
         Version {
             buffer_set,
@@ -291,11 +296,10 @@ impl Drop for NextVersion {
 }
 
 impl BufferSet {
-    pub(crate) fn new(write_buffer_capacity: u32) -> BufferSet {
-        let min_file_id = 0;
-        let buf = WriteBuffer::with_capacity(min_file_id, write_buffer_capacity);
+    pub(crate) fn new(next_file_id: u32, write_buffer_capacity: u32) -> BufferSet {
+        let buf = WriteBuffer::with_capacity(next_file_id, write_buffer_capacity);
         let version = Box::new(BufferSetVersion {
-            buffers_range: min_file_id..(min_file_id + 1),
+            buffers_range: next_file_id..(next_file_id + 1),
             sealed_buffers: Vec::default(),
             current_buffer: Arc::new(buf),
         });
@@ -512,12 +516,12 @@ mod tests {
 
     #[test]
     fn buffer_set_construct_and_drop() {
-        drop(BufferSet::new(1 << 10));
+        drop(BufferSet::new(1, 1 << 10));
     }
 
     #[test]
     fn buffer_set_write_buffer_install() {
-        let buffer_set = BufferSet::new(1 << 10);
+        let buffer_set = BufferSet::new(1, 1 << 10);
         let file_id = buffer_set.current().next_file_id();
         let buf = WriteBuffer::with_capacity(file_id, buffer_set.write_buffer_capacity());
         buffer_set.install(Arc::new(buf));
@@ -525,7 +529,7 @@ mod tests {
 
     #[photonio::test]
     async fn buffer_set_write_buffer_flush_wait_and_notify() {
-        let buffer_set = Arc::new(BufferSet::new(1 << 10));
+        let buffer_set = Arc::new(BufferSet::new(1, 1 << 10));
         let cloned_buffer_set = buffer_set.clone();
         let handle = photonio::task::spawn(async move {
             cloned_buffer_set.wait_flushable().await;

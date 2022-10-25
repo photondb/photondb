@@ -11,21 +11,6 @@ mod types;
 pub(crate) use facade::PageFiles;
 pub(crate) use types::{FileInfo, FileMeta, PageHandle};
 
-/// [`FileInfoIterator`] is used to traverse [`FileInfo`] to get the
-/// [`PageHandle`] of all active pages.
-pub(crate) struct FileInfoIterator<'a> {
-    info: &'a FileInfo,
-    index: u32,
-}
-
-impl<'a> Iterator for FileInfoIterator<'a> {
-    type Item = PageHandle;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        todo!()
-    }
-}
-
 pub(crate) mod facade {
     use std::{os::unix::prelude::OpenOptionsExt, path::PathBuf};
 
@@ -117,8 +102,7 @@ pub(crate) mod facade {
             FileInfoBuilder::new(self.base.to_owned(), &self.file_prefix)
         }
 
-        // test helper.
-        pub(self) async fn open_meta_reader(&self, file_id: u32) -> Result<MetaReader<File>> {
+        pub(crate) async fn open_meta_reader(&self, file_id: u32) -> Result<MetaReader<File>> {
             let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
             let file = File::open(path)
                 .await
