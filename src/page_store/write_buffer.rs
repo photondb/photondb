@@ -110,6 +110,7 @@ impl WriteBuffer {
 
     /// Allocate pages and record deleted pages in one batch. This operation
     /// will acquire a writer guard.
+    #[cfg(test)]
     pub(crate) fn batch(
         &self,
         new_page_list: &[(u64 /* page id */, u32 /* page size */)],
@@ -594,11 +595,6 @@ impl RecordHeader {
     #[inline]
     pub(crate) fn set_tombstone(&mut self) {
         self.flags = RecordFlags::TOMBSTONE.bits();
-    }
-
-    #[inline]
-    pub(crate) fn page_size(&self) -> u32 {
-        self.page_size
     }
 
     #[inline]
