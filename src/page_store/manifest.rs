@@ -11,7 +11,7 @@ use crate::page_store::Result;
 
 const CURRENT_FILE_NAME: &str = "CURRENT";
 const MANIFEST_FILE_NAME: &str = "MANIFEST";
-const TEMPFILE_SUFFIX: &str = ".tmpdb";
+const TEMPFILE_SUFFIX: &str = "tmpdb";
 const MAX_MANIFEST_SIZE: u64 = 128 << 20; // 128 MiB
 
 pub(crate) struct Manifest {
@@ -79,18 +79,21 @@ impl Manifest {
                 (false, self.current_file_num.as_ref().unwrap().to_owned())
             };
 
-        let mut writer = {
+        let (mut writer, path) = {
             let path = self
                 .base
                 .join(format!("{}_{}", MANIFEST_FILE_NAME, current_file_num));
 
-            OpenOptions::new()
-                .write(true)
-                .create(true)
-                .append(true)
-                .open(path)
-                .await
-                .expect("create new manifest file fail")
+            (
+                OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .await
+                    .expect("create new manifest file fail"),
+                path,
+            )
         };
 
         let written = if rolled {
@@ -99,8 +102,13 @@ impl Manifest {
             let base_written = VersionEditEncoder(base_snapshot)
                 .encode(&mut writer)
                 .await?;
-            let record_written = VersionEditEncoder(ve).encode(&mut writer).await?;
-            base_written + record_written
+            match VersionEditEncoder(ve).encode(&mut writer).await {
+                Ok(record_written) => base_written + record_written,
+                Err(err) => {
+                    let _ = photonio::fs::remove_file(&path).await;
+                    return Err(err);
+                }
+            }
         } else {
             VersionEditEncoder(ve).encode(&mut writer).await?
         } as u64;
@@ -185,7 +193,7 @@ impl Manifest {
         {
             let tmp_path = self
                 .base
-                .join(format!("curr.{}{}", file_num, TEMPFILE_SUFFIX));
+                .join(format!("curr.{}.{}", file_num, TEMPFILE_SUFFIX));
 
             let mut tmp_file = File::create(&tmp_path)
                 .await
@@ -213,7 +221,7 @@ impl Manifest {
 
     async fn cleanup_obsolete_files(&self) -> Result<()> {
         fn is_obsolete_manifest(file_name: &str, curr_file_num: Option<u32>) -> bool {
-            let file_num_str = file_name.trim_end_matches(&format!("{}_", MANIFEST_FILE_NAME));
+            let file_num_str = file_name.trim_start_matches(&format!("{}_", MANIFEST_FILE_NAME));
             if let Ok(file_num) = file_num_str.parse::<u32>() {
                 if let Some(curr_file_num) = curr_file_num {
                     if file_num < curr_file_num {
@@ -229,9 +237,11 @@ impl Manifest {
         let mut wait_remove_paths = Vec::new();
         for path in std::fs::read_dir(&self.base).expect("open base dir fail") {
             let file_path = path.unwrap().path();
-            if file_path.ends_with(TEMPFILE_SUFFIX) {
-                wait_remove_paths.push(file_path.to_owned());
-                continue;
+            if let Some(ext) = file_path.extension() {
+                if ext.to_str().unwrap() == TEMPFILE_SUFFIX {
+                    wait_remove_paths.push(file_path.to_owned());
+                    continue;
+                }
             }
             if is_obsolete_manifest(
                 file_path.file_name().unwrap().to_str().unwrap(),
@@ -314,6 +324,135 @@ mod tests {
     use super::*;
 
     #[photonio::test]
+    fn test_cleanup_when_restart() {
+        let base = std::env::temp_dir().join("curr_test_restart");
+        if base.try_exists().unwrap_or(false) {
+            std::fs::remove_dir_all(base.to_owned()).unwrap();
+        }
+
+        fn version_snapshot() -> VersionEdit {
+            VersionEdit {
+                new_files: vec![],
+                deleted_files: vec![],
+            }
+        }
+        {
+            let mut manifest = Manifest::open(base.to_owned()).await.unwrap();
+            manifest.max_file_size = 1;
+
+            manifest
+                .record_version_edit(
+                    VersionEdit {
+                        new_files: vec![2, 3],
+                        deleted_files: vec![1],
+                    },
+                    version_snapshot,
+                )
+                .await
+                .unwrap();
+
+            manifest
+                .record_version_edit(
+                    VersionEdit {
+                        new_files: vec![2, 3],
+                        deleted_files: vec![1],
+                    },
+                    version_snapshot,
+                )
+                .await
+                .unwrap();
+            manifest
+                .record_version_edit(
+                    VersionEdit {
+                        new_files: vec![2, 3],
+                        deleted_files: vec![1],
+                    },
+                    version_snapshot,
+                )
+                .await
+                .unwrap();
+
+            let tmp_path = base.join(format!("curr.{}.{}", 999, TEMPFILE_SUFFIX));
+
+            File::create(&tmp_path).await.unwrap();
+            let files = std::fs::read_dir(&base)
+                .expect("open base dir fail")
+                .into_iter()
+                .count();
+            assert_eq!(files, 5); // 3 data + 1 current + 1 tmp
+        }
+        {
+            let _ = Manifest::open(base.to_owned()).await.unwrap();
+
+            let files = std::fs::read_dir(&base)
+                .expect("open base dir fail")
+                .into_iter()
+                .count();
+            assert_eq!(files, 2);
+        }
+    }
+
+    #[photonio::test]
+    fn test_roll_manifest() {
+        let base = std::env::temp_dir().join("curr_test_roll");
+        if base.try_exists().unwrap_or(false) {
+            std::fs::remove_dir_all(base.to_owned()).unwrap();
+        }
+
+        let ver = std::sync::Arc::new(std::sync::Mutex::new(VersionEdit {
+            new_files: vec![],
+            deleted_files: vec![],
+        }));
+
+        let ve_snapshot = || {
+            let ver = ver.lock().unwrap();
+            ver.to_owned()
+        };
+
+        let mock_apply = |ve: &VersionEdit| {
+            let mut ver = ver.lock().unwrap();
+            ver.new_files.extend_from_slice(&ve.new_files);
+            ver.new_files
+                .retain(|f| !ve.deleted_files.iter().any(|d| *d == *f))
+        };
+
+        {
+            let mut manifest = Manifest::open(base.to_owned()).await.unwrap();
+            manifest.max_file_size = 100; // set a small threshold value to trigger roll
+            for i in 0..43u32 {
+                let r = i.saturating_sub(10u32);
+                let ve = VersionEdit {
+                    new_files: vec![i],
+                    deleted_files: vec![r],
+                };
+                manifest
+                    .record_version_edit(ve.to_owned(), ve_snapshot)
+                    .await
+                    .unwrap();
+                mock_apply(&ve);
+            }
+        }
+
+        {
+            let manifest2 = Manifest::open(base.to_owned()).await.unwrap();
+            let versions = manifest2.list_versions().await.unwrap();
+
+            let mut recover_ver = VersionEdit::default();
+            for ve in versions {
+                recover_ver.new_files.extend_from_slice(&ve.new_files);
+                recover_ver
+                    .new_files
+                    .retain(|f| !ve.deleted_files.iter().any(|d| *d == *f));
+            }
+
+            assert_eq!(recover_ver.new_files, {
+                let ver = ver.lock().unwrap();
+                ver.to_owned().new_files
+            })
+        }
+    }
+
+    #[photonio::test]
     fn test_mantain_current() {
         fn version_snapshot() -> VersionEdit {
             VersionEdit {
@@ -323,7 +462,9 @@ mod tests {
         }
 
         let base = std::env::temp_dir().join("curr_test2");
-        std::fs::remove_dir_all(base.to_owned()).unwrap();
+        if base.try_exists().unwrap_or(false) {
+            std::fs::remove_dir_all(base.to_owned()).unwrap();
+        }
 
         {
             let mut manifest = Manifest::open(base.to_owned()).await.unwrap();
