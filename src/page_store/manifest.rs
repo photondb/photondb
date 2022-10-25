@@ -314,6 +314,67 @@ mod tests {
     use super::*;
 
     #[photonio::test]
+    fn test_roll_manifest() {
+        let base = std::env::temp_dir().join("curr_test_roll");
+        if base.try_exists().unwrap_or(false) {
+            std::fs::remove_dir_all(base.to_owned()).unwrap();
+        }
+
+        let ver = std::sync::Arc::new(std::sync::Mutex::new(VersionEdit {
+            new_files: vec![],
+            deleted_files: vec![],
+        }));
+
+        let ve_snapshot = || {
+            let ver = ver.lock().unwrap();
+            println!("generate snapshot, live_files: {}", ver.new_files.len());
+            ver.to_owned()
+        };
+
+        let mock_apply = |ve: &VersionEdit| {
+            let mut ver = ver.lock().unwrap();
+            ver.new_files.extend_from_slice(&ve.new_files);
+            ver.new_files
+                .retain(|f| !ve.deleted_files.iter().any(|d| *d == *f))
+        };
+
+        {
+            let mut manifest = Manifest::open(base.to_owned()).await.unwrap();
+            manifest.max_file_size = 100; // set a small threshold value to trigger roll
+            for i in 0..43u32 {
+                let r = i.saturating_sub(10u32);
+                let ve = VersionEdit {
+                    new_files: vec![i],
+                    deleted_files: vec![r],
+                };
+                manifest
+                    .record_version_edit(ve.to_owned(), ve_snapshot)
+                    .await
+                    .unwrap();
+                mock_apply(&ve);
+            }
+        }
+
+        {
+            let manifest2 = Manifest::open(base.to_owned()).await.unwrap();
+            let versions = manifest2.list_versions().await.unwrap();
+
+            let mut recover_ver = VersionEdit::default();
+            for ve in versions {
+                recover_ver.new_files.extend_from_slice(&ve.new_files);
+                recover_ver
+                    .new_files
+                    .retain(|f| !ve.deleted_files.iter().any(|d| *d == *f));
+            }
+
+            assert_eq!(recover_ver.new_files, {
+                let ver = ver.lock().unwrap();
+                ver.to_owned().new_files
+            })
+        }
+    }
+
+    #[photonio::test]
     fn test_mantain_current() {
         fn version_snapshot() -> VersionEdit {
             VersionEdit {
@@ -323,7 +384,9 @@ mod tests {
         }
 
         let base = std::env::temp_dir().join("curr_test2");
-        std::fs::remove_dir_all(base.to_owned()).unwrap();
+        if base.try_exists().unwrap_or(false) {
+            std::fs::remove_dir_all(base.to_owned()).unwrap();
+        }
 
         {
             let mut manifest = Manifest::open(base.to_owned()).await.unwrap();
