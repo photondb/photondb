@@ -102,8 +102,7 @@ pub(crate) mod facade {
             FileInfoBuilder::new(self.base.to_owned(), &self.file_prefix)
         }
 
-        // test helper.
-        pub(self) async fn open_meta_reader(&self, file_id: u32) -> Result<MetaReader<File>> {
+        pub(crate) async fn open_meta_reader(&self, file_id: u32) -> Result<MetaReader<File>> {
             let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
             let file = File::open(path)
                 .await
