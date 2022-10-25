@@ -14,8 +14,8 @@ pub(crate) trait ForwardPage {
     async fn forward(&self, page_addr: u64) -> Result<()>;
 }
 
-/// An abstraction describes the strategy of page files recycle.
-pub(crate) trait RecyclePickStrategy {
+/// An abstraction describes the strategy of page files gc.
+pub(crate) trait GcPickStrategy {
     /// Returns recycle threshold of this strategy.
     fn threshold(&self) -> f64;
 
@@ -23,24 +23,24 @@ pub(crate) trait RecyclePickStrategy {
     fn score(&self, file_info: &FileInfo) -> f64;
 }
 
-pub(crate) struct RecycleCtx<E: Env> {
+pub(crate) struct GcCtx<E: Env> {
     // TODO: cancel task
     forward: Weak<dyn ForwardPage>,
-    strategy: Box<dyn RecyclePickStrategy>,
+    strategy: Box<dyn GcPickStrategy>,
     page_store: Arc<PageStore<E>>,
 }
 
-impl<E: Env> RecycleCtx<E> {
+impl<E: Env> GcCtx<E> {
     pub async fn run(self, mut version: Version) {
         loop {
-            self.do_recycle(&version).await;
+            self.gc(&version).await;
             version = version.wait_next_version().await;
         }
     }
 
-    async fn do_recycle(&self, version: &Version) {
+    async fn gc(&self, version: &Version) {
         for (_, file) in version.files() {
-            if !self.should_recycle_file(file) {
+            if !self.is_satisfied(file) {
                 continue;
             }
             if let Err(err) = self.forward_active_pages(&file).await {
@@ -49,7 +49,7 @@ impl<E: Env> RecycleCtx<E> {
         }
     }
 
-    fn should_recycle_file(&self, file: &FileInfo) -> bool {
+    fn is_satisfied(&self, file: &FileInfo) -> bool {
         self.strategy.score(file) >= self.strategy.threshold()
     }
 

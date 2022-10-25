@@ -2,4 +2,4 @@
 
 pub(crate) mod cleanup;
 pub(crate) mod flush;
-pub(crate) mod recycle;
+pub(crate) mod gc;
