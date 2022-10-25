@@ -30,7 +30,7 @@ impl PagePtr {
     fn new(ptr: NonNull<u8>, len: usize) -> Self {
         debug_assert!(ptr.as_ptr().is_aligned_to(8));
         debug_assert!(len >= PAGE_HEADER_LEN);
-        PagePtr { ptr, len }
+        Self { ptr, len }
     }
 
     /// Returns the page tier.

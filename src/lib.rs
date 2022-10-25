@@ -1,6 +1,8 @@
 //! A storage engine for modern hardware.
 
-#![warn(unreachable_pub)]
+// TODO: enable these warnings once the codebase is clean.
+// #![warn(missing_docs, unreachable_pub)]
+
 #![feature(
     io_error_more,
     type_alias_impl_trait,
