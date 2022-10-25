@@ -84,6 +84,11 @@ impl FileInfo {
     pub(crate) fn decline_rate(&self) -> f64 {
         todo!()
     }
+
+    #[inline]
+    pub(crate) fn iter(&self) -> FileInfoIterator {
+        FileInfoIterator::new(self)
+    }
 }
 
 pub(crate) struct FileMeta {
@@ -149,6 +154,31 @@ impl FileMeta {
         } else {
             Err(Error::Corrupted)
         }
+    }
+}
+
+/// [`FileInfoIterator`] is used to traverse [`FileInfo`] to get the addr of all
+/// active pages.
+pub(crate) struct FileInfoIterator<'a> {
+    info: &'a FileInfo,
+    iter: roaring::bitmap::Iter<'a>,
+}
+
+impl<'a> FileInfoIterator<'a> {
+    fn new(info: &'a FileInfo) -> Self {
+        FileInfoIterator {
+            info,
+            iter: info.active_pages.iter(),
+        }
+    }
+}
+
+impl<'a> Iterator for FileInfoIterator<'a> {
+    type Item = u64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let file_id = self.info.get_file_id();
+        self.iter.next().map(|v| (file_id as u64) | (v as u64))
     }
 }
 

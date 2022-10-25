@@ -11,21 +11,6 @@ mod types;
 pub(crate) use facade::PageFiles;
 pub(crate) use types::{FileInfo, FileMeta, PageHandle};
 
-/// [`FileInfoIterator`] is used to traverse [`FileInfo`] to get the
-/// [`PageHandle`] of all active pages.
-pub(crate) struct FileInfoIterator<'a> {
-    info: &'a FileInfo,
-    index: u32,
-}
-
-impl<'a> Iterator for FileInfoIterator<'a> {
-    type Item = PageHandle;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        todo!()
-    }
-}
-
 pub(crate) mod facade {
     use std::{os::unix::prelude::OpenOptionsExt, path::PathBuf};
 
