@@ -1,6 +1,8 @@
 use std::{cmp::Ordering, mem};
 
-use crate::util::codec::{BufReader, BufWriter, DecodeFrom, EncodeTo};
+use bytes::{Buf, BufMut};
+
+use crate::util::codec::EncodeDecode;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Key<'a> {
@@ -30,37 +32,35 @@ impl PartialOrd for Key<'_> {
     }
 }
 
-impl EncodeTo for &[u8] {
-    fn encode_size(&self) -> usize {
-        BufWriter::length_prefixed_slice_size(self)
+impl<'a> EncodeDecode<'a> for &'a [u8] {
+    fn size(&self) -> usize {
+        4 + self.len()
     }
 
-    unsafe fn encode_to(&self, w: &mut BufWriter) {
-        w.put_length_prefixed_slice(self);
-    }
-}
-
-impl DecodeFrom for &[u8] {
-    unsafe fn decode_from(r: &mut BufReader) -> Self {
-        r.get_length_prefixed_slice()
-    }
-}
-
-impl EncodeTo for Key<'_> {
-    fn encode_size(&self) -> usize {
-        self.raw.encode_size() + mem::size_of_val(&self.lsn)
+    fn encode_to(&self, buf: &mut &mut [u8]) {
+        buf.put_u32_le(buf.len() as u32);
+        buf.put_slice(self)
     }
 
-    unsafe fn encode_to(&self, w: &mut BufWriter) {
-        self.raw.encode_to(w);
-        w.put_u64(self.lsn);
+    fn decode_from(buf: &mut &'a [u8]) -> Self {
+        let len = buf.get_u32_le() as usize;
+        &buf[0..len]
     }
 }
 
-impl DecodeFrom for Key<'_> {
-    unsafe fn decode_from(r: &mut BufReader) -> Self {
-        let raw = r.get_length_prefixed_slice();
-        let lsn = r.get_u64();
+impl<'a> EncodeDecode<'a> for Key<'a> {
+    fn size(&self) -> usize {
+        self.raw.size() + mem::size_of::<u64>()
+    }
+
+    fn encode_to(&self, buf: &mut &mut [u8]) {
+        self.raw.encode_to(buf);
+        buf.put_u64(self.lsn);
+    }
+
+    fn decode_from(buf: &mut &'a [u8]) -> Self {
+        let raw = EncodeDecode::decode_from(buf);
+        let lsn = buf.get_u64();
         Self::new(raw, lsn)
     }
 }
@@ -86,22 +86,34 @@ pub(crate) enum Value<'a> {
     Delete,
 }
 
-impl EncodeTo for Value<'_> {
-    fn encode_size(&self) -> usize {
-        match self {
-            Self::Put(v) => 1 + v.len(),
-            Self::Delete => 1,
+const VALUE_KIND_PUT: u8 = 0;
+const VALUE_KIND_DELETE: u8 = 1;
+
+impl<'a> EncodeDecode<'a> for Value<'a> {
+    fn size(&self) -> usize {
+        1 + match self {
+            Self::Put(v) => v.len(),
+            Self::Delete => 0,
         }
     }
 
-    unsafe fn encode_to(&self, w: &mut BufWriter) {
-        todo!()
+    fn encode_to(&self, buf: &mut &mut [u8]) {
+        match self {
+            Value::Put(v) => {
+                buf.put_u8(VALUE_KIND_PUT);
+                buf.put_slice(v);
+            }
+            Value::Delete => buf.put_u8(VALUE_KIND_DELETE),
+        }
     }
-}
 
-impl DecodeFrom for Value<'_> {
-    unsafe fn decode_from(r: &mut BufReader) -> Self {
-        todo!()
+    fn decode_from(buf: &mut &'a [u8]) -> Self {
+        let kind = buf.get_u8();
+        match kind {
+            VALUE_KIND_PUT => Self::Put(buf),
+            VALUE_KIND_DELETE => Self::Delete,
+            _ => unreachable!(),
+        }
     }
 }
 
@@ -117,18 +129,19 @@ impl Index {
     }
 }
 
-impl EncodeTo for Index {
-    fn encode_size(&self) -> usize {
-        todo!()
+impl EncodeDecode<'_> for Index {
+    fn size(&self) -> usize {
+        mem::size_of::<u64>() * 2
     }
 
-    unsafe fn encode_to(&self, w: &mut BufWriter) {
-        todo!()
+    fn encode_to(&self, buf: &mut &mut [u8]) {
+        buf.put_u64_le(self.id);
+        buf.put_u64_le(self.epoch);
     }
-}
 
-impl DecodeFrom for Index {
-    unsafe fn decode_from(r: &mut BufReader) -> Self {
-        todo!()
+    fn decode_from(buf: &mut &[u8]) -> Self {
+        let id = buf.get_u64_le();
+        let epoch = buf.get_u64_le();
+        Self::new(id, epoch)
     }
 }

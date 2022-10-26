@@ -3,7 +3,7 @@ use std::{marker::PhantomData, ops::Deref};
 use super::{
     PageBuf, PageBuilder, PageKind, PageRef, PageTier, RewindableIterator, SeekableIterator,
 };
-use crate::util::codec::{DecodeFrom, EncodeTo};
+use crate::util::codec::EncodeDecode;
 
 pub(crate) struct SortedPageBuilder<I> {
     base: PageBuilder,
@@ -13,8 +13,8 @@ pub(crate) struct SortedPageBuilder<I> {
 impl<'a, I, K, V> SortedPageBuilder<I>
 where
     I: RewindableIterator<Item = (K, V)>,
-    K: EncodeTo + DecodeFrom,
-    V: EncodeTo + DecodeFrom,
+    K: EncodeDecode<'a>,
+    V: EncodeDecode<'a>,
 {
     pub(crate) fn new(tier: PageTier, kind: PageKind) -> Self {
         Self {
