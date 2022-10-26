@@ -1,10 +1,11 @@
-use ::std::{future::Future, io::Result, path::Path};
+use std::{future::Future, io::Result, path::Path};
+
 pub use async_trait::async_trait;
 use futures::future::BoxFuture;
 pub use photonio::io::{Read, ReadAt, Write, WriteAt};
 
-mod std;
-pub use self::std::Std;
+mod stdenv;
+pub use stdenv::Std;
 
 mod photon;
 pub use photon::Photon;

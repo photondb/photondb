@@ -25,18 +25,3 @@ mod page;
 mod page_store;
 mod tree;
 mod util;
-
-#[cfg(test)]
-mod tests {
-    use super::{env::Env, *};
-
-    #[photonio::test]
-    async fn table() {
-        let env = env::Photon;
-        env.spawn_background(async move {
-            let env = env::Photon;
-            let _ = env.open_sequential_writer("/tmp/test.txt").await.unwrap();
-        })
-        .await;
-    }
-}

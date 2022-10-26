@@ -174,7 +174,7 @@ impl<'a> PageBuf<'a> {
     /// # Panics
     ///
     /// This function panics if the slice is not aligned to 8 bytes, or the
-    /// slice is shorter than `PAGE_HEADER_LEN`.
+    /// slice is shorter than [`PAGE_HEADER_LEN`].
     pub(crate) fn new(buf: &'a mut [u8]) -> Self {
         let ptr = unsafe { NonNull::new_unchecked(buf.as_mut_ptr()) };
         PagePtr::new(ptr, buf.len()).into()
@@ -217,7 +217,7 @@ impl<'a> PageRef<'a> {
     /// # Panics
     ///
     /// This function panics if the slice is not aligned to 8 bytes, or the
-    /// slice is shorter than `PAGE_HEADER_LEN`.
+    /// slice is shorter than [`PAGE_HEADER_LEN`].
     pub(crate) fn new(buf: &'a [u8]) -> Self {
         let ptr = unsafe { NonNull::new_unchecked(buf.as_ptr() as *mut _) };
         PagePtr::new(ptr, buf.len()).into()

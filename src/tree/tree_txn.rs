@@ -42,6 +42,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             new_page.set_chain_next(view.addr);
             match txn.update_page(view.id, view.addr, new_addr) {
                 Ok(_) => {
+                    view.addr = new_addr;
                     view.page = new_page.into();
                     break;
                 }
@@ -51,6 +52,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                     txn = _txn;
                     let page = self.guard.read_page(addr).await?;
                     if page.epoch() == view.page.epoch() {
+                        view.addr = addr;
                         view.page = page;
                         continue;
                     }
@@ -285,6 +287,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             txn.update_page(view.id, view.addr, new_addr)
                 .map(|_| {
                     self.tree.stats.success.split_page.inc();
+                    view.addr = new_addr;
                     view.page = new_page.into();
                 })
                 .map_err(|_| {
@@ -423,6 +426,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         txn.replace_page(view.id, view.addr, new_addr, &cons.page_addrs)
             .map(|_| {
                 self.tree.stats.success.consolidate_page.inc();
+                view.addr = new_addr;
                 view.page = new_page.into();
             })
             .map_err(|_| {
