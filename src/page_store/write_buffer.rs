@@ -48,11 +48,11 @@ pub(crate) struct RecordIterator<'a> {
 
 pub(crate) enum RecordRef<'a> {
     Page(PageRef<'a>),
-    DeletedPages(DeletedPagesRecordRef<'a>),
+    DeallocPages(DeallocPagesRecordRef<'a>),
 }
 
-pub(crate) struct DeletedPagesRecordRef<'a> {
-    deleted_pages: &'a [u64],
+pub(crate) struct DeallocPagesRecordRef<'a> {
+    dealloc_pages: &'a [u64],
     access_index: usize,
 }
 
@@ -108,24 +108,24 @@ impl WriteBuffer {
         self.buffer_state().sealed
     }
 
-    /// Allocate pages and record deleted pages in one batch. This operation
+    /// Allocate pages and record dealloc pages in one batch. This operation
     /// will acquire a writer guard.
     #[cfg(test)]
     pub(crate) fn batch(
         &self,
         new_page_list: &[(u64 /* page id */, u32 /* page size */)],
-        deleted_pages: &[u64],
+        dealloc_pages: &[u64],
     ) -> Result<(
         Vec<(u64, &mut RecordHeader, PageBuf)>,
         Option<&mut RecordHeader>,
     )> {
         const ALIGN: u32 = core::mem::size_of::<usize>() as u32;
-        let deleted_pages_size = (deleted_pages.len() * core::mem::size_of::<u64>()) as u32;
+        let dealloc_pages_size = (dealloc_pages.len() * core::mem::size_of::<u64>()) as u32;
         let need = new_page_list
             .iter()
             .map(|(_, v)| record_size(*v))
             .sum::<u32>()
-            + record_size(deleted_pages_size);
+            + record_size(dealloc_pages_size);
         debug_assert_eq!(need % ALIGN, 0);
 
         let mut offset = self.alloc_size(need, true)?;
@@ -139,17 +139,17 @@ impl WriteBuffer {
             records.push((page_addr, header, page_buf));
         }
 
-        let deleted_pages_header = if !deleted_pages.is_empty() {
+        let dealloc_pages_header = if !dealloc_pages.is_empty() {
             // Safety: here is the only one reference to the record.
             let (header, body) =
-                unsafe { self.new_deleted_pages_record_at(offset, deleted_pages.len()) };
-            body.copy_from_slice(deleted_pages);
+                unsafe { self.new_dealloc_pages_record_at(offset, dealloc_pages.len()) };
+            body.copy_from_slice(dealloc_pages);
             Some(header)
         } else {
             None
         };
 
-        return Ok((records, deleted_pages_header));
+        return Ok((records, dealloc_pages_header));
     }
 
     /// Allocate new page from the buffer.
@@ -181,11 +181,11 @@ impl WriteBuffer {
         page_addrs: &[u64],
         acquire_writer: bool,
     ) -> Result<&'a mut RecordHeader> {
-        let deleted_pages_size = (page_addrs.len() * core::mem::size_of::<u64>()) as u32;
-        let acquire_size = record_size(deleted_pages_size);
+        let dealloc_pages_size = (page_addrs.len() * core::mem::size_of::<u64>()) as u32;
+        let acquire_size = record_size(dealloc_pages_size);
         let offset = self.alloc_size(acquire_size, acquire_writer)?;
         // Safety: here is the only one reference to the record.
-        let (header, body) = unsafe { self.new_deleted_pages_record_at(offset, page_addrs.len()) };
+        let (header, body) = unsafe { self.new_dealloc_pages_record_at(offset, page_addrs.len()) };
         body.copy_from_slice(page_addrs);
         Ok(header)
     }
@@ -446,17 +446,17 @@ impl WriteBuffer {
         (page_addr, header, page_buf)
     }
 
-    /// New deleted pages record at the corresponding offset.
+    /// New dealloc pages record at the corresponding offset.
     ///
     /// # Safety
     ///
     /// Not reference pointer to the target record.
-    unsafe fn new_deleted_pages_record_at<'a>(
+    unsafe fn new_dealloc_pages_record_at<'a>(
         &self,
         offset: u32,
-        num_deleted_pages: usize,
+        num_dealloc_pages: usize,
     ) -> (&'a mut RecordHeader, &'a mut [u64]) {
-        let page_size = (num_deleted_pages * core::mem::size_of::<u64>()) as u32;
+        let page_size = (num_dealloc_pages * core::mem::size_of::<u64>()) as u32;
 
         // Safety: here is the only one reference to the record.
         let header = unsafe { self.record_uninit_mut(offset) };
@@ -469,7 +469,7 @@ impl WriteBuffer {
 
         let body = unsafe {
             let ptr = (header as *mut RecordHeader).offset(1).cast::<u64>();
-            std::slice::from_raw_parts_mut(ptr, num_deleted_pages)
+            std::slice::from_raw_parts_mut(ptr, num_dealloc_pages)
         };
 
         (header, body)
@@ -625,11 +625,11 @@ impl RecordHeader {
                     let addr = (self as *const RecordHeader).offset(1).cast::<u64>();
                     std::slice::from_raw_parts(addr, size)
                 };
-                let val = DeletedPagesRecordRef {
-                    deleted_pages: record,
+                let val = DeallocPagesRecordRef {
+                    dealloc_pages: record,
                     access_index: 0,
                 };
-                Some(RecordRef::DeletedPages(val))
+                Some(RecordRef::DeallocPages(val))
             }
             _ => None,
         }
@@ -662,19 +662,19 @@ impl<'a> Iterator for RecordIterator<'a> {
     }
 }
 
-impl<'a> DeletedPagesRecordRef<'a> {
+impl<'a> DeallocPagesRecordRef<'a> {
     pub(crate) fn as_slice(&self) -> &[u64] {
-        self.deleted_pages
+        self.dealloc_pages
     }
 }
 
-impl<'a> Iterator for DeletedPagesRecordRef<'a> {
+impl<'a> Iterator for DeallocPagesRecordRef<'a> {
     type Item = u64;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.access_index < self.deleted_pages.len() {
-            let item = self.deleted_pages[self.access_index];
+        if self.access_index < self.dealloc_pages.len() {
+            let item = self.dealloc_pages[self.access_index];
             self.access_index += 1;
             Some(item)
         } else {
@@ -834,15 +834,15 @@ mod tests {
         unsafe { buf.release_writer() };
 
         // 2. add tombstones
-        let (records_header, delete_pages_header) = buf.batch(&[(16, 17)], &[1, 2]).unwrap();
+        let (records_header, dealloc_pages_header) = buf.batch(&[(16, 17)], &[1, 2]).unwrap();
         records_header
             .into_iter()
             .for_each(|(_, h, _)| h.set_tombstone());
-        delete_pages_header.map(|h| h.set_tombstone());
+        dealloc_pages_header.map(|h| h.set_tombstone());
 
         unsafe { buf.seal(true) }.unwrap();
 
-        let expect_deleted_pages = vec![11, 12, 13, 14, 15];
+        let expect_dealloc_pages = vec![11, 12, 13, 14, 15];
         let mut active_pages: HashSet<u64> = vec![1, 3, 5, 7, 9].into_iter().collect();
         for (_, header, record_ref) in buf.iter() {
             match record_ref {
@@ -850,9 +850,9 @@ mod tests {
                     let page_id = header.page_id();
                     assert!(active_pages.remove(&page_id));
                 }
-                RecordRef::DeletedPages(deleted_pages) => {
-                    let deleted_pages: Vec<u64> = deleted_pages.collect();
-                    assert_eq!(deleted_pages, expect_deleted_pages);
+                RecordRef::DeallocPages(dealloc_pages) => {
+                    let dealloc_pages: Vec<u64> = dealloc_pages.collect();
+                    assert_eq!(dealloc_pages, expect_dealloc_pages);
                 }
             }
         }
@@ -866,7 +866,7 @@ mod tests {
         // 1. alloc normal pages
         unsafe { buf.alloc_page(1, 123, true) }.unwrap();
 
-        // 2. alloc deleted pages
+        // 2. dealloc pages
         unsafe { buf.dealloc_pages(&[5, 6, 7], false) }.unwrap();
 
         // 3. alloc but set page as tombstone.
