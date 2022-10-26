@@ -1,4 +1,7 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use super::{
     version::Version,
@@ -7,24 +10,27 @@ use super::{
 };
 use crate::page::{PageBuf, PageRef};
 
-pub(crate) struct Guard {
-    version: Rc<Version>,
-    page_table: PageTable,
-    page_files: Arc<PageFiles>,
-    owned_pages: RefCell<Vec<Vec<u8>>>,
+pub(crate) struct Guard<'a>
+where
+    Self: Send,
+{
+    version: Arc<Version>,
+    page_table: &'a PageTable,
+    page_files: &'a PageFiles,
+    owned_pages: Mutex<Vec<Vec<u8>>>,
 }
 
-impl Guard {
+impl<'a> Guard<'a> {
     pub(crate) fn new(
-        version: Rc<Version>,
-        page_table: PageTable,
-        page_files: Arc<PageFiles>,
+        version: Arc<Version>,
+        page_table: &'a PageTable,
+        page_files: &'a PageFiles,
     ) -> Self {
         Guard {
             version,
             page_table,
             page_files,
-            owned_pages: RefCell::default(),
+            owned_pages: Mutex::default(),
         }
     }
 
@@ -86,7 +92,7 @@ impl Guard {
             let mut buf = vec![0u8; handle.size as usize];
             reader.read_exact_at(&mut buf, handle.offset as u64).await?;
 
-            let mut owned_pages = self.owned_pages.borrow_mut();
+            let mut owned_pages = self.owned_pages.lock().expect("Poisoned");
             owned_pages.push(buf);
             let page = owned_pages.last().expect("Verified");
             let page = page.as_slice();
@@ -103,8 +109,11 @@ impl Guard {
 ///
 /// On drop, the transaction will be aborted and all its operations will be
 /// rolled back.
-pub(crate) struct PageTxn<'a> {
-    guard: &'a Guard,
+pub(crate) struct PageTxn<'a>
+where
+    Self: Send,
+{
+    guard: &'a Guard<'a>,
 
     file_id: u32,
     records: HashMap<u64 /* page addr */, &'a mut RecordHeader>,
@@ -314,8 +323,8 @@ mod tests {
     use super::*;
     use crate::page_store::{page_table::PageTable, version::Version};
 
-    fn new_version(size: u32) -> Version {
-        Version::new(size, 1, HashMap::default(), HashSet::new())
+    fn new_version(size: u32) -> Arc<Version> {
+        Arc::new(Version::new(size, 1, HashMap::default(), HashSet::new()))
     }
 
     #[test]
@@ -325,9 +334,9 @@ mod tests {
             Arc::new(PageFiles::new(&base, "test_page_txn_update_page"))
         };
 
-        let version = Rc::new(new_version(512));
+        let version = new_version(512);
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), page_table, files);
+        let guard = Guard::new(version, &page_table, &files);
         let mut page_txn = guard.begin();
         let (addr, _) = page_txn.alloc_page(123).unwrap();
         let id = page_txn.insert_page(addr);
@@ -342,9 +351,9 @@ mod tests {
             Arc::new(PageFiles::new(&base, "test_page_txn_failed_update_page"))
         };
 
-        let version = Rc::new(new_version(1 << 10));
+        let version = new_version(1 << 10);
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), page_table, files);
+        let guard = Guard::new(version, &page_table, &files);
 
         // insert old page.
         let mut page_txn = guard.begin();
@@ -355,8 +364,8 @@ mod tests {
 
         // operate is failed.
         let mut page_txn = guard.begin();
-        let (addr, _) = page_txn.alloc_page(12).unwrap();
-        assert!(page_txn.update_page(id, addr, 0).is_err());
+        let (addr, _) = page_txn.alloc_page(123).unwrap();
+        assert!(page_txn.update_page(id, 1, addr).is_err());
     }
 
     #[test]
@@ -366,9 +375,9 @@ mod tests {
             Arc::new(PageFiles::new(&base, "test_page_txn_replace_page"))
         };
 
-        let version = Rc::new(new_version(1 << 10));
+        let version = new_version(1 << 10);
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), page_table, files);
+        let guard = Guard::new(version, &page_table, &files);
         let mut page_txn = guard.begin();
         let (addr, _) = page_txn.alloc_page(123).unwrap();
         let id = page_txn.insert_page(addr);
@@ -383,9 +392,9 @@ mod tests {
             Arc::new(PageFiles::new(&base, "test_page_seal_write_buffer"))
         };
 
-        let version = Rc::new(new_version(512));
+        let version = new_version(512);
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), page_table, files);
+        let guard = Guard::new(version, &page_table, &files);
         let mut page_txn = guard.begin();
         page_txn.seal_write_buffer();
     }
