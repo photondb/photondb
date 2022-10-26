@@ -1,10 +1,5 @@
 use super::{page::*, Tree};
-use crate::{
-    env::Env,
-    page::*,
-    page_store::*,
-    util::codec::{DecodeFrom, EncodeTo},
-};
+use crate::{env::Env, page::*, page_store::*, util::codec::EncodeDecode};
 
 pub(super) struct TreeTxn<'a, E: Env> {
     tree: &'a Tree<E>,
@@ -141,6 +136,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
     }
 
+    #[allow(dead_code)]
     /// Creates an iterator over the key-value pairs in the page.
     pub(super) async fn iter_page<'g, K, V>(
         &'g self,
@@ -253,14 +249,14 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
     }
 
-    async fn split_page_impl<K, V>(
-        &self,
-        mut view: PageView<'_>,
-        parent: Option<PageView<'_>>,
+    async fn split_page_impl<'g, K, V>(
+        &'g self,
+        mut view: PageView<'g>,
+        parent: Option<PageView<'g>>,
     ) -> Result<()>
     where
-        K: EncodeTo + DecodeFrom + Clone,
-        V: EncodeTo + DecodeFrom,
+        K: EncodeDecode<'g> + Clone,
+        V: EncodeDecode<'g>,
     {
         // We can only split base data pages.
         if !view.page.kind().is_data() || view.page.chain_next() != 0 {
@@ -414,8 +410,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     where
         F: Fn(MergingPageIter<'g, K, V>) -> I,
         I: RewindableIterator<Item = (K, V)>,
-        K: EncodeTo + DecodeFrom + Ord,
-        V: EncodeTo + DecodeFrom,
+        K: EncodeDecode<'g> + Ord,
+        V: EncodeDecode<'g>,
     {
         // Consolidate some delta pages on the chain.
         let cons = self.build_consolidation(&view).await?;

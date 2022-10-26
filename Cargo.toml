@@ -18,6 +18,7 @@ photonio = { git = "https://github.com/photondb/photonio.git" }
 prost = "0.10"
 thiserror = "1.0.37"
 roaring = "0.10"
+bytes = "1.2.1"
 
 [profile.bench]
 debug = true
