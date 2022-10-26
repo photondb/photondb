@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, mem};
 
 use crate::util::codec::{BufReader, BufWriter, DecodeFrom, EncodeTo};
 
@@ -9,10 +9,6 @@ pub(crate) struct Key<'a> {
 }
 
 impl<'a> Key<'a> {
-    pub(crate) const fn min() -> Self {
-        Self::new(&[], u64::MAX)
-    }
-
     pub(crate) const fn new(raw: &'a [u8], lsn: u64) -> Self {
         Self { raw, lsn }
     }
@@ -34,21 +30,6 @@ impl PartialOrd for Key<'_> {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Range<'a> {
-    pub(crate) start: Key<'a>,
-    pub(crate) end: Option<Key<'a>>,
-}
-
-impl<'a> Range<'a> {
-    pub(crate) fn full() -> Self {
-        Self {
-            start: Key::min(),
-            end: None,
-        }
-    }
-}
-
 impl EncodeTo for &[u8] {
     fn encode_size(&self) -> usize {
         BufWriter::length_prefixed_slice_size(self)
@@ -62,6 +43,40 @@ impl EncodeTo for &[u8] {
 impl DecodeFrom for &[u8] {
     unsafe fn decode_from(r: &mut BufReader) -> Self {
         r.get_length_prefixed_slice()
+    }
+}
+
+impl EncodeTo for Key<'_> {
+    fn encode_size(&self) -> usize {
+        self.raw.encode_size() + mem::size_of_val(&self.lsn)
+    }
+
+    unsafe fn encode_to(&self, w: &mut BufWriter) {
+        self.raw.encode_to(w);
+        w.put_u64(self.lsn);
+    }
+}
+
+impl DecodeFrom for Key<'_> {
+    unsafe fn decode_from(r: &mut BufReader) -> Self {
+        let raw = r.get_length_prefixed_slice();
+        let lsn = r.get_u64();
+        Self::new(raw, lsn)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Range<'a> {
+    pub(crate) start: &'a [u8],
+    pub(crate) end: Option<&'a [u8]>,
+}
+
+impl<'a> Range<'a> {
+    pub(crate) const fn full() -> Self {
+        Self {
+            start: [].as_slice(),
+            end: None,
+        }
     }
 }
 

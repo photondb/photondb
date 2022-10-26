@@ -12,6 +12,5 @@ pub(crate) use base_page::{PageBuf, PageBuilder, PageKind, PageRef, PageTier};
 mod sorted_page;
 pub(crate) use sorted_page::{SortedPageBuilder, SortedPageIter, SortedPageRef};
 
-pub(crate) type SplitPageRef<'a> = SortedPageRef<'a, Index>;
-pub(crate) type LeafDataPageRef<'a> = SortedPageRef<'a, Value<'a>>;
-pub(crate) type InnerDataPageRef<'a> = SortedPageRef<'a, Index>;
+pub(crate) type ValuePageRef<'a> = SortedPageRef<'a, Key<'a>, Value<'a>>;
+pub(crate) type IndexPageRef<'a> = SortedPageRef<'a, &'a [u8], Index>;
