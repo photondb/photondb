@@ -7,21 +7,21 @@ use super::{async_trait, Env};
 /// An implementation of [`Env`] based on PhotonIO.
 pub struct Photon;
 
-#[async_trait(?Send)]
+#[async_trait]
 impl Env for Photon {
     type PositionalReader = File;
     type SequentialWriter = File;
 
     async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
-        P: AsRef<Path> + Send,
+        P: AsRef<Path> + Send + Sync,
     {
         File::open(path).await
     }
 
     async fn open_sequential_writer<P>(&self, path: P) -> Result<Self::SequentialWriter>
     where
-        P: AsRef<Path> + Send,
+        P: AsRef<Path> + Send + Sync,
     {
         File::create(path).await
     }
