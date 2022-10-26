@@ -15,14 +15,14 @@ impl Env for Photon {
 
     async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
-        P: AsRef<Path> + Send + Sync,
+        P: AsRef<Path> + Send,
     {
         File::open(path).await
     }
 
     async fn open_sequential_writer<P>(&self, path: P) -> Result<Self::SequentialWriter>
     where
-        P: AsRef<Path> + Send + Sync,
+        P: AsRef<Path> + Send,
     {
         File::create(path).await
     }

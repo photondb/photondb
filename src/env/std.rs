@@ -4,11 +4,11 @@ use futures::{executor::block_on, future::BoxFuture};
 
 use super::{async_trait, Env, ReadAt, Write};
 
-/// An implementation of [`Env`] based on synchronous I/O.
-pub struct Sync;
+/// An implementation of [`Env`] based on [`std`] with synchronous I/O.
+pub struct Std;
 
 #[async_trait]
-impl Env for Sync {
+impl Env for Std {
     type PositionalReader = PositionalReader;
     type SequentialWriter = SequentialWriter;
 
