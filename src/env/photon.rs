@@ -8,7 +8,7 @@ use super::{async_trait, Env};
 /// An implementation of [`Env`] based on PhotonIO.
 pub struct Photon;
 
-#[async_trait(?Send)]
+#[async_trait]
 impl Env for Photon {
     type PositionalReader = File;
     type SequentialWriter = File;
