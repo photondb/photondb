@@ -1,6 +1,6 @@
-use std::{rc::Rc, sync::Arc};
+use std::sync::Arc;
 
-use crate::page_store::{PageFiles, Result, Version};
+use crate::page_store::{PageFiles, Version};
 
 pub(crate) struct CleanupCtx {
     // TODO: cancel task
@@ -8,7 +8,11 @@ pub(crate) struct CleanupCtx {
 }
 
 impl CleanupCtx {
-    pub async fn run(self, mut version: Version) {
+    pub(crate) fn new(page_files: Arc<PageFiles>) -> Self {
+        CleanupCtx { page_files }
+    }
+
+    pub(crate) async fn run(self, mut version: Version) {
         loop {
             let deleted_files = version.deleted_files();
 

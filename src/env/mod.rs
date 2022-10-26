@@ -1,6 +1,7 @@
 use std::{future::Future, io::Result, path::Path};
 
 pub use async_trait::async_trait;
+use futures::future::BoxFuture;
 pub use photonio::io::{Read, ReadAt, Write, WriteAt};
 
 mod sync;
@@ -26,7 +27,7 @@ pub trait Env {
         P: AsRef<Path> + Send;
 
     /// Spawns a task to run in the background.
-    async fn spawn_background<F>(&self, f: F) -> F::Output
+    fn spawn_background<F>(&self, f: F) -> BoxFuture<'static, F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send;

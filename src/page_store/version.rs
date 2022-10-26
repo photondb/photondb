@@ -53,7 +53,7 @@ pub(crate) struct NextVersion {
 
     new_version_notify: Notify,
 
-    cleanup_guard: oneshot::Sender<()>,
+    _cleanup_guard: oneshot::Sender<()>,
     cleanup_handle: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
@@ -276,7 +276,7 @@ impl Default for NextVersion {
         NextVersion {
             raw_version: AtomicPtr::default(),
             new_version_notify: Notify::default(),
-            cleanup_guard: sender,
+            _cleanup_guard: sender,
             cleanup_handle: Mutex::new(Some(receiver)),
         }
     }
