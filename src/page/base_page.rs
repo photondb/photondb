@@ -220,6 +220,8 @@ impl<'a> PageRef<'a> {
     }
 }
 
+unsafe impl<'a> Send for PageRef<'a> {}
+
 impl<'a> Deref for PageRef<'a> {
     type Target = PagePtr;
 
