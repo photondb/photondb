@@ -12,7 +12,10 @@ use crate::{
     page_store::Error,
 };
 
-pub(crate) struct WriteBuffer {
+pub(crate) struct WriteBuffer
+where
+    Self: Send,
+{
     file_id: u32,
 
     buf: NonNull<u8>,
@@ -557,7 +560,7 @@ impl BufferState {
         debug_assert_eq!(self.allocated % ALIGN, 0);
         let required = next_multiple_of_u32(required, ALIGN);
         if self.allocated + required > buf_size {
-            todo!("out of range")
+            return Err(Error::Again);
         }
 
         let offset = self.allocated;
@@ -879,5 +882,15 @@ mod tests {
         drop(header);
 
         unsafe { buf.release_writer() };
+    }
+
+    #[test]
+    fn write_buffer_alloc_out_of_range() {
+        let buf = WriteBuffer::with_capacity(1, 1 << 10);
+
+        assert!(matches!(
+            unsafe { buf.alloc_page(1, 2 << 10, true) },
+            Err(Error::Again)
+        ));
     }
 }
