@@ -49,7 +49,6 @@ impl<'a> Guard<'a> {
             file_id,
             records: HashMap::default(),
             page_ids: Vec::default(),
-            dealloc_pages: None,
         }
     }
 
@@ -71,7 +70,6 @@ impl<'a> Guard<'a> {
             let page_ref = self
                 .version
                 .with_write_buffer(file_id, |write_buffer| unsafe {
-                    // FIXME: ensure there no any mutable references.
                     // Safety: all mutable references are released.
                     write_buffer.page(addr)
                 });
@@ -118,7 +116,6 @@ where
     file_id: u32,
     records: HashMap<u64 /* page addr */, &'a mut RecordHeader>,
     page_ids: Vec<u64>,
-    dealloc_pages: Option<&'a mut RecordHeader>,
 }
 
 impl<'a> PageTxn<'a> {
@@ -161,7 +158,7 @@ impl<'a> PageTxn<'a> {
     /// On success, commits all operations in the transaction.
     /// On failure, returns the transaction and the current address of the page.
     pub(crate) fn update_page(
-        self,
+        mut self,
         id: u64,
         old_addr: u64,
         new_addr: u64,
@@ -171,7 +168,11 @@ impl<'a> PageTxn<'a> {
             return Err((self, addr));
         }
 
-        // FIXME: should update page id of new_addr?
+        let record_header = self
+            .records
+            .get_mut(&new_addr)
+            .expect("No such page exists");
+        record_header.set_page_id(id);
 
         self.commit();
         Ok(())
@@ -190,9 +191,11 @@ impl<'a> PageTxn<'a> {
         dealloc_addrs: &[u64],
     ) -> Result<()> {
         assert!(old_addr < new_addr);
-        self.dealloc_pages = Some(self.dealloc_pages_impl(dealloc_addrs)?);
-        self.update_page(id, old_addr, new_addr)
-            .map_err(|_| Error::Again)?;
+        let dealloc_pages = self.dealloc_pages_impl(dealloc_addrs)?;
+        self.update_page(id, old_addr, new_addr).map_err(|_| {
+            dealloc_pages.set_tombstone();
+            Error::Again
+        })?;
         Ok(())
     }
 
@@ -202,9 +205,14 @@ impl<'a> PageTxn<'a> {
             let write_buffer = buffer_set
                 .write_buffer(self.file_id)
                 .expect("The memory buffer should exists");
-            // TODO: add safety condition
-            match unsafe { write_buffer.seal(false) } {
-                Ok(release_state) => release_state,
+
+            let release_writer = !self.is_first_op();
+            // Safety: all references are immutable.
+            match unsafe { write_buffer.seal(release_writer) } {
+                Ok(release_state) => {
+                    self.records.clear();
+                    release_state
+                }
                 Err(_) => {
                     // The write buffer has been sealed.
                     return;
@@ -212,9 +220,8 @@ impl<'a> PageTxn<'a> {
             }
         };
 
-        self.file_id += 1;
         let capacity = self.guard.version.buffer_set.write_buffer_capacity();
-        let write_buffer = Arc::new(WriteBuffer::with_capacity(self.file_id, capacity));
+        let write_buffer = Arc::new(WriteBuffer::with_capacity(self.file_id + 1, capacity));
         self.guard.version.buffer_set.install(write_buffer);
         if matches!(release_state, ReleaseState::Flush) {
             self.guard.version.buffer_set.notify_flush_job();
@@ -279,33 +286,25 @@ impl<'a> PageTxn<'a> {
     fn commit(mut self) {
         if !self.records.is_empty() {
             self.drop_writer_guard();
+            self.records.clear();
         }
 
-        self.records.clear();
-        self.dealloc_pages = None;
+        self.page_ids.clear();
     }
 }
 
 impl<'a> Drop for PageTxn<'a> {
     fn drop(&mut self) {
-        let mut has_writer_guard = !self.records.is_empty();
-        for (_, header) in &mut self.records {
-            header.set_tombstone();
-        }
         for id in &self.page_ids {
             // TODO: safety conditions.
             unsafe { self.guard.page_table.dealloc(*id) };
         }
 
-        if let Some(dealloc_pages) = &mut self.dealloc_pages {
-            dealloc_pages.set_tombstone();
-            has_writer_guard = true;
-        }
-
-        self.records.clear();
-        self.dealloc_pages = None;
-
-        if has_writer_guard {
+        if !self.records.is_empty() {
+            for (_, header) in &mut self.records {
+                header.set_tombstone();
+            }
+            self.records.clear();
             self.guard
                 .version
                 .with_write_buffer(self.file_id, |write_buffer| {
@@ -397,5 +396,23 @@ mod tests {
         let guard = Guard::new(version, &page_table, &files);
         let mut page_txn = guard.begin();
         page_txn.seal_write_buffer();
+    }
+
+    #[test]
+    fn page_txn_insert_page() {
+        let files = {
+            let base = std::env::temp_dir();
+            Arc::new(PageFiles::new(&base, "test_page_insert_page"))
+        };
+
+        let version = new_version(512);
+        let page_table = PageTable::default();
+        let guard = Guard::new(version.clone(), &page_table, &files);
+        let mut page_txn = guard.begin();
+        let (addr, _) = page_txn.alloc_page(123).unwrap();
+        let id = page_txn.insert_page(addr);
+        page_txn.commit();
+
+        assert_eq!(page_table.get(id), addr);
     }
 }

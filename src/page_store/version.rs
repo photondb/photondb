@@ -456,6 +456,7 @@ impl BufferSetVersion {
         self.buffers_range.start
     }
 
+    #[cfg(test)]
     #[inline]
     pub(crate) fn next_file_id(&self) -> u32 {
         self.buffers_range.end
