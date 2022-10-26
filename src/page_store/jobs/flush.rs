@@ -94,7 +94,7 @@ impl FlushCtx {
         let mut builder = self.page_files.new_file_builder(file_id).await?;
         for (page_addr, header, record_ref) in write_buffer.iter() {
             match record_ref {
-                RecordRef::DeletedPages(pages) => {
+                RecordRef::DeallocPages(pages) => {
                     builder.add_delete_pages(pages.as_slice());
                     deleted_pages.extend_from_slice(pages.as_slice());
                 }

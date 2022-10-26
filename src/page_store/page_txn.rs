@@ -49,7 +49,7 @@ impl<'a> Guard<'a> {
             file_id,
             records: HashMap::default(),
             page_ids: Vec::default(),
-            deleted_page: None,
+            dealloc_pages: None,
         }
     }
 
@@ -118,7 +118,7 @@ where
     file_id: u32,
     records: HashMap<u64 /* page addr */, &'a mut RecordHeader>,
     page_ids: Vec<u64>,
-    deleted_page: Option<&'a mut RecordHeader>,
+    dealloc_pages: Option<&'a mut RecordHeader>,
 }
 
 impl<'a> PageTxn<'a> {
@@ -190,7 +190,7 @@ impl<'a> PageTxn<'a> {
         dealloc_addrs: &[u64],
     ) -> Result<()> {
         assert!(old_addr < new_addr);
-        self.deleted_page = Some(self.dealloc_pages_impl(dealloc_addrs)?);
+        self.dealloc_pages = Some(self.dealloc_pages_impl(dealloc_addrs)?);
         self.update_page(id, old_addr, new_addr)
             .map_err(|_| Error::Again)?;
         Ok(())
@@ -282,7 +282,7 @@ impl<'a> PageTxn<'a> {
         }
 
         self.records.clear();
-        self.deleted_page = None;
+        self.dealloc_pages = None;
     }
 }
 
@@ -297,13 +297,13 @@ impl<'a> Drop for PageTxn<'a> {
             unsafe { self.guard.page_table.dealloc(*id) };
         }
 
-        if let Some(deleted_pages) = &mut self.deleted_page {
-            deleted_pages.set_tombstone();
+        if let Some(dealloc_pages) = &mut self.dealloc_pages {
+            dealloc_pages.set_tombstone();
             has_writer_guard = true;
         }
 
         self.records.clear();
-        self.deleted_page = None;
+        self.dealloc_pages = None;
 
         if has_writer_guard {
             self.guard
