@@ -1,4 +1,4 @@
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 
@@ -8,7 +8,7 @@ use crate::page_store::{FileInfo, PageFiles, Result, Version};
 #[async_trait]
 pub(crate) trait RewritePage: Send + Sync {
     /// Rewrite the corresponding page to the end of page files.
-    async fn rewrite(&self, page_addr: u64) -> Result<()>;
+    async fn rewrite(&self, page_id: u64) -> Result<()>;
 }
 
 /// An abstraction describes the strategy of page files gc.
@@ -22,7 +22,7 @@ pub(crate) trait GcPickStrategy: Send + Sync {
 
 pub(crate) struct GcCtx {
     // TODO: cancel task
-    rewrite: Weak<dyn RewritePage>,
+    rewriter: Arc<dyn RewritePage>,
     strategy: Box<dyn GcPickStrategy>,
     #[allow(unused)]
     page_files: Arc<PageFiles>,
@@ -30,12 +30,12 @@ pub(crate) struct GcCtx {
 
 impl GcCtx {
     pub(crate) fn new(
-        rewrite: Weak<dyn RewritePage>,
+        rewriter: Arc<dyn RewritePage>,
         strategy: Box<dyn GcPickStrategy>,
         page_files: Arc<PageFiles>,
     ) -> Self {
         GcCtx {
-            rewrite,
+            rewriter,
             strategy,
             page_files,
         }
@@ -64,13 +64,12 @@ impl GcCtx {
     }
 
     async fn forward_active_pages(&self, file: &FileInfo) -> Result<()> {
-        let Some(forward) = self.rewrite.upgrade() else {
-            return Ok(())
-        };
-
-        for page_addr in file.iter() {
-            forward.rewrite(page_addr).await?;
+        for _page_addr in file.iter() {
+            // TODO: convert page_addr to page_id.
+            let page_id = 0;
+            self.rewriter.rewrite(page_id).await?;
         }
+        // TODO: rewrite deleted pages.
         Ok(())
     }
 }

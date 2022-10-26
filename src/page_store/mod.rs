@@ -1,8 +1,7 @@
 use std::{
     collections::HashSet,
     path::Path,
-    rc::Rc,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Mutex},
 };
 
 use crate::{env::Env, Options};
@@ -25,6 +24,8 @@ mod version;
 use version::Version;
 
 mod jobs;
+pub(crate) use jobs::{GcPickStrategy, RewritePage};
+
 mod write_buffer;
 pub(crate) use write_buffer::{RecordRef, WriteBuffer};
 
@@ -34,11 +35,12 @@ pub(crate) use manifest::Manifest;
 mod page_file;
 pub(crate) use page_file::{FileInfo, PageFiles, PageHandle};
 
-use self::jobs::gc::{GcPickStrategy, RewritePage};
-
 mod recover;
 
-pub(crate) struct PageStore<E> {
+pub(crate) struct PageStore<E: Env>
+where
+    Self: Send + Sync,
+{
     #[allow(unused)]
     options: Options,
     #[allow(unused)]
@@ -53,7 +55,6 @@ pub(crate) struct PageStore<E> {
     page_files: Arc<PageFiles>,
     #[allow(unused)]
     manifest: Arc<futures::lock::Mutex<Manifest>>,
-    _job_handle: JobHandle,
 }
 
 impl<E: Env> PageStore<E> {
@@ -71,15 +72,6 @@ impl<E: Env> PageStore<E> {
         let manifest = Arc::new(futures::lock::Mutex::new(manifest));
         let page_files = Arc::new(page_files);
 
-        let job_handle = JobHandle::new(
-            &env,
-            page_files.clone(),
-            version.clone(),
-            manifest.clone(),
-            todo!(),
-            todo!(),
-        );
-
         Ok(PageStore {
             options,
             env,
@@ -87,7 +79,6 @@ impl<E: Env> PageStore<E> {
             version,
             page_files,
             manifest,
-            _job_handle: job_handle,
         })
     }
 
@@ -119,13 +110,15 @@ pub(crate) struct JobHandle {
 impl JobHandle {
     pub(crate) fn new<E: Env>(
         env: &E,
-        page_files: Arc<PageFiles>,
-        version: Arc<Mutex<Version>>,
-        manifest: Arc<futures::lock::Mutex<Manifest>>,
-        rewrite: Weak<dyn RewritePage>,
+        page_store: &PageStore<E>,
+        rewriter: Arc<dyn RewritePage>,
         pick_strategy: Box<dyn GcPickStrategy>,
     ) -> JobHandle {
         use self::jobs::{cleanup::CleanupCtx, flush::FlushCtx, gc::GcCtx};
+
+        let page_files = page_store.page_files.clone();
+        let version = page_store.version.clone();
+        let manifest = page_store.manifest.clone();
 
         let cleanup_ctx = CleanupCtx::new(page_files.clone());
         let global_version = { version.lock().expect("Poisoned").clone() };
@@ -139,7 +132,7 @@ impl JobHandle {
             flush_ctx.run().await;
         });
 
-        let gc_ctx = GcCtx::new(rewrite, pick_strategy, page_files);
+        let gc_ctx = GcCtx::new(rewriter, pick_strategy, page_files);
         let gc_task = env.spawn_background(async {
             gc_ctx.run(global_version).await;
         });
