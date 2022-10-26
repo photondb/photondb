@@ -5,6 +5,7 @@ use futures::{executor::block_on, future::BoxFuture};
 use super::{async_trait, Env, ReadAt, Write};
 
 /// An implementation of [`Env`] based on [`std`] with synchronous I/O.
+#[derive(Clone)]
 pub struct Std;
 
 #[async_trait]

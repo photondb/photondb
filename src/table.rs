@@ -1,9 +1,10 @@
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use crate::{
     env::{Env, Photon},
     page::{Key, Value},
-    tree::{Stats, Tree},
+    page_store::JobHandle,
+    tree::{PageRewriter, Stats, Tree},
     util::atomic::Sequencer,
     Options, Result,
 };
@@ -49,14 +50,17 @@ impl Table {
     }
 }
 
-pub struct RawTable<E> {
-    tree: Tree<E>,
+pub struct RawTable<E: Env> {
+    tree: Arc<Tree<E>>,
+    _job_guard: JobHandle,
 }
 
 impl<E: Env> RawTable<E> {
     pub async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
-        let tree = Tree::open(env, path, options).await?;
-        Ok(Self { tree })
+        let tree = Arc::new(Tree::open(env.clone(), path, options).await?);
+        let rewriter = Arc::new(PageRewriter::new(tree.clone()));
+        let _job_guard = JobHandle::new(&env, tree.store(), rewriter, todo!());
+        Ok(Self { tree, _job_guard })
     }
 
     pub async fn get<F, R>(&self, key: &[u8], lsn: u64, f: F) -> Result<R>

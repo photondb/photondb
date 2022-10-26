@@ -9,6 +9,9 @@ pub(crate) use stats::Stats;
 mod tree_txn;
 use tree_txn::TreeTxn;
 
+mod rewrite;
+pub(crate) use rewrite::PageRewriter;
+
 use crate::{
     env::Env,
     page::{Key, Value},
@@ -17,7 +20,7 @@ use crate::{
 };
 
 /// A latch-free, log-structured tree.
-pub(crate) struct Tree<E> {
+pub(crate) struct Tree<E: Env> {
     options: Options,
     stats: AtomicStats,
     store: PageStore<E>,
@@ -78,8 +81,24 @@ impl<E: Env> Tree<E> {
         }
     }
 
+    /// Rewrites the corresponding page.
+    pub(crate) async fn rewrite(&self, page_id: u64) -> Result<()> {
+        loop {
+            let txn = self.begin();
+            match txn.rewrite(page_id).await {
+                Ok(_) => return Ok(()),
+                Err(Error::Again) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     /// Returns the statistics of the tree.
     pub(crate) fn stats(&self) -> Stats {
         self.stats.snapshot()
+    }
+
+    pub(crate) fn store(&self) -> &PageStore<E> {
+        &self.store
     }
 }
