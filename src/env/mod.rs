@@ -1,11 +1,10 @@
-use std::{future::Future, io::Result, path::Path};
-
+use ::std::{future::Future, io::Result, path::Path};
 pub use async_trait::async_trait;
 use futures::future::BoxFuture;
 pub use photonio::io::{Read, ReadAt, Write, WriteAt};
 
-mod sync;
-pub use sync::Sync;
+mod std;
+pub use self::std::Std;
 
 mod photon;
 pub use photon::Photon;
@@ -19,12 +18,12 @@ pub trait Env {
     /// Opens a file for positional reads.
     async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
-        P: AsRef<Path> + Send + core::marker::Sync;
+        P: AsRef<Path> + Send;
 
     /// Opens a file for sequential writes.
     async fn open_sequential_writer<P>(&self, path: P) -> Result<Self::SequentialWriter>
     where
-        P: AsRef<Path> + Send + core::marker::Sync;
+        P: AsRef<Path> + Send;
 
     /// Spawns a task to run in the background.
     fn spawn_background<F>(&self, f: F) -> BoxFuture<'static, F::Output>
