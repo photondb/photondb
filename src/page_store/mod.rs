@@ -92,17 +92,13 @@ impl<E: Env> PageStore<E> {
     }
 
     pub(crate) fn guard(&self) -> Guard {
-        Guard::new(
-            self.current_version(),
-            self.table.clone(),
-            self.page_files.clone(),
-        )
+        Guard::new(self.current_version(), &self.table, &self.page_files)
     }
 
     #[inline]
-    fn current_version(&self) -> Rc<Version> {
+    fn current_version(&self) -> Arc<Version> {
         Version::from_local().unwrap_or_else(|| {
-            let version = Rc::new(self.global_version());
+            let version = Arc::new(self.global_version());
             Version::set_local(version);
             Version::from_local().expect("Already installed")
         })

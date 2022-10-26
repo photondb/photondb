@@ -16,7 +16,7 @@ use super::{FileInfo, Result, WriteBuffer};
 use crate::util::notify::Notify;
 
 thread_local! {
-    static VERSION: RefCell<Option<Rc<Version>>> = RefCell::new(None);
+    static VERSION: RefCell<Option<Arc<Version>>> = RefCell::new(None);
 }
 
 #[derive(Clone)]
@@ -138,11 +138,11 @@ impl Version {
     }
 
     /// Construct [`Version`] from thread local storage.
-    pub(crate) fn from_local() -> Option<Rc<Self>> {
+    pub(crate) fn from_local() -> Option<Arc<Self>> {
         let current = Self::get_local();
         if let Some(version) = &current {
             if let Some(new) = version.next.refresh() {
-                let new = Rc::new(new);
+                let new = Arc::new(new);
                 Self::set_local(new.clone());
                 return Some(new);
             }
@@ -151,14 +151,14 @@ impl Version {
     }
 
     #[inline]
-    pub(crate) fn set_local(version: Rc<Version>) {
+    pub(crate) fn set_local(version: Arc<Version>) {
         VERSION.with(move |v| {
             *v.borrow_mut() = Some(version);
         });
     }
 
     #[inline]
-    fn get_local() -> Option<Rc<Self>> {
+    fn get_local() -> Option<Arc<Self>> {
         VERSION.with(|v| v.borrow().clone())
     }
 
