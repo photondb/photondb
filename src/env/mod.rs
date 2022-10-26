@@ -11,7 +11,7 @@ mod photon;
 pub use photon::Photon;
 
 /// Provides an environment to interact with a specific platform.
-#[async_trait(?Send)]
+#[async_trait]
 pub trait Env {
     type PositionalReader: ReadAt;
     type SequentialWriter: Write;
@@ -19,12 +19,12 @@ pub trait Env {
     /// Opens a file for positional reads.
     async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
-        P: AsRef<Path> + Send;
+        P: AsRef<Path> + Send + core::marker::Sync;
 
     /// Opens a file for sequential writes.
     async fn open_sequential_writer<P>(&self, path: P) -> Result<Self::SequentialWriter>
     where
-        P: AsRef<Path> + Send;
+        P: AsRef<Path> + Send + core::marker::Sync;
 
     /// Spawns a task to run in the background.
     fn spawn_background<F>(&self, f: F) -> BoxFuture<'static, F::Output>
