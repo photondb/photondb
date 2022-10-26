@@ -9,7 +9,6 @@ use crate::page_store::{
     WriteBuffer,
 };
 
-#[allow(dead_code)]
 pub(crate) struct FlushCtx {
     // TODO: cancel task
     global_version: Arc<Mutex<Version>>,
@@ -17,8 +16,19 @@ pub(crate) struct FlushCtx {
     manifest: Arc<futures::lock::Mutex<Manifest>>,
 }
 
-#[allow(dead_code)]
 impl FlushCtx {
+    pub(crate) fn new(
+        global_version: Arc<Mutex<Version>>,
+        page_files: Arc<PageFiles>,
+        manifest: Arc<futures::lock::Mutex<Manifest>>,
+    ) -> Self {
+        FlushCtx {
+            global_version,
+            page_files,
+            manifest,
+        }
+    }
+
     pub(crate) async fn run(self) {
         loop {
             let version = self.version();
@@ -38,7 +48,7 @@ impl FlushCtx {
                 version.buffer_set.wait_flushable().await;
             }
 
-            match self.flush(version, write_buffer.as_ref()).await {
+            match self.flush(&version, write_buffer.as_ref()).await {
                 Ok(()) => {
                     self.refresh_version();
                 }
@@ -49,9 +59,9 @@ impl FlushCtx {
         }
     }
 
-    async fn flush(&self, version: Rc<Version>, write_buffer: &WriteBuffer) -> Result<()> {
+    async fn flush(&self, version: &Version, write_buffer: &WriteBuffer) -> Result<()> {
         let (deleted_pages, file_info) = self.build_page_file(write_buffer).await?;
-        let files = self.apply_deleted_pages(&version, deleted_pages);
+        let files = self.apply_deleted_pages(version, deleted_pages);
         let file_id = write_buffer.file_id();
 
         let mut files = files;
@@ -61,7 +71,7 @@ impl FlushCtx {
             .collect::<HashSet<_>>();
         files.insert(file_id, file_info);
 
-        self.save_version_edit(&version, file_id, &deleted_files)
+        self.save_version_edit(version, file_id, &deleted_files)
             .await?;
 
         let delta = DeltaVersion {
@@ -70,6 +80,7 @@ impl FlushCtx {
         };
 
         let buffer_set = version.buffer_set.clone();
+        let version = Rc::new(version.clone());
         Version::install(version, delta)?;
         buffer_set.on_flushed(file_id);
         Ok(())
@@ -131,8 +142,8 @@ impl FlushCtx {
         files
     }
 
-    fn version(&self) -> Rc<Version> {
-        Rc::new(self.global_version.lock().expect("Poisoned").clone())
+    fn version(&self) -> Version {
+        self.global_version.lock().expect("Poisoned").clone()
     }
 
     fn refresh_version(&self) {

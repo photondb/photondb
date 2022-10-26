@@ -1,6 +1,6 @@
 use std::{fs::File, future::Future, io::Result, path::Path, thread};
 
-use futures::executor::block_on;
+use futures::{executor::block_on, future::BoxFuture};
 
 use super::{async_trait, Env, ReadAt, Write};
 
@@ -28,13 +28,13 @@ impl Env for Sync {
         Ok(SequentialWriter(file))
     }
 
-    async fn spawn_background<F>(&self, f: F) -> F::Output
+    fn spawn_background<F>(&self, f: F) -> BoxFuture<'static, F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send,
     {
         let handle = thread::spawn(move || block_on(f));
-        handle.join().unwrap()
+        Box::pin(async { handle.join().unwrap() })
     }
 }
 

@@ -1,5 +1,6 @@
 use std::{future::Future, io::Result, path::Path};
 
+use futures::future::BoxFuture;
 use photonio::{fs::File, task};
 
 use super::{async_trait, Env};
@@ -26,11 +27,12 @@ impl Env for Photon {
         File::create(path).await
     }
 
-    async fn spawn_background<F>(&self, f: F) -> F::Output
+    fn spawn_background<F>(&self, f: F) -> BoxFuture<'static, F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send,
     {
-        task::spawn(f).await.unwrap()
+        let handle = task::spawn(f);
+        Box::pin(async { handle.await.unwrap() })
     }
 }

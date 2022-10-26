@@ -2,20 +2,17 @@ use std::sync::{Arc, Weak};
 
 use async_trait::async_trait;
 
-use crate::{
-    env::Env,
-    page_store::{FileInfo, PageStore, Result, Version},
-};
+use crate::page_store::{FileInfo, PageFiles, Result, Version};
 
-/// An abstraction describes how to forward pages to the end of page files.
-#[async_trait(?Send)]
-pub(crate) trait ForwardPage {
-    /// Forward the corresponding page to the end of page files.
-    async fn forward(&self, page_addr: u64) -> Result<()>;
+/// An abstraction describes how to move pages to the end of page files.
+#[async_trait]
+pub(crate) trait RewritePage: Send + Sync {
+    /// Rewrite the corresponding page to the end of page files.
+    async fn rewrite(&self, page_addr: u64) -> Result<()>;
 }
 
 /// An abstraction describes the strategy of page files gc.
-pub(crate) trait GcPickStrategy {
+pub(crate) trait GcPickStrategy: Send + Sync {
     /// Returns recycle threshold of this strategy.
     fn threshold(&self) -> f64;
 
@@ -23,15 +20,28 @@ pub(crate) trait GcPickStrategy {
     fn score(&self, file_info: &FileInfo) -> f64;
 }
 
-pub(crate) struct GcCtx<E: Env> {
+pub(crate) struct GcCtx {
     // TODO: cancel task
-    forward: Weak<dyn ForwardPage>,
+    rewrite: Weak<dyn RewritePage>,
     strategy: Box<dyn GcPickStrategy>,
-    page_store: Arc<PageStore<E>>,
+    #[allow(unused)]
+    page_files: Arc<PageFiles>,
 }
 
-impl<E: Env> GcCtx<E> {
-    pub async fn run(self, mut version: Version) {
+impl GcCtx {
+    pub(crate) fn new(
+        rewrite: Weak<dyn RewritePage>,
+        strategy: Box<dyn GcPickStrategy>,
+        page_files: Arc<PageFiles>,
+    ) -> Self {
+        GcCtx {
+            rewrite,
+            strategy,
+            page_files,
+        }
+    }
+
+    pub(crate) async fn run(self, mut version: Version) {
         loop {
             self.gc(&version).await;
             version = version.wait_next_version().await;
@@ -54,12 +64,12 @@ impl<E: Env> GcCtx<E> {
     }
 
     async fn forward_active_pages(&self, file: &FileInfo) -> Result<()> {
-        let Some(forward) = self.forward.upgrade() else {
+        let Some(forward) = self.rewrite.upgrade() else {
             return Ok(())
         };
 
         for page_addr in file.iter() {
-            forward.forward(page_addr).await?;
+            forward.rewrite(page_addr).await?;
         }
         Ok(())
     }
