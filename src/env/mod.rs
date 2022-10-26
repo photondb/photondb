@@ -11,7 +11,7 @@ pub use photon::Photon;
 
 /// Provides an environment to interact with a specific platform.
 #[async_trait]
-pub trait Env {
+pub trait Env: Clone + Send + Sync {
     type PositionalReader: ReadAt;
     type SequentialWriter: Write;
 

@@ -6,7 +6,7 @@ use crate::{
     util::codec::{DecodeFrom, EncodeTo},
 };
 
-pub(super) struct TreeTxn<'a, E> {
+pub(super) struct TreeTxn<'a, E: Env> {
     tree: &'a Tree<E>,
     guard: Guard<'a>,
 }
@@ -63,6 +63,15 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         if self.should_consolidate_page(view.page) {
             let _ = self.consolidate_page(view, parent).await;
         }
+        Ok(())
+    }
+
+    /// Rewrites the corresponding page.
+    pub(super) async fn rewrite(&self, page_id: u64) -> Result<()> {
+        let range = Range::full();
+        let view = self.page_view(page_id, range).await?;
+        // FIXME: disable split since parent is `None`.
+        self.consolidate_page(view, None).await?;
         Ok(())
     }
 

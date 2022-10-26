@@ -146,6 +146,10 @@ impl PagePtr {
     }
 }
 
+unsafe impl Sync for PagePtr {}
+
+unsafe impl Send for PagePtr {}
+
 impl fmt::Debug for PagePtr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Page")
@@ -219,8 +223,6 @@ impl<'a> PageRef<'a> {
         PagePtr::new(ptr, buf.len()).into()
     }
 }
-
-unsafe impl<'a> Send for PageRef<'a> {}
 
 impl<'a> Deref for PageRef<'a> {
     type Target = PagePtr;
