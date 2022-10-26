@@ -7,59 +7,39 @@ pub(super) struct PageView<'a> {
     pub(super) range: Range<'a>,
 }
 
-pub(super) struct MergingPageIter<'a, V> {
-    iter: MergingIter<SortedPageIter<'a, V>>,
-    range_limit: Option<Key<'a>>,
+pub(super) struct MergingPageIter<'a, K, V>
+where
+    K: Ord,
+{
+    iter: MergingIter<SortedPageIter<'a, K, V>>,
+    limit: Option<&'a [u8]>,
 }
 
-impl<'a, V> MergingPageIter<'a, V> {
+impl<'a, K, V> MergingPageIter<'a, K, V>
+where
+    K: Ord,
+{
     pub(super) fn new(
-        iter: MergingIter<SortedPageIter<'a, V>>,
-        range_limit: Option<Key<'a>>,
+        iter: MergingIter<SortedPageIter<'a, K, V>>,
+        limit: Option<&'a [u8]>,
     ) -> Self {
-        Self { iter, range_limit }
-    }
-}
-
-impl<'a, V> Iterator for MergingPageIter<'a, V> {
-    type Item = (Key<'a>, V);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some((key, value)) = self.iter.next() {
-            if let Some(limit) = self.range_limit {
-                if key >= limit {
-                    return None;
-                }
-            }
-            return Some((key, value));
-        }
-        None
-    }
-}
-
-impl<'a, V> SeekableIterator<Key<'_>> for MergingPageIter<'a, V> {
-    fn seek(&mut self, target: &Key<'_>) {
-        self.iter.seek(target);
-    }
-}
-
-impl<'a, V> RewindableIterator for MergingPageIter<'a, V> {
-    fn rewind(&mut self) {
-        self.iter.rewind();
+        Self { iter, limit }
     }
 }
 
 /// An iterator that merges multiple leaf pages for consolidation.
 pub(super) struct MergingLeafPageIter<'a> {
-    iter: MergingPageIter<'a, Value<'a>>,
-    last_raw: Option<&'a [u8]>,
+    iter: MergingIter<SortedPageIter<'a, Key<'a>, Value<'a>>>,
+    last: Option<&'a [u8]>,
+    limit: Option<&'a [u8]>,
 }
 
 impl<'a> MergingLeafPageIter<'a> {
-    pub(super) fn new(iter: MergingPageIter<'a, Value<'a>>) -> Self {
+    pub(super) fn new(iter: MergingPageIter<'a, Key<'a>, Value<'a>>) -> Self {
         Self {
-            iter,
-            last_raw: None,
+            iter: iter.iter,
+            last: None,
+            limit: iter.limit,
         }
     }
 }
@@ -69,14 +49,19 @@ impl<'a> Iterator for MergingLeafPageIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         // TODO: We should keep all versions visible at and after the safe LSN.
-        for (key, value) in &mut self.iter {
-            if let Some(raw) = self.last_raw {
-                if key.raw == raw {
+        for (k, v) in &mut self.iter {
+            if let Some(last) = self.last {
+                if k.raw == last {
                     continue;
                 }
             }
-            self.last_raw = Some(key.raw);
-            return Some((key, value));
+            self.last = Some(k.raw);
+            if let Some(limit) = self.limit {
+                if k.raw >= limit {
+                    return None;
+                }
+            }
+            return Some((k, v));
         }
         None
     }
@@ -90,21 +75,23 @@ impl<'a> RewindableIterator for MergingLeafPageIter<'a> {
 
 /// An iterator that merges multiple inner pages for consolidation.
 pub(super) struct MergingInnerPageIter<'a> {
-    iter: MergingPageIter<'a, Index>,
-    last_raw: Option<&'a [u8]>,
+    iter: MergingIter<SortedPageIter<'a, &'a [u8], Index>>,
+    last: Option<&'a [u8]>,
+    limit: Option<&'a [u8]>,
 }
 
 impl<'a> MergingInnerPageIter<'a> {
-    pub(super) fn new(iter: MergingPageIter<'a, Index>) -> Self {
+    pub(super) fn new(iter: MergingPageIter<'a, &'a [u8], Index>) -> Self {
         Self {
-            iter,
-            last_raw: None,
+            iter: iter.iter,
+            last: None,
+            limit: iter.limit,
         }
     }
 }
 
 impl<'a> Iterator for MergingInnerPageIter<'a> {
-    type Item = (Key<'a>, Index);
+    type Item = (&'a [u8], Index);
 
     fn next(&mut self) -> Option<Self::Item> {
         for (start, index) in &mut self.iter {
@@ -112,13 +99,18 @@ impl<'a> Iterator for MergingInnerPageIter<'a> {
             if index.id == NAN_ID {
                 continue;
             }
-            // Skip overwritten keys.
-            if let Some(raw) = self.last_raw {
-                if start.raw == raw {
+            // Skip overwritten indexes
+            if let Some(last) = self.last {
+                if start == last {
                     continue;
                 }
             }
-            self.last_raw = Some(start.raw);
+            self.last = Some(start);
+            if let Some(limit) = self.limit {
+                if start >= limit {
+                    return None;
+                }
+            }
             return Some((start, index));
         }
         None

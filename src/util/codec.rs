@@ -30,7 +30,7 @@ pub(crate) struct BufReader(*const u8);
 
 macro_rules! get_int {
     ($name:ident, $t:ty) => {
-        pub(super) unsafe fn $name(&mut self) -> $t {
+        pub(crate) unsafe fn $name(&mut self) -> $t {
             let mut v: $t = 0;
             let ptr = &mut v as *mut $t as *mut u8;
             let len = mem::size_of::<$t>();

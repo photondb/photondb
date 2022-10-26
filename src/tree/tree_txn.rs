@@ -112,7 +112,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             }
             // Find the child page that may contain the key and update the current page.
             let (child_index, child_range) = self
-                .find_child(key, &view)
+                .find_child(key.raw, &view)
                 .await?
                 .expect("child page must exist");
             index = child_index;
@@ -142,10 +142,13 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     /// Creates an iterator over the key-value pairs in the page.
-    pub(super) async fn iter_page<'g, V>(
+    pub(super) async fn iter_page<'g, K, V>(
         &'g self,
         view: &PageView<'g>,
-    ) -> Result<MergingPageIter<'g, V>> {
+    ) -> Result<MergingPageIter<'g, K, V>>
+    where
+        K: Ord,
+    {
         let mut builder = MergingIterBuilder::with_capacity(view.page.chain_len() as usize);
         let mut range_limit = None;
         self.walk_page(view.page, |page| {
@@ -183,7 +186,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             debug_assert!(page.tier().is_leaf());
             // We only care about data pages here.
             if page.kind().is_data() {
-                let page = LeafDataPageRef::from(page);
+                let page = ValuePageRef::from(page);
                 let index = match page.rank(key) {
                     Ok(i) => i,
                     Err(i) => i,
@@ -209,7 +212,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     /// Returns the index and range of the child page.
     async fn find_child<'g>(
         &'g self,
-        key: &Key<'_>,
+        key: &[u8],
         view: &PageView<'g>,
     ) -> Result<Option<(Index, Range<'g>)>> {
         let mut child = None;
@@ -217,9 +220,9 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             debug_assert!(page.tier().is_inner());
             // We only care about data pages here.
             if page.kind().is_data() {
-                let page = InnerDataPageRef::from(page);
-                // Finds the two items that enclose the key.
-                let (left, right) = match page.rank(key) {
+                let page = IndexPageRef::from(page);
+                // Find the two items that enclose the key.
+                let (left, right) = match page.rank(&key) {
                     // The `i` item is equal to the key, so the range is [i, i + 1).
                     Ok(i) => (page.get(i), i.checked_add(1).and_then(|i| page.get(i))),
                     // The `i` item is greater than the key, so the range is [i - 1, i).
@@ -245,17 +248,18 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     // Splits the page into two halfs.
     async fn split_page(&self, view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
         match view.page.tier() {
-            PageTier::Leaf => self.split_page_impl::<Value>(view, parent).await,
-            PageTier::Inner => self.split_page_impl::<Index>(view, parent).await,
+            PageTier::Leaf => self.split_page_impl::<Key, Value>(view, parent).await,
+            PageTier::Inner => self.split_page_impl::<&[u8], Index>(view, parent).await,
         }
     }
 
-    async fn split_page_impl<V>(
+    async fn split_page_impl<K, V>(
         &self,
         mut view: PageView<'_>,
         parent: Option<PageView<'_>>,
     ) -> Result<()>
     where
+        K: EncodeTo + DecodeFrom + Clone,
         V: EncodeTo + DecodeFrom,
     {
         // We can only split base data pages.
@@ -263,7 +267,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             return Err(Error::InvalidArgument);
         }
 
-        let page = SortedPageRef::<V>::from(view.page);
+        let page = SortedPageRef::<K, V>::from(view.page);
         if let Some((split_key, right_iter)) = page.split() {
             let mut txn = self.guard.begin();
             // Build and insert the right page.
@@ -368,7 +372,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Move the root to another place.
         let mut txn = self.guard.begin();
         let left_id = txn.insert_page(view.addr);
-        let left_key = Key::min();
+        let left_key = [].as_slice();
         let left_index = Index::new(left_id, view.page.epoch());
         let (split_key, split_index) = split_delta_from_page(view.page);
         // Build a new root with the original root on the left and the new split page on
@@ -401,15 +405,16 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
     }
 
-    async fn consolidate_page_impl<'g, F, I, V>(
+    async fn consolidate_page_impl<'g, F, I, K, V>(
         &'g self,
         mut view: PageView<'g>,
         parent: Option<PageView<'g>>,
         f: F,
     ) -> Result<()>
     where
-        F: Fn(MergingPageIter<'g, V>) -> I,
-        I: RewindableIterator<Item = (Key<'g>, V)>,
+        F: Fn(MergingPageIter<'g, K, V>) -> I,
+        I: RewindableIterator<Item = (K, V)>,
+        K: EncodeTo + DecodeFrom + Ord,
         V: EncodeTo + DecodeFrom,
     {
         // Consolidate some delta pages on the chain.
@@ -441,10 +446,13 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         Ok(())
     }
 
-    async fn build_consolidation<'g, V>(
+    async fn build_consolidation<'g, K, V>(
         &'g self,
         view: &PageView<'g>,
-    ) -> Result<Consolidation<'g, V>> {
+    ) -> Result<Consolidation<'g, K, V>>
+    where
+        K: Ord,
+    {
         let chain_len = view.page.chain_len() as usize;
         let mut builder = MergingIterBuilder::with_capacity(chain_len);
         let mut page_size = 0;
@@ -506,15 +514,18 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 }
 
-struct Consolidation<'a, V> {
-    iter: MergingPageIter<'a, V>,
+struct Consolidation<'a, K, V>
+where
+    K: Ord,
+{
+    iter: MergingPageIter<'a, K, V>,
     last_page: PageRef<'a>,
     page_addrs: Vec<u64>,
 }
 
-fn split_delta_from_page(page: PageRef<'_>) -> (Key<'_>, Index) {
+fn split_delta_from_page(page: PageRef<'_>) -> (&[u8], Index) {
     debug_assert!(page.kind().is_split());
-    SplitPageRef::from(page)
+    IndexPageRef::from(page)
         .get(0)
         .expect("split page delta must exist")
 }
