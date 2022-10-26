@@ -8,7 +8,7 @@ use crate::{
 
 pub(super) struct TreeTxn<'a, E> {
     tree: &'a Tree<E>,
-    guard: Guard,
+    guard: Guard<'a>,
 }
 
 impl<'a, E: Env> TreeTxn<'a, E> {
