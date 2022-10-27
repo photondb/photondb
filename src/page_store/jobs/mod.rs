@@ -3,4 +3,4 @@
 pub(crate) mod cleanup;
 pub(crate) mod flush;
 pub(crate) mod gc;
-pub(crate) use gc::{RewritePage, GcPickStrategy};
+pub(crate) use gc::RewritePage;

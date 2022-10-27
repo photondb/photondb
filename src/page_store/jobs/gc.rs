@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 
-use crate::page_store::{FileInfo, PageFiles, Result, Version};
+use crate::page_store::{FileInfo, PageFiles, Result, StrategyBuilder, Version};
 
 /// An abstraction describes how to move pages to the end of page files.
 #[async_trait]
@@ -11,56 +11,57 @@ pub(crate) trait RewritePage: Send + Sync {
     async fn rewrite(&self, page_id: u64) -> Result<()>;
 }
 
-/// An abstraction describes the strategy of page files gc.
-pub(crate) trait GcPickStrategy: Send + Sync {
-    /// Returns recycle threshold of this strategy.
-    fn threshold(&self) -> f64;
-
-    /// Compute and return score of the corresponding page file.
-    fn score(&self, file_info: &FileInfo) -> f64;
-}
-
 pub(crate) struct GcCtx {
     // TODO: cancel task
     rewriter: Arc<dyn RewritePage>,
-    strategy: Box<dyn GcPickStrategy>,
+    strategy_builder: Box<dyn StrategyBuilder>,
     #[allow(unused)]
     page_files: Arc<PageFiles>,
+
+    cleaned_files: HashSet<u32>,
 }
 
 impl GcCtx {
     pub(crate) fn new(
         rewriter: Arc<dyn RewritePage>,
-        strategy: Box<dyn GcPickStrategy>,
+        strategy_builder: Box<dyn StrategyBuilder>,
         page_files: Arc<PageFiles>,
     ) -> Self {
         GcCtx {
             rewriter,
-            strategy,
+            strategy_builder,
             page_files,
+            cleaned_files: HashSet::default(),
         }
     }
 
-    pub(crate) async fn run(self, mut version: Version) {
+    pub(crate) async fn run(mut self, mut version: Version) {
         loop {
             self.gc(&version).await;
             version = version.wait_next_version().await;
         }
     }
 
-    async fn gc(&self, version: &Version) {
+    async fn gc(&mut self, version: &Version) {
+        let now = version.next_file_id();
+        let mut strategy = self.strategy_builder.build(now);
+        let cleaned_files = std::mem::take(&mut self.cleaned_files);
         for (_, file) in version.files() {
-            if !self.is_satisfied(file) {
+            let file_id = file.get_file_id();
+            if cleaned_files.contains(&file_id) {
+                self.cleaned_files.insert(file_id);
                 continue;
             }
+            strategy.collect(file);
+        }
+
+        while let Some(file_id) = strategy.apply() {
+            let file = version.files().get(&file_id).expect("File must exists");
             if let Err(err) = self.forward_active_pages(&file).await {
                 todo!("do_recycle: {err:?}");
             }
+            self.cleaned_files.insert(file_id);
         }
-    }
-
-    fn is_satisfied(&self, file: &FileInfo) -> bool {
-        self.strategy.score(file) >= self.strategy.threshold()
     }
 
     async fn forward_active_pages(&self, file: &FileInfo) -> Result<()> {

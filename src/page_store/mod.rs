@@ -24,7 +24,7 @@ mod version;
 use version::Version;
 
 mod jobs;
-pub(crate) use jobs::{GcPickStrategy, RewritePage};
+pub(crate) use jobs::RewritePage;
 
 mod write_buffer;
 pub(crate) use write_buffer::{RecordRef, WriteBuffer};
@@ -37,6 +37,7 @@ pub(crate) use page_file::{FileInfo, PageFiles};
 
 mod recover;
 mod strategy;
+pub(crate) use strategy::{MinDeclineRateStrategyBuilder, StrategyBuilder};
 
 pub(crate) struct PageStore<E: Env>
 where
@@ -110,10 +111,10 @@ pub(crate) struct JobHandle {
 
 impl JobHandle {
     pub(crate) fn new<E: Env>(
-        env: &E,
+        env: E,
         page_store: &PageStore<E>,
         rewriter: Arc<dyn RewritePage>,
-        pick_strategy: Box<dyn GcPickStrategy>,
+        strategy_builder: Box<dyn StrategyBuilder>,
     ) -> JobHandle {
         use self::jobs::{cleanup::CleanupCtx, flush::FlushCtx, gc::GcCtx};
 
@@ -133,7 +134,7 @@ impl JobHandle {
             flush_ctx.run().await;
         });
 
-        let gc_ctx = GcCtx::new(rewriter, pick_strategy, page_files);
+        let gc_ctx = GcCtx::new(rewriter, strategy_builder, page_files);
         let gc_task = env.spawn_background(async {
             gc_ctx.run(global_version).await;
         });

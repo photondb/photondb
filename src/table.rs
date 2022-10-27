@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use crate::{
     env::{Env, Photon},
     page::{Key, Value},
-    page_store::JobHandle,
+    page_store::{JobHandle, MinDeclineRateStrategyBuilder},
     tree::{PageRewriter, Stats, Tree},
     util::atomic::Sequencer,
     Options, Result,
@@ -55,11 +55,13 @@ pub struct RawTable<E: Env> {
     _job_guard: JobHandle,
 }
 
-impl<E: Env> RawTable<E> {
+impl<E: Env + 'static> RawTable<E> {
     pub async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
         let tree = Arc::new(Tree::open(env.clone(), path, options).await?);
         let rewriter = Arc::new(PageRewriter::new(tree.clone()));
-        let _job_guard = JobHandle::new(&env, tree.store(), rewriter, todo!());
+        // TODO: add options.
+        let strategy_builder = Box::new(MinDeclineRateStrategyBuilder::new(1 << 30, usize::MAX));
+        let _job_guard = JobHandle::new(env, tree.store(), rewriter, strategy_builder);
         Ok(Self { tree, _job_guard })
     }
 
