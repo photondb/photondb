@@ -1,20 +1,21 @@
 use std::{io::ErrorKind, path::PathBuf};
 
-use photonio::{
-    fs::{File, OpenOptions},
-    io::{ReadAt, ReadAtExt, ReadExt, WriteExt},
-};
+use photonio::io::{ReadAt, ReadAtExt, Write, WriteExt};
 use prost::Message;
 
 use super::{meta::VersionEdit, Error};
-use crate::page_store::Result;
+use crate::{
+    env::{Env, ReadOptions, WriteOptions},
+    page_store::Result,
+};
 
 const CURRENT_FILE_NAME: &str = "CURRENT";
 const MANIFEST_FILE_NAME: &str = "MANIFEST";
 const TEMPFILE_SUFFIX: &str = "tmpdb";
 const MAX_MANIFEST_SIZE: u64 = 128 << 20; // 128 MiB
 
-pub(crate) struct Manifest {
+pub(crate) struct Manifest<E: Env> {
+    env: E,
     base: PathBuf,
 
     max_file_size: u64,
@@ -23,31 +24,35 @@ pub(crate) struct Manifest {
     current_file_num: Option<u32>,
 }
 
-impl Manifest {
+impl<E: Env> Manifest<E> {
     // Open manifest in specified folder.
     // it will reopen manifest by find CURRENT and do some cleanup.
-    pub(crate) async fn open(base: impl Into<PathBuf>) -> Result<Self> {
+    pub(crate) async fn open(env: E, base: impl Into<PathBuf>) -> Result<Self> {
         let mut manifest = Self {
+            env,
             base: base.into(),
             max_file_size: MAX_MANIFEST_SIZE,
             current_file_size: Default::default(),
             current_file_num: None,
         };
-        manifest.create_base_dir_if_not_exist()?;
+        manifest.create_base_dir_if_not_exist().await?;
         manifest.current_file_num = manifest.load_current().await?;
         manifest.current_file_size = manifest.file_size().await?;
         manifest.cleanup_obsolete_files().await?;
         Ok(manifest)
     }
 
-    fn create_base_dir_if_not_exist(&self) -> Result<()> {
-        match std::fs::create_dir_all(&self.base) {
+    async fn create_base_dir_if_not_exist(&self) -> Result<()> {
+        match self.env.create_dir_all(&self.base).await {
             Ok(_) => {}
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-                if !std::fs::metadata(&self.base)
-                    .expect("open base dir fail")
-                    .is_dir()
-                {
+                let meta = self
+                    .env
+                    .metadata(&self.base)
+                    .await
+                    .expect("open base dir fail");
+                use crate::env::Metadata;
+                if !meta.is_dir() {
                     panic!("base dir is not a dir")
                 }
             }
@@ -85,11 +90,15 @@ impl Manifest {
                 .join(format!("{}_{}", MANIFEST_FILE_NAME, current_file_num));
 
             (
-                OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .append(true)
-                    .open(&path)
+                self.env
+                    .open_sequential_writer(
+                        &path,
+                        WriteOptions {
+                            truncate: false,
+                            append: true,
+                            ..Default::default()
+                        },
+                    )
                     .await
                     .expect("create new manifest file fail"),
                 path,
@@ -105,7 +114,7 @@ impl Manifest {
             match VersionEditEncoder(ve).encode(&mut writer).await {
                 Ok(record_written) => base_written + record_written,
                 Err(err) => {
-                    let _ = photonio::fs::remove_file(&path).await;
+                    let _ = self.env.remove_file(&path).await;
                     return Err(err);
                 }
             }
@@ -118,6 +127,7 @@ impl Manifest {
             // TODO: notify cleaner previous manifest + size, so it can be delete when need.
             self.current_file_num = Some(current_file_num);
         } else {
+            use crate::env::Syncer;
             writer.sync_data().await.expect("sync manifest data fail");
         }
 
@@ -137,13 +147,12 @@ impl Manifest {
             let path = self
                 .base
                 .join(format!("{}_{}", MANIFEST_FILE_NAME, current_file));
-            let reader = File::open(path).await.expect("manifest not found");
-            let file_size = reader
-                .metadata()
+            let reader = self
+                .env
+                .open_positional_reader(path, ReadOptions::default())
                 .await
-                .expect("read metadata of manifest fail")
-                .len();
-            let mut decoder = VersionEditDecoder::new(reader, file_size);
+                .expect("open manifest fail");
+            let mut decoder = VersionEditDecoder::new(reader);
             let mut ves = Vec::new();
             while let Some(ve) = decoder.next_record().await.expect("manifest decode error") {
                 ves.push(ve)
@@ -155,14 +164,18 @@ impl Manifest {
     }
 
     async fn load_current(&self) -> Result<Option<u32 /* file_num */>> {
-        let mut curr_file = match File::open(self.base.join(CURRENT_FILE_NAME)).await {
+        let curr_file_reader = match self
+            .env
+            .open_positional_reader(self.base.join(CURRENT_FILE_NAME), ReadOptions::default())
+            .await
+        {
             Ok(f) => f,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
             Err(_) => panic!("read current meet error"),
         };
         let mut file_num_bytes = vec![0u8; core::mem::size_of::<u32>()];
-        curr_file
-            .read_exact(&mut file_num_bytes)
+        curr_file_reader
+            .read_exact_at(&mut file_num_bytes, 0)
             .await
             .expect("read current file fail");
         let file_num = u32::from_le_bytes(
@@ -175,15 +188,13 @@ impl Manifest {
 
     async fn file_size(&self) -> Result<u64> {
         Ok(if let Some(curr) = self.current_file_num {
-            let manifest_file =
-                File::open(self.base.join(format!("{}_{}", MANIFEST_FILE_NAME, curr)))
-                    .await
-                    .expect("read manifest fail");
-            manifest_file
-                .metadata()
+            let metadata = self
+                .env
+                .metadata(self.base.join(format!("{}_{}", MANIFEST_FILE_NAME, curr)))
                 .await
-                .expect("read manifest fail")
-                .len()
+                .expect("read manifest fail");
+            use crate::env::Metadata;
+            metadata.len()
         } else {
             0
         })
@@ -195,25 +206,38 @@ impl Manifest {
                 .base
                 .join(format!("curr.{}.{}", file_num, TEMPFILE_SUFFIX));
 
-            let mut tmp_file = File::create(&tmp_path)
-                .await
-                .expect("create tmp current fail");
-            tmp_file
-                .write_all(&file_num.to_le_bytes())
-                .await
-                .expect("write file_num to tmp fail");
+            {
+                let mut tmp_file = self
+                    .env
+                    .open_sequential_writer(&tmp_path, WriteOptions::default())
+                    .await
+                    .expect("create tmp current fail");
+                tmp_file
+                    .write_all(&file_num.to_le_bytes())
+                    .await
+                    .expect("write file_num to tmp fail");
+            }
 
-            match photonio::fs::rename(&tmp_path, self.base.join(CURRENT_FILE_NAME)).await {
+            match self
+                .env
+                .rename(&tmp_path, self.base.join(CURRENT_FILE_NAME))
+                .await
+            {
                 Ok(_) => Ok(()),
                 Err(_err) => {
-                    let _ = photonio::fs::remove_file(&tmp_path).await;
+                    let _ = self.env.remove_file(&tmp_path).await;
                     // TODO: throw right error.
                     Err(Error::Corrupted)
                 }
             }?;
         }
         {
-            let base_dir = File::open(&self.base).await.expect("open base folder fail");
+            use crate::env::Syncer;
+            let mut base_dir = self
+                .env
+                .open_positional_reader(&self.base, ReadOptions::default())
+                .await
+                .expect("open base folder fail");
             base_dir.sync_all().await.expect("sync base folder fail");
         }
         Ok(())
@@ -235,7 +259,7 @@ impl Manifest {
         }
 
         let mut wait_remove_paths = Vec::new();
-        for path in std::fs::read_dir(&self.base).expect("open base dir fail") {
+        for path in self.env.read_dir(&self.base).expect("open base dir fail") {
             let file_path = path.unwrap().path();
             if let Some(ext) = file_path.extension() {
                 if ext.to_str().unwrap() == TEMPFILE_SUFFIX {
@@ -252,7 +276,8 @@ impl Manifest {
         }
 
         for path in wait_remove_paths {
-            photonio::fs::remove_file(path)
+            self.env
+                .remove_file(path)
                 .await
                 .expect("remove obsolote file fail")
         }
@@ -264,7 +289,7 @@ impl Manifest {
 struct VersionEditEncoder(VersionEdit);
 
 impl VersionEditEncoder {
-    async fn encode(&self, w: &mut File) -> Result<usize> {
+    async fn encode<W: Write + Send>(&self, w: &mut W) -> Result<usize> {
         let bytes = self.0.encode_to_vec();
         w.write_all(&bytes.len().to_le_bytes())
             .await
@@ -277,28 +302,25 @@ impl VersionEditEncoder {
 struct VersionEditDecoder<R: ReadAt> {
     reader: R,
     offset: u64,
-    file_size: u64,
 }
 
 impl<R: ReadAt> VersionEditDecoder<R> {
-    fn new(reader: R, file_size: u64) -> Self {
-        Self {
-            reader,
-            offset: 0,
-            file_size,
-        }
+    fn new(reader: R) -> Self {
+        Self { reader, offset: 0 }
     }
     async fn next_record(&mut self) -> Result<Option<VersionEdit>> {
         let mut offset = self.offset;
-        if offset == self.file_size {
-            return Ok(None);
-        }
         let len = {
             let mut len_bytes = vec![0u8; core::mem::size_of::<u64>()];
-            self.reader
+            match self
+                .reader
                 .read_exact_at(&mut len_bytes, offset as u64)
                 .await
-                .expect("read version edit record len fail");
+            {
+                Ok(_) => {}
+                Err(err) if err.kind() == ErrorKind::UnexpectedEof => return Ok(None),
+                e @ Err(_) => e.expect("read mainfiest file fail"),
+            };
             u64::from_le_bytes(
                 len_bytes[0..core::mem::size_of::<u64>()]
                     .try_into()
@@ -331,9 +353,11 @@ mod tests {
 
     #[photonio::test]
     fn test_cleanup_when_restart() {
+        let env = crate::env::Photon;
+
         let base = std::env::temp_dir().join("curr_test_restart");
         if base.try_exists().unwrap_or(false) {
-            std::fs::remove_dir_all(base.to_owned()).unwrap();
+            env.remove_dir_all(base.to_owned()).await.unwrap();
         }
 
         fn version_snapshot() -> VersionEdit {
@@ -343,7 +367,9 @@ mod tests {
             }
         }
         {
-            let mut manifest = Manifest::open(base.to_owned()).await.unwrap();
+            let mut manifest = Manifest::open(env.to_owned(), base.to_owned())
+                .await
+                .unwrap();
             manifest.max_file_size = 1;
 
             manifest
@@ -380,17 +406,22 @@ mod tests {
 
             let tmp_path = base.join(format!("curr.{}.{}", 999, TEMPFILE_SUFFIX));
 
-            File::create(&tmp_path).await.unwrap();
-            let files = std::fs::read_dir(&base)
+            let _ = env
+                .open_sequential_writer(&tmp_path, WriteOptions::default())
+                .await
+                .unwrap();
+            let files = env
+                .read_dir(&base)
                 .expect("open base dir fail")
                 .into_iter()
                 .count();
             assert_eq!(files, 5); // 3 data + 1 current + 1 tmp
         }
         {
-            let _ = Manifest::open(base.to_owned()).await.unwrap();
+            let _ = Manifest::open(env.clone(), base.to_owned()).await.unwrap();
 
-            let files = std::fs::read_dir(&base)
+            let files = env
+                .read_dir(&base)
                 .expect("open base dir fail")
                 .into_iter()
                 .count();
@@ -400,9 +431,11 @@ mod tests {
 
     #[photonio::test]
     fn test_roll_manifest() {
+        let env = crate::env::Photon;
+
         let base = std::env::temp_dir().join("curr_test_roll");
         if base.try_exists().unwrap_or(false) {
-            std::fs::remove_dir_all(base.to_owned()).unwrap();
+            env.remove_dir_all(base.to_owned()).await.unwrap();
         }
 
         let ver = std::sync::Arc::new(std::sync::Mutex::new(VersionEdit {
@@ -423,7 +456,9 @@ mod tests {
         };
 
         {
-            let mut manifest = Manifest::open(base.to_owned()).await.unwrap();
+            let mut manifest = Manifest::open(env.to_owned(), base.to_owned())
+                .await
+                .unwrap();
             manifest.max_file_size = 100; // set a small threshold value to trigger roll
             for i in 0..43u32 {
                 let r = i.saturating_sub(10u32);
@@ -440,7 +475,7 @@ mod tests {
         }
 
         {
-            let manifest2 = Manifest::open(base.to_owned()).await.unwrap();
+            let manifest2 = Manifest::open(env, base.to_owned()).await.unwrap();
             let versions = manifest2.list_versions().await.unwrap();
 
             let mut recover_ver = VersionEdit::default();
@@ -467,13 +502,17 @@ mod tests {
             }
         }
 
+        let env = crate::env::Photon;
+
         let base = std::env::temp_dir().join("curr_test2");
         if base.try_exists().unwrap_or(false) {
-            std::fs::remove_dir_all(base.to_owned()).unwrap();
+            env.remove_dir_all(base.to_owned()).await.unwrap();
         }
 
         {
-            let mut manifest = Manifest::open(base.to_owned()).await.unwrap();
+            let mut manifest = Manifest::open(env.to_owned(), base.to_owned())
+                .await
+                .unwrap();
             manifest
                 .record_version_edit(
                     VersionEdit {
@@ -507,7 +546,7 @@ mod tests {
         }
 
         {
-            let manifest2 = Manifest::open(base.to_owned()).await.unwrap();
+            let manifest2 = Manifest::open(env, base.to_owned()).await.unwrap();
             let versions = manifest2.list_versions().await.unwrap();
             assert_eq!(versions.len(), 4);
         }
