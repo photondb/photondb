@@ -1,5 +1,5 @@
 use super::{page::*, Tree};
-use crate::{env::Env, page::*, page_store::*, util::codec::EncodeDecode};
+use crate::{env::Env, page::*, page_store::*};
 
 pub(super) struct TreeTxn<'a, E: Env> {
     tree: &'a Tree<E>,
@@ -250,14 +250,14 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
     }
 
-    async fn split_page_impl<'g, K, V>(
-        &'g self,
-        mut view: PageView<'g>,
-        parent: Option<PageView<'g>>,
+    async fn split_page_impl<K, V>(
+        &self,
+        mut view: PageView<'_>,
+        parent: Option<PageView<'_>>,
     ) -> Result<()>
     where
-        K: EncodeDecode<'g> + Clone,
-        V: EncodeDecode<'g>,
+        K: EncodeTo + DecodeFrom + Clone,
+        V: EncodeTo + DecodeFrom,
     {
         // We can only split base data pages.
         if !view.page.kind().is_data() || view.page.chain_next() != 0 {
@@ -411,8 +411,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     where
         F: Fn(MergingPageIter<'g, K, V>) -> I,
         I: RewindableIterator<Item = (K, V)>,
-        K: EncodeDecode<'g> + Ord,
-        V: EncodeDecode<'g>,
+        K: EncodeTo + DecodeFrom + Ord,
+        V: EncodeTo + DecodeFrom,
     {
         // Consolidate some delta pages on the chain.
         let cons = self.build_consolidation(&view).await?;
