@@ -92,7 +92,7 @@ impl PagePtr {
     }
 
     /// Returns a byte slice of the page data.
-    pub(crate) fn data(&self) -> &[u8] {
+    pub(crate) fn data<'a>(&self) -> &'a [u8] {
         unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 
@@ -102,12 +102,12 @@ impl PagePtr {
     }
 
     /// Returns a byte slice of the page content.
-    pub(super) fn content(&self) -> &[u8] {
+    pub(super) fn content<'a>(&self) -> &'a [u8] {
         unsafe { slice::from_raw_parts(self.content_ptr(), self.content_size()) }
     }
 
     /// Returns a mutable byte slice of the page content.
-    pub(super) fn content_mut(&mut self) -> &mut [u8] {
+    pub(super) fn content_mut<'a>(&mut self) -> &'a mut [u8] {
         unsafe { slice::from_raw_parts_mut(self.content_ptr(), self.content_size()) }
     }
 }

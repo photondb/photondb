@@ -59,7 +59,7 @@ impl Encoder {
     }
 
     pub(super) unsafe fn remaining(&self) -> usize {
-        self.len - self.offset()
+        self.len() - self.offset()
     }
 
     unsafe fn advance(&mut self, n: usize) {
@@ -120,7 +120,7 @@ impl Decoder {
     }
 
     pub(super) unsafe fn remaining(&self) -> usize {
-        self.len - self.offset()
+        self.len() - self.offset()
     }
 
     unsafe fn advance(&mut self, len: usize) {
