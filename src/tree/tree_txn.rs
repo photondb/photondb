@@ -144,7 +144,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         view: &PageView<'g>,
     ) -> Result<MergingPageIter<'g, K, V>>
     where
-        K: Ord,
+        K: EncodeTo + DecodeFrom + Ord,
+        V: EncodeTo + DecodeFrom,
     {
         let mut builder = MergingIterBuilder::with_capacity(view.page.chain_len() as usize);
         let mut range_limit = None;
@@ -256,7 +257,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         parent: Option<PageView<'_>>,
     ) -> Result<()>
     where
-        K: EncodeTo + DecodeFrom + Clone,
+        K: EncodeTo + DecodeFrom + Ord + Clone,
         V: EncodeTo + DecodeFrom,
     {
         // We can only split base data pages.
@@ -448,7 +449,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         view: &PageView<'g>,
     ) -> Result<Consolidation<'g, K, V>>
     where
-        K: Ord,
+        K: DecodeFrom + Ord,
+        V: DecodeFrom,
     {
         let chain_len = view.page.chain_len() as usize;
         let mut builder = MergingIterBuilder::with_capacity(chain_len);
@@ -513,7 +515,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
 struct Consolidation<'a, K, V>
 where
-    K: Ord,
+    K: DecodeFrom + Ord,
+    V: DecodeFrom,
 {
     iter: MergingPageIter<'a, K, V>,
     last_page: PageRef<'a>,

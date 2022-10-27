@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, mem, ops::Deref};
+use std::{cmp::Ordering, marker::PhantomData, mem, ops::Deref, slice};
 
 use super::{
     codec::*, data::*, PageBuf, PageBuilder, PageKind, PageRef, PageTier, RewindableIterator,
@@ -15,8 +15,8 @@ pub(crate) struct SortedPageBuilder<I> {
 impl<'a, I, K, V> SortedPageBuilder<I>
 where
     I: RewindableIterator<Item = (K, V)>,
-    K: EncodeTo + DecodeFrom,
-    V: EncodeTo + DecodeFrom,
+    K: EncodeTo,
+    V: EncodeTo,
 {
     pub(crate) fn new(tier: PageTier, kind: PageKind) -> Self {
         Self {
@@ -64,13 +64,13 @@ struct SortedPageBuf<K, V> {
 
 impl<K, V> SortedPageBuf<K, V>
 where
-    K: EncodeTo + DecodeFrom,
-    V: EncodeTo + DecodeFrom,
+    K: EncodeTo,
+    V: EncodeTo,
 {
     unsafe fn new(page: &mut PageBuf<'_>, num_items: usize) -> Self {
         let content = page.content_mut();
-        let offsets_len = num_items * mem::size_of::<u32>();
-        let (offsets, payload) = content.split_at_mut(offsets_len);
+        let offsets_size = num_items * mem::size_of::<u32>();
+        let (offsets, payload) = content.split_at_mut(offsets_size);
         Self {
             offsets: Encoder::new(offsets),
             payload: Encoder::new(payload),
@@ -88,31 +88,87 @@ where
 
 pub(crate) struct SortedPageRef<'a, K, V> {
     page: PageRef<'a>,
+    content: &'a [u8],
+    offsets: &'a [u32],
     _marker: PhantomData<(K, V)>,
 }
 
-impl<'a, K, V> SortedPageRef<'a, K, V> {
+impl<'a, K, V> SortedPageRef<'a, K, V>
+where
+    K: DecodeFrom + Ord,
+    V: DecodeFrom,
+{
     pub(crate) fn new(page: PageRef<'a>) -> Self {
+        let content = page.content();
+        let offsets = unsafe {
+            let ptr = content.as_ptr() as *const u32;
+            let size = if content.is_empty() {
+                0
+            } else {
+                u32::from_le(ptr.read()) as usize
+            };
+            let num_offsets = size / mem::size_of::<u32>();
+            slice::from_raw_parts(ptr, num_offsets)
+        };
         Self {
             page,
+            content,
+            offsets,
             _marker: PhantomData,
         }
     }
 
     pub(crate) fn len(&self) -> usize {
-        todo!()
+        self.offsets.len()
     }
 
     pub(crate) fn get(&self, index: usize) -> Option<(K, V)> {
-        todo!()
+        if let Some(item) = self.item(index) {
+            let mut dec = Decoder::new(item);
+            unsafe {
+                let k = K::decode_from(&mut dec);
+                let v = V::decode_from(&mut dec);
+                Some((k, v))
+            }
+        } else {
+            None
+        }
     }
 
     pub(crate) fn rank(&self, target: &K) -> Result<usize, usize> {
-        todo!()
+        let mut left = 0;
+        let mut right = self.len();
+        while left < right {
+            let mid = (left + right) / 2;
+            let key = unsafe {
+                let item = self.item(mid).unwrap();
+                let mut dec = Decoder::new(item);
+                K::decode_from(&mut dec)
+            };
+            match key.cmp(target) {
+                Ordering::Less => left = mid + 1,
+                Ordering::Greater => right = mid,
+                Ordering::Equal => return Ok(mid),
+            }
+        }
+        Err(left)
     }
 
     pub(crate) fn split(&self) -> Option<(K, SortedPageIter<'a, K, V>)> {
         todo!()
+    }
+
+    fn item(&self, index: usize) -> Option<&[u8]> {
+        if let Some(offset) = self.item_offset(index) {
+            let next_offset = self.item_offset(index + 1).unwrap_or(self.content.len());
+            Some(&self.content[offset..next_offset])
+        } else {
+            None
+        }
+    }
+
+    fn item_offset(&self, index: usize) -> Option<usize> {
+        self.offsets.get(index).map(|v| u32::from_le(*v) as usize)
     }
 }
 
@@ -126,6 +182,8 @@ impl<'a, K, V> Deref for SortedPageRef<'a, K, V> {
 
 impl<'a, K, V, T> From<T> for SortedPageRef<'a, K, V>
 where
+    K: DecodeFrom + Ord,
+    V: DecodeFrom,
     T: Into<PageRef<'a>>,
 {
     fn from(page: T) -> Self {
@@ -146,6 +204,8 @@ impl<'a, K, V> SortedPageIter<'a, K, V> {
 
 impl<'a, K, V, T> From<T> for SortedPageIter<'a, K, V>
 where
+    K: DecodeFrom,
+    V: DecodeFrom,
     T: Into<SortedPageRef<'a, K, V>>,
 {
     fn from(page: T) -> Self {
@@ -153,7 +213,11 @@ where
     }
 }
 
-impl<'a, K, V> Iterator for SortedPageIter<'a, K, V> {
+impl<'a, K, V> Iterator for SortedPageIter<'a, K, V>
+where
+    K: DecodeFrom + Ord,
+    V: DecodeFrom,
+{
     type Item = (K, V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -166,13 +230,24 @@ impl<'a, K, V> Iterator for SortedPageIter<'a, K, V> {
     }
 }
 
-impl<'a, K, V, T> SeekableIterator<T> for SortedPageIter<'a, K, V> {
-    fn seek(&mut self, target: &T) {
-        todo!()
+impl<'a, K, V> SeekableIterator<K> for SortedPageIter<'a, K, V>
+where
+    K: DecodeFrom + Ord,
+    V: DecodeFrom,
+{
+    fn seek(&mut self, target: &K) {
+        self.next = match self.page.rank(target) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
     }
 }
 
-impl<'a, K, V> RewindableIterator for SortedPageIter<'a, K, V> {
+impl<'a, K, V> RewindableIterator for SortedPageIter<'a, K, V>
+where
+    K: DecodeFrom + Ord,
+    V: DecodeFrom,
+{
     fn rewind(&mut self) {
         self.next = 0;
     }
