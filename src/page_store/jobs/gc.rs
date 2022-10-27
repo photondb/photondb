@@ -13,7 +13,7 @@ pub(crate) trait RewritePage: Send + Sync {
 
 pub(crate) struct GcCtx {
     // TODO: cancel task
-    rewriter: Arc<dyn RewritePage>,
+    rewriter: Box<dyn RewritePage>,
     strategy_builder: Box<dyn StrategyBuilder>,
     #[allow(unused)]
     page_files: Arc<PageFiles>,
@@ -23,7 +23,7 @@ pub(crate) struct GcCtx {
 
 impl GcCtx {
     pub(crate) fn new(
-        rewriter: Arc<dyn RewritePage>,
+        rewriter: Box<dyn RewritePage>,
         strategy_builder: Box<dyn StrategyBuilder>,
         page_files: Arc<PageFiles>,
     ) -> Self {

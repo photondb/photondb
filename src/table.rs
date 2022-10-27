@@ -50,18 +50,18 @@ impl Table {
     }
 }
 
-pub struct RawTable<E: Env> {
+pub struct RawTable<E: Env + 'static> {
     tree: Arc<Tree<E>>,
     _job_guard: JobHandle,
 }
 
 impl<E: Env + 'static> RawTable<E> {
     pub async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
-        let tree = Arc::new(Tree::open(env.clone(), path, options).await?);
-        let rewriter = Arc::new(PageRewriter::new(tree.clone()));
+        let tree = Arc::new(Tree::open(env, path, options).await?);
+        let rewriter = Box::new(PageRewriter::new(tree.clone()));
         // TODO: add options.
         let strategy_builder = Box::new(MinDeclineRateStrategyBuilder::new(1 << 30, usize::MAX));
-        let _job_guard = JobHandle::new(env, tree.store(), rewriter, strategy_builder);
+        let _job_guard = JobHandle::new(tree.store(), rewriter, strategy_builder);
         Ok(Self { tree, _job_guard })
     }
 

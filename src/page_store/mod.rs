@@ -101,6 +101,11 @@ impl<E: Env> PageStore<E> {
     fn global_version(&self) -> Version {
         self.version.lock().expect("Poisoned").clone()
     }
+
+    #[inline]
+    fn env(&self) -> &E {
+        &self.env
+    }
 }
 
 pub(crate) struct JobHandle {
@@ -111,13 +116,13 @@ pub(crate) struct JobHandle {
 
 impl JobHandle {
     pub(crate) fn new<E: Env>(
-        env: E,
         page_store: &PageStore<E>,
-        rewriter: Arc<dyn RewritePage>,
+        rewriter: Box<dyn RewritePage>,
         strategy_builder: Box<dyn StrategyBuilder>,
     ) -> JobHandle {
         use self::jobs::{cleanup::CleanupCtx, flush::FlushCtx, gc::GcCtx};
 
+        let env = page_store.env();
         let page_files = page_store.page_files.clone();
         let version = page_store.version.clone();
         let manifest = page_store.manifest.clone();
