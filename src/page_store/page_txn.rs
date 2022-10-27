@@ -156,16 +156,21 @@ impl<'a> PageTxn<'a> {
     /// as `old_addr`.
     ///
     /// On success, commits all operations in the transaction.
-    /// On failure, returns the transaction and the current address of the page.
+    /// On failure, if `new_addr` is not large than `old_addr`, `Err(None)` is
+    /// returned, otherwise returns the transaction and the current address of
+    /// the page.
     pub(crate) fn update_page(
         mut self,
         id: u64,
         old_addr: u64,
         new_addr: u64,
-    ) -> Result<(), (Self, u64)> {
-        assert!(old_addr < new_addr);
+    ) -> Result<(), Option<(Self, u64)>> {
+        if new_addr <= old_addr {
+            return Err(None);
+        }
+
         if let Err(addr) = self.guard.page_table.cas(id, old_addr, new_addr) {
-            return Err((self, addr));
+            return Err(Some((self, addr)));
         }
 
         let record_header = self
@@ -190,7 +195,10 @@ impl<'a> PageTxn<'a> {
         new_addr: u64,
         dealloc_addrs: &[u64],
     ) -> Result<()> {
-        assert!(old_addr < new_addr);
+        if new_addr <= old_addr {
+            return Err(Error::Again);
+        }
+
         let dealloc_pages = self.dealloc_pages_impl(dealloc_addrs)?;
         self.update_page(id, old_addr, new_addr).map_err(|_| {
             dealloc_pages.set_tombstone();
@@ -365,6 +373,23 @@ mod tests {
         let mut page_txn = guard.begin();
         let (addr, _) = page_txn.alloc_page(123).unwrap();
         assert!(page_txn.update_page(id, 1, addr).is_err());
+    }
+
+    #[test]
+    fn page_txn_increment_page_addr_update() {
+        let files = {
+            let base = std::env::temp_dir();
+            Arc::new(PageFiles::new(
+                &base,
+                "test_page_increment_page_addr_update",
+            ))
+        };
+
+        let version = new_version(512);
+        let page_table = PageTable::default();
+        let guard = Guard::new(version.clone(), &page_table, &files);
+        let page_txn = guard.begin();
+        assert!(matches!(page_txn.update_page(1, 3, 2), Err(None)));
     }
 
     #[test]
