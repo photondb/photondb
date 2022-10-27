@@ -46,7 +46,7 @@ impl GcCtx {
         let now = version.next_file_id();
         let mut strategy = self.strategy_builder.build(now);
         let cleaned_files = std::mem::take(&mut self.cleaned_files);
-        for (_, file) in version.files() {
+        for file in version.files().values() {
             let file_id = file.get_file_id();
             if cleaned_files.contains(&file_id) {
                 self.cleaned_files.insert(file_id);
@@ -57,7 +57,7 @@ impl GcCtx {
 
         while let Some(file_id) = strategy.apply() {
             let file = version.files().get(&file_id).expect("File must exists");
-            if let Err(err) = self.forward_active_pages(&file).await {
+            if let Err(err) = self.forward_active_pages(file).await {
                 todo!("do_recycle: {err:?}");
             }
             self.cleaned_files.insert(file_id);

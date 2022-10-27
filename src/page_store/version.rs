@@ -442,17 +442,17 @@ impl BufferSetVersion {
     /// If the user needs to access the [`WriteBuffer`] for a long time, use
     /// `clone` to make a copy.
     pub(crate) fn write_buffer(&self, file_id: u32) -> Option<&Arc<WriteBuffer>> {
+        use std::cmp::Ordering;
+
         if !self.buffers_range.contains(&file_id) {
             return None;
         }
 
         let index = (file_id - self.buffers_range.start) as usize;
-        if index < self.sealed_buffers.len() {
-            Some(&self.sealed_buffers[index])
-        } else if index == self.sealed_buffers.len() {
-            Some(&self.current_buffer)
-        } else {
-            panic!("buffers_range is invalid")
+        match index.cmp(&self.sealed_buffers.len()) {
+            Ordering::Less => Some(&self.sealed_buffers[index]),
+            Ordering::Equal => Some(&self.current_buffer),
+            Ordering::Greater => panic!("buffers_range is invalid"),
         }
     }
 

@@ -139,7 +139,7 @@ impl FileBuilder {
 
         let active_pages = {
             let mut active_pages = roaring::RoaringBitmap::new();
-            for (_page_id, page_addr) in &self.meta.page_table.0 {
+            for page_addr in self.meta.page_table.0.values() {
                 let (_, index) = split_page_addr(*page_addr);
                 active_pages.insert(index);
             }

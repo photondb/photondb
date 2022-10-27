@@ -167,7 +167,7 @@ fn version_snapshot(version: &Version) -> VersionEdit {
 
     // FIXME: only the deleted files of the current version are recorded here, and
     // the files of previous versions are not recorded here.
-    let deleted_files = version.deleted_files().clone();
+    let deleted_files = version.deleted_files();
     VersionEdit {
         new_files,
         deleted_files,

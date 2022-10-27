@@ -114,6 +114,7 @@ impl WriteBuffer {
     /// Allocate pages and record dealloc pages in one batch. This operation
     /// will acquire a writer guard.
     #[cfg(test)]
+    #[allow(clippy::type_complexity)]
     pub(crate) fn batch(
         &self,
         new_page_list: &[(u64 /* page id */, u32 /* page size */)],
@@ -152,7 +153,7 @@ impl WriteBuffer {
             None
         };
 
-        return Ok((records, dealloc_pages_header));
+        Ok((records, dealloc_pages_header))
     }
 
     /// Allocate new page from the buffer.
@@ -280,7 +281,7 @@ impl WriteBuffer {
     /// ensure that pointer aliasing rules are not violated.
     pub(crate) fn iter(&self) -> RecordIterator {
         RecordIterator {
-            write_buffer: &self,
+            write_buffer: self,
             offset: 0,
         }
     }
@@ -362,7 +363,7 @@ impl WriteBuffer {
             &*(self
                 .buf
                 .as_ptr()
-                .offset(offset as isize)
+                .add(offset)
                 .cast::<MaybeUninit<RecordHeader>>())
         }
     }
@@ -375,7 +376,23 @@ impl WriteBuffer {
     /// There should no any references pointer to the target record.
     #[inline]
     unsafe fn record_uninit_mut<'a>(&self, offset: u32) -> &'a mut MaybeUninit<RecordHeader> {
-        &mut *(self.record_uninit(offset) as *const _ as *mut _)
+        let offset = offset as usize;
+        if offset % core::mem::size_of::<usize>() != 0 {
+            panic!("The specified offset is not aligned with pointer size");
+        }
+
+        assert!(offset + core::mem::size_of::<RecordHeader>() < self.buf_size);
+
+        unsafe {
+            // Safety:
+            // 1. Both start and result pointer in bounds.
+            // 2. The computed offset is not exceeded `isize`.
+            &mut *(self
+                .buf
+                .as_ptr()
+                .add(offset)
+                .cast::<MaybeUninit<RecordHeader>>())
+        }
     }
 
     #[inline]
@@ -841,7 +858,9 @@ mod tests {
         records_header
             .into_iter()
             .for_each(|(_, h, _)| h.set_tombstone());
-        dealloc_pages_header.map(|h| h.set_tombstone());
+        if let Some(h) = dealloc_pages_header {
+            h.set_tombstone()
+        }
 
         unsafe { buf.seal(true) }.unwrap();
 
@@ -873,13 +892,15 @@ mod tests {
         unsafe { buf.dealloc_pages(&[5, 6, 7], false) }.unwrap();
 
         // 3. alloc but set page as tombstone.
-        let (_, header, _) = unsafe { buf.alloc_page(2, 222, false) }.unwrap();
-        header.set_tombstone();
-        drop(header);
+        {
+            let (_, header, _) = unsafe { buf.alloc_page(2, 222, false) }.unwrap();
+            header.set_tombstone();
+        }
 
-        let header = unsafe { buf.dealloc_pages(&[1, 3, 4], false) }.unwrap();
-        header.set_tombstone();
-        drop(header);
+        {
+            let header = unsafe { buf.dealloc_pages(&[1, 3, 4], false) }.unwrap();
+            header.set_tombstone();
+        }
 
         unsafe { buf.release_writer() };
     }
