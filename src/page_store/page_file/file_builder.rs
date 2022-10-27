@@ -119,16 +119,18 @@ impl FileBuilder {
         };
 
         let footer_dat = footer.encode();
-        let _ = self.writer.write(&footer_dat).await?;
+        let foot_offset = self.writer.write(&footer_dat).await?;
+        let file_size = foot_offset as usize + footer_dat.len();
 
-        Ok(self.as_file_info(&footer))
+        Ok(self.as_file_info(file_size, &footer))
     }
 
-    fn as_file_info(&self, footer: &Footer) -> FileInfo {
+    fn as_file_info(&self, file_size: usize, footer: &Footer) -> FileInfo {
         let meta = {
             let (indexes, offsets) = self.index.index_block.as_meta_file_cached(footer);
             Arc::new(FileMeta::new(
                 self.file_id,
+                file_size as usize,
                 indexes,
                 offsets,
                 self.block_size,
@@ -146,7 +148,8 @@ impl FileBuilder {
 
         let active_size = meta.total_page_size();
 
-        FileInfo::new(active_pages, 0.0, active_size, meta)
+        let file_id = meta.get_file_id();
+        FileInfo::new(active_pages, active_size, file_id, file_id, meta)
     }
 }
 

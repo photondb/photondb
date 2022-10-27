@@ -91,7 +91,13 @@ impl<R: ReadAt> MetaReader<R> {
         let index_block = Self::read_index_block(reader, &footer).await?;
         Ok({
             let (indexes, offsets) = index_block.as_meta_file_cached(&footer);
-            Arc::new(FileMeta::new(file_id, indexes, offsets, reader.align_size))
+            Arc::new(FileMeta::new(
+                file_id,
+                file_size as usize,
+                indexes,
+                offsets,
+                reader.align_size,
+            ))
         })
     }
 

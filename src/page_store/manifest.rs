@@ -322,6 +322,12 @@ impl<R: ReadAt> VersionEditDecoder<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::page_store::NewFile;
+
+    #[inline]
+    fn new_files(ids: Vec<u32>) -> Vec<NewFile> {
+        ids.into_iter().map(Into::into).collect()
+    }
 
     #[photonio::test]
     fn test_cleanup_when_restart() {
@@ -343,7 +349,7 @@ mod tests {
             manifest
                 .record_version_edit(
                     VersionEdit {
-                        new_files: vec![2, 3],
+                        new_files: new_files(vec![2, 3]),
                         deleted_files: vec![1],
                     },
                     version_snapshot,
@@ -354,7 +360,7 @@ mod tests {
             manifest
                 .record_version_edit(
                     VersionEdit {
-                        new_files: vec![2, 3],
+                        new_files: new_files(vec![2, 3]),
                         deleted_files: vec![1],
                     },
                     version_snapshot,
@@ -364,7 +370,7 @@ mod tests {
             manifest
                 .record_version_edit(
                     VersionEdit {
-                        new_files: vec![2, 3],
+                        new_files: new_files(vec![2, 3]),
                         deleted_files: vec![1],
                     },
                     version_snapshot,
@@ -413,7 +419,7 @@ mod tests {
             let mut ver = ver.lock().unwrap();
             ver.new_files.extend_from_slice(&ve.new_files);
             ver.new_files
-                .retain(|f| !ve.deleted_files.iter().any(|d| *d == *f))
+                .retain(|f| !ve.deleted_files.iter().any(|d| *d == f.id))
         };
 
         {
@@ -422,7 +428,7 @@ mod tests {
             for i in 0..43u32 {
                 let r = i.saturating_sub(10u32);
                 let ve = VersionEdit {
-                    new_files: vec![i],
+                    new_files: new_files(vec![i]),
                     deleted_files: vec![r],
                 };
                 manifest
@@ -442,7 +448,7 @@ mod tests {
                 recover_ver.new_files.extend_from_slice(&ve.new_files);
                 recover_ver
                     .new_files
-                    .retain(|f| !ve.deleted_files.iter().any(|d| *d == *f));
+                    .retain(|f| !ve.deleted_files.iter().any(|d| *d == f.id));
             }
 
             assert_eq!(recover_ver.new_files, {
@@ -471,7 +477,7 @@ mod tests {
             manifest
                 .record_version_edit(
                     VersionEdit {
-                        new_files: vec![2, 3],
+                        new_files: new_files(vec![2, 3]),
                         deleted_files: vec![1],
                     },
                     version_snapshot,
@@ -481,7 +487,7 @@ mod tests {
             manifest
                 .record_version_edit(
                     VersionEdit {
-                        new_files: vec![4],
+                        new_files: new_files(vec![4]),
                         deleted_files: vec![],
                     },
                     version_snapshot,
@@ -491,7 +497,7 @@ mod tests {
             manifest
                 .record_version_edit(
                     VersionEdit {
-                        new_files: vec![5],
+                        new_files: new_files(vec![5]),
                         deleted_files: vec![],
                     },
                     version_snapshot,

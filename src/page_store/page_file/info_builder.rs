@@ -6,7 +6,7 @@ use super::{
     file_builder::logical_block_size, file_reader::MetaReader, types::split_page_addr, FileInfo,
     PageFileReader,
 };
-use crate::page_store::Result;
+use crate::page_store::{NewFile, Result};
 
 pub(crate) struct FileInfoBuilder {
     base: PathBuf,
@@ -28,17 +28,19 @@ impl FileInfoBuilder {
     /// it be recoveried from manifest files.
     pub(crate) async fn recovery_base_file_infos(
         &self,
-        file_ids: &[u32],
+        files: &[NewFile],
     ) -> Result<HashMap<u32, FileInfo>> {
-        let mut files = HashMap::with_capacity(file_ids.len());
-        let mut delete_pages = Vec::new();
-        for file_id in file_ids {
-            let (info, file_delete_pages) = self.recovery_one_file(file_id).await?;
-            files.insert(*file_id, info);
-            delete_pages.extend_from_slice(&file_delete_pages);
+        let mut file_infos = HashMap::with_capacity(files.len());
+        let mut delete_pages_map = HashMap::new();
+        for file in files {
+            let (info, delete_pages) = self.recovery_one_file(file).await?;
+            file_infos.insert(file.id, info);
+            delete_pages_map.insert(file.id, delete_pages);
         }
-        Self::mantain_file_active_pages(&mut files, &delete_pages);
-        Ok(files)
+        for (file_id, delete_pages) in delete_pages_map {
+            Self::mantain_file_active_pages(&mut file_infos, file_id, &delete_pages);
+        }
+        Ok(file_infos)
     }
 
     // Add new file to exist file infos.
@@ -51,14 +53,15 @@ impl FileInfoBuilder {
         new_file_info: FileInfo,
         new_delete_pages: &[u64],
     ) -> Result<HashMap<u32, FileInfo>> {
+        let file_id = new_file_info.get_file_id();
         let mut files = files.clone();
-        files.insert(new_file_info.get_file_id(), new_file_info);
-        Self::mantain_file_active_pages(&mut files, new_delete_pages);
+        files.insert(file_id, new_file_info);
+        Self::mantain_file_active_pages(&mut files, file_id, new_delete_pages);
         Ok(files)
     }
 
-    async fn recovery_one_file(&self, file_id: &u32) -> Result<(FileInfo, Vec<u64>)> {
-        let meta_reader = self.open_meta_reader(file_id).await;
+    async fn recovery_one_file(&self, file: &NewFile) -> Result<(FileInfo, Vec<u64>)> {
+        let meta_reader = self.open_meta_reader(&file.id).await;
         let meta = meta_reader.file_metadata();
 
         let active_pages = {
@@ -74,22 +77,24 @@ impl FileInfoBuilder {
             active_pages
         };
 
-        let active_size = meta.total_page_size();
-
         let delete_pages = meta_reader.read_delete_pages().await?;
 
-        let decline_rate = 0.0; // todo:...
-        let info = FileInfo::new(active_pages, decline_rate, active_size, meta);
+        let active_size = meta.total_page_size();
+        let info = FileInfo::new(active_pages, active_size, file.up1, file.up2, meta);
 
         Ok((info, delete_pages))
     }
 
     #[inline]
-    fn mantain_file_active_pages(files: &mut HashMap<u32, FileInfo>, delete_pages: &[u64]) {
+    fn mantain_file_active_pages(
+        files: &mut HashMap<u32, FileInfo>,
+        update_at: u32,
+        delete_pages: &[u64],
+    ) {
         for page_addr in delete_pages {
             let (file_id, _) = split_page_addr(*page_addr);
             if let Some(info) = files.get_mut(&file_id) {
-                info.deactivate_page(*page_addr)
+                info.deactivate_page(update_at, *page_addr)
             }
         }
     }

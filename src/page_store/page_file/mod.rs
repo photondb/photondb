@@ -132,14 +132,14 @@ pub(crate) mod facade {
 
     #[cfg(test)]
     mod tests {
-        use std::{collections::HashMap, os::fd::AsFd};
+        use std::collections::HashMap;
 
         use super::*;
 
         #[photonio::test]
         fn test_file_builder() {
             let base = std::env::temp_dir();
-            let files = PageFiles::new(&base, "test_buildler");
+            let files = PageFiles::new(&base, "test_builder");
             let mut builder = files.new_file_builder(11233).await.unwrap();
             builder.add_delete_pages(&[1, 2]);
             builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
@@ -310,13 +310,13 @@ pub(crate) mod facade {
                     b.add_delete_pages(delete_pages);
                     let file_info = b.finish().await.unwrap();
 
-                    let orignal_file1_active_size = mock_version.get(&1).unwrap().effective_size();
+                    let original_file1_active_size = mock_version.get(&1).unwrap().effective_size();
                     mock_version = info_builder
                         .add_file_info(&mock_version, file_info, delete_pages)
                         .unwrap();
 
                     let file1 = mock_version.get(&1).unwrap();
-                    assert_eq!(file1.effective_size(), orignal_file1_active_size - 10);
+                    assert_eq!(file1.effective_size(), original_file1_active_size - 10);
                     assert!(file1.get_page_handle(page_addr(1, 0)).is_none());
                     assert!(file1.get_page_handle(page_addr(1, 1)).is_some());
 
@@ -329,7 +329,7 @@ pub(crate) mod facade {
 
             {
                 // test recovery file_info from folder.
-                let known_files = &[1, 2];
+                let known_files = &[1, 2].iter().cloned().map(Into::into).collect::<Vec<_>>();
                 let recovery_mock_version = info_builder
                     .recovery_base_file_infos(known_files)
                     .await

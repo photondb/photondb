@@ -18,7 +18,7 @@ use page_table::PageTable;
 pub(crate) use page_table::{MAX_ID, MIN_ID, NAN_ID};
 
 mod meta;
-pub(crate) use meta::VersionEdit;
+pub(crate) use meta::{NewFile, VersionEdit};
 
 mod version;
 use version::Version;

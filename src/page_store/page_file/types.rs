@@ -12,22 +12,26 @@ pub(crate) struct PageHandle {
 pub(crate) struct FileInfo {
     active_pages: roaring::RoaringBitmap,
 
-    decline_rate: f64,
+    up1: u32,
+    up2: u32,
+
     active_size: usize,
+
     meta: Arc<FileMeta>,
 }
 
 impl FileInfo {
     pub(crate) fn new(
         active_pages: roaring::RoaringBitmap,
-
-        decline_rate: f64,
         active_size: usize,
+        up1: u32,
+        up2: u32,
         meta: Arc<FileMeta>,
     ) -> Self {
         Self {
             active_pages,
-            decline_rate,
+            up1,
+            up2,
             active_size,
             meta,
         }
@@ -43,12 +47,16 @@ impl FileInfo {
         self.active_pages.is_empty()
     }
 
-    pub(crate) fn deactivate_page(&mut self, page_addr: u64) {
+    pub(crate) fn deactivate_page(&mut self, now: u32, page_addr: u64) {
         let (_, index) = split_page_addr(page_addr);
         if self.active_pages.remove(index) {
             if let Some((_, page_size)) = self.meta.get_page_handle(page_addr) {
                 self.active_size -= page_size;
             }
+        }
+        if self.up1 <= now {
+            self.up2 = self.up1;
+            self.up1 = now;
         }
     }
 
@@ -77,12 +85,23 @@ impl FileInfo {
     }
 
     #[inline]
-    pub(crate) fn effective_size(&self) -> u32 {
-        self.active_size as u32
+    pub(crate) fn up1(&self) -> u32 {
+        self.up1
     }
 
-    pub(crate) fn decline_rate(&self) -> f64 {
-        todo!()
+    #[inline]
+    pub(crate) fn up2(&self) -> u32 {
+        self.up2
+    }
+
+    #[inline]
+    pub(crate) fn num_active_pages(&self) -> usize {
+        self.active_pages.len() as usize
+    }
+
+    #[inline]
+    pub(crate) fn effective_size(&self) -> usize {
+        self.active_size as usize
     }
 
     #[inline]
@@ -93,6 +112,7 @@ impl FileInfo {
 
 pub(crate) struct FileMeta {
     file_id: u32,
+    file_size: usize,
 
     data_offsets: BTreeMap<u64, u64>, // TODO: reduce this size.
     meta_indexes: Vec<u64>,           // [0] -> page_table, [1] ->  delete page, [2], meta_bloc_end
@@ -103,12 +123,14 @@ pub(crate) struct FileMeta {
 impl FileMeta {
     pub(crate) fn new(
         file_id: u32,
+        file_size: usize,
         indexes: Vec<u64>,
         offsets: BTreeMap<u64, u64>,
         block_size: usize,
     ) -> Self {
         Self {
             file_id,
+            file_size,
             meta_indexes: indexes,
             data_offsets: offsets,
             block_size,
@@ -118,6 +140,11 @@ impl FileMeta {
     #[inline]
     pub(crate) fn get_file_id(&self) -> u32 {
         self.file_id
+    }
+
+    #[inline]
+    pub(crate) fn file_size(&self) -> usize {
+        self.file_size
     }
 
     /// Returns the page size for the page specified by `page_addr`.
