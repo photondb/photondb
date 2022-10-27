@@ -47,6 +47,7 @@ impl FileInfoBuilder {
     // It copies the old file infos before add new file.
     // It could help version to prepare new Version's `active_files` after flush a
     // new page file.
+    #[cfg(test)]
     pub(crate) fn add_file_info(
         &self,
         files: &HashMap<u32, FileInfo>,

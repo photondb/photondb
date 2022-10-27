@@ -9,7 +9,7 @@ pub(crate) use info_builder::FileInfoBuilder;
 
 mod types;
 pub(crate) use facade::PageFiles;
-pub(crate) use types::{FileInfo, FileMeta, PageHandle};
+pub(crate) use types::{FileInfo, FileMeta};
 
 pub(crate) mod facade {
     use std::{os::unix::prelude::OpenOptionsExt, path::PathBuf};

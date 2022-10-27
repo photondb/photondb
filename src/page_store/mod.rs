@@ -11,11 +11,11 @@ pub(crate) use error::{Error, Result};
 
 mod page_txn;
 use futures::future::BoxFuture;
-pub(crate) use page_txn::{Guard, PageTxn};
+pub(crate) use page_txn::Guard;
 
 mod page_table;
 use page_table::PageTable;
-pub(crate) use page_table::{MAX_ID, MIN_ID, NAN_ID};
+pub(crate) use page_table::{MIN_ID, NAN_ID};
 
 mod meta;
 pub(crate) use meta::{NewFile, VersionEdit};
@@ -33,9 +33,10 @@ mod manifest;
 pub(crate) use manifest::Manifest;
 
 mod page_file;
-pub(crate) use page_file::{FileInfo, PageFiles, PageHandle};
+pub(crate) use page_file::{FileInfo, PageFiles};
 
 mod recover;
+mod strategy;
 
 pub(crate) struct PageStore<E: Env>
 where

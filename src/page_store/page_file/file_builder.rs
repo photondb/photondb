@@ -597,7 +597,7 @@ pub(crate) fn ceil_to_block_hi_pos(pos: usize, align: usize) -> usize {
 }
 
 #[inline]
-pub(crate) fn is_block_algined_pos(pos: usize, align: usize) -> bool {
+pub(crate) fn is_block_aligned_pos(pos: usize, align: usize) -> bool {
     (pos & (align - 1)) == 0
 }
 

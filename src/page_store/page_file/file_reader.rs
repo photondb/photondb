@@ -37,7 +37,7 @@ impl<R: ReadAt> PageFileReader<R> {
             ceil_to_block_hi_pos(req_offset as usize + buf.len(), self.align_size) - align_offset;
 
         let mut align_buf = AlignBuffer::new(align_buf_size, self.align_size); // TODO: pool this buf?
-        let mut read_buf = align_buf.as_bytes_mut();
+        let read_buf = align_buf.as_bytes_mut();
 
         self.inner_read_exact_at(&self.reader, read_buf, align_offset as u64)
             .await
@@ -55,14 +55,14 @@ impl<R: ReadAt> PageFileReader<R> {
         mut pos: u64,
     ) -> std::io::Result<()> {
         assert!(is_block_aligned_ptr(buf.as_ptr(), self.align_size));
-        assert!(is_block_algined_pos(pos as usize, self.align_size));
+        assert!(is_block_aligned_pos(pos as usize, self.align_size));
         while !buf.is_empty() {
             match r.read_at(buf, pos).await {
                 Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
                 Ok(n) => {
                     buf = &mut buf[n..];
                     pos += n as u64;
-                    if !is_block_algined_pos(n, self.align_size) {
+                    if !is_block_aligned_pos(n, self.align_size) {
                         // only happen when end of file.
                         break;
                     }
