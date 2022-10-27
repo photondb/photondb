@@ -27,7 +27,7 @@ pub(crate) struct PagePtr {
 }
 
 impl PagePtr {
-    fn new(ptr: NonNull<u8>, len: usize) -> Self {
+    unsafe fn new(ptr: NonNull<u8>, len: usize) -> Self {
         debug_assert!(ptr.as_ptr().is_aligned_to(8));
         debug_assert!(len >= PAGE_HEADER_LEN);
         Self { ptr, len }
@@ -61,8 +61,8 @@ impl PagePtr {
         assert!(epoch <= PAGE_EPOCH_MAX);
         unsafe {
             let val = epoch.to_le();
-            let val_ptr = &val as *const u64 as *const u8;
-            val_ptr.copy_to_nonoverlapping(self.epoch_ptr(), PAGE_EPOCH_LEN);
+            let ptr = &val as *const u64 as *const u8;
+            ptr.copy_to_nonoverlapping(self.epoch_ptr(), PAGE_EPOCH_LEN);
         }
     }
 
@@ -176,8 +176,10 @@ impl<'a> PageBuf<'a> {
     /// This function panics if the slice is not aligned to 8 bytes, or the
     /// slice is shorter than [`PAGE_HEADER_LEN`].
     pub(crate) fn new(buf: &'a mut [u8]) -> Self {
-        let ptr = unsafe { NonNull::new_unchecked(buf.as_mut_ptr()) };
-        PagePtr::new(ptr, buf.len()).into()
+        unsafe {
+            let ptr = NonNull::new_unchecked(buf.as_mut_ptr());
+            PagePtr::new(ptr, buf.len()).into()
+        }
     }
 }
 
@@ -219,8 +221,10 @@ impl<'a> PageRef<'a> {
     /// This function panics if the slice is not aligned to 8 bytes, or the
     /// slice is shorter than [`PAGE_HEADER_LEN`].
     pub(crate) fn new(buf: &'a [u8]) -> Self {
-        let ptr = unsafe { NonNull::new_unchecked(buf.as_ptr() as *mut _) };
-        PagePtr::new(ptr, buf.len()).into()
+        unsafe {
+            let ptr = NonNull::new_unchecked(buf.as_ptr() as *mut _);
+            PagePtr::new(ptr, buf.len()).into()
+        }
     }
 }
 
