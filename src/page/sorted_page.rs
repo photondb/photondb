@@ -1,39 +1,88 @@
-use std::{marker::PhantomData, ops::Deref};
+use std::{marker::PhantomData, mem, ops::Deref};
 
 use super::{
-    PageBuf, PageBuilder, PageKind, PageRef, PageTier, RewindableIterator, SeekableIterator,
+    codec::*, data::*, PageBuf, PageBuilder, PageKind, PageRef, PageTier, RewindableIterator,
+    SeekableIterator,
 };
-use crate::util::codec::EncodeDecode;
 
 pub(crate) struct SortedPageBuilder<I> {
     base: PageBuilder,
     iter: Option<I>,
+    size: usize,
+    num_items: usize,
 }
 
 impl<'a, I, K, V> SortedPageBuilder<I>
 where
     I: RewindableIterator<Item = (K, V)>,
-    K: EncodeDecode<'a>,
-    V: EncodeDecode<'a>,
+    K: EncodeTo + DecodeFrom,
+    V: EncodeTo + DecodeFrom,
 {
     pub(crate) fn new(tier: PageTier, kind: PageKind) -> Self {
         Self {
             base: PageBuilder::new(tier, kind),
             iter: None,
+            size: 0,
+            num_items: 0,
         }
     }
 
-    pub(crate) fn with_iter(mut self, iter: I) -> Self {
+    pub(crate) fn size(&self) -> usize {
+        self.size
+    }
+
+    pub(crate) fn with_iter(mut self, mut iter: I) -> Self {
+        for (k, v) in &mut iter {
+            self.size += k.encode_size() + v.encode_size();
+            self.num_items += 1;
+        }
+        self.size += self.num_items * mem::size_of::<u32>();
         self.iter = Some(iter);
         self
     }
 
-    pub(crate) fn size(&self) -> usize {
-        todo!()
+    pub(crate) fn build(mut self, page: &'a mut PageBuf<'_>) {
+        assert_eq!(page.size(), self.size);
+        self.base.build(page);
+        if let Some(mut iter) = self.iter.take() {
+            unsafe {
+                let mut buf = SortedPageBuf::new(page, self.num_items);
+                iter.rewind();
+                for (k, v) in iter {
+                    buf.add(k, v);
+                }
+            }
+        }
+    }
+}
+
+struct SortedPageBuf<K, V> {
+    offsets: Encoder,
+    payload: Encoder,
+    _marker: PhantomData<(K, V)>,
+}
+
+impl<K, V> SortedPageBuf<K, V>
+where
+    K: EncodeTo + DecodeFrom,
+    V: EncodeTo + DecodeFrom,
+{
+    unsafe fn new(page: &mut PageBuf<'_>, num_items: usize) -> Self {
+        let content = page.content_mut();
+        let offsets_len = num_items * mem::size_of::<u32>();
+        let (offsets, payload) = content.split_at_mut(offsets_len);
+        Self {
+            offsets: Encoder::new(offsets),
+            payload: Encoder::new(payload),
+            _marker: PhantomData,
+        }
     }
 
-    pub(crate) fn build(&self, page: &mut PageBuf<'_>) {
-        self.base.build(page);
+    unsafe fn add(&mut self, key: K, value: V) {
+        let offset = self.offsets.len() + self.payload.offset();
+        self.offsets.put_u32(offset as u32);
+        key.encode_to(&mut self.payload);
+        value.encode_to(&mut self.payload);
     }
 }
 
@@ -117,8 +166,8 @@ impl<'a, K, V> Iterator for SortedPageIter<'a, K, V> {
     }
 }
 
-impl<'a, K, V> SeekableIterator<K> for SortedPageIter<'a, K, V> {
-    fn seek(&mut self, target: &K) {
+impl<'a, K, V, T> SeekableIterator<T> for SortedPageIter<'a, K, V> {
+    fn seek(&mut self, target: &T) {
         todo!()
     }
 }
@@ -126,5 +175,94 @@ impl<'a, K, V> SeekableIterator<K> for SortedPageIter<'a, K, V> {
 impl<'a, K, V> RewindableIterator for SortedPageIter<'a, K, V> {
     fn rewind(&mut self) {
         self.next = 0;
+    }
+}
+
+impl EncodeTo for &[u8] {
+    fn encode_size(&self) -> usize {
+        mem::size_of::<u32>() + self.len()
+    }
+
+    unsafe fn encode_to(&self, enc: &mut Encoder) {
+        enc.put_u32(self.len() as u32);
+        enc.put_slice(self);
+    }
+}
+
+impl DecodeFrom for &[u8] {
+    unsafe fn decode_from(dec: &mut Decoder) -> Self {
+        let len = dec.get_u32() as usize;
+        dec.get_slice(len)
+    }
+}
+
+impl EncodeTo for Key<'_> {
+    fn encode_size(&self) -> usize {
+        self.raw.encode_size() + mem::size_of::<u64>()
+    }
+
+    unsafe fn encode_to(&self, enc: &mut Encoder) {
+        self.raw.encode_to(enc);
+        enc.put_u64(self.lsn);
+    }
+}
+
+impl DecodeFrom for Key<'_> {
+    unsafe fn decode_from(dec: &mut Decoder) -> Self {
+        let raw = DecodeFrom::decode_from(dec);
+        let lsn = dec.get_u64();
+        Self::new(raw, lsn)
+    }
+}
+
+const VALUE_KIND_PUT: u8 = 0;
+const VALUE_KIND_DELETE: u8 = 1;
+
+impl EncodeTo for Value<'_> {
+    fn encode_size(&self) -> usize {
+        1 + match self {
+            Self::Put(v) => v.len(),
+            Self::Delete => 0,
+        }
+    }
+
+    unsafe fn encode_to(&self, enc: &mut Encoder) {
+        match self {
+            Value::Put(v) => {
+                enc.put_u8(VALUE_KIND_PUT);
+                enc.put_slice(v);
+            }
+            Value::Delete => enc.put_u8(VALUE_KIND_DELETE),
+        }
+    }
+}
+
+impl DecodeFrom for Value<'_> {
+    unsafe fn decode_from(dec: &mut Decoder) -> Self {
+        let kind = dec.get_u8();
+        match kind {
+            VALUE_KIND_PUT => Self::Put(dec.get_slice(dec.remaining())),
+            VALUE_KIND_DELETE => Self::Delete,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl EncodeTo for Index {
+    fn encode_size(&self) -> usize {
+        mem::size_of::<u64>() * 2
+    }
+
+    unsafe fn encode_to(&self, enc: &mut Encoder) {
+        enc.put_u64(self.id);
+        enc.put_u64(self.epoch);
+    }
+}
+
+impl DecodeFrom for Index {
+    unsafe fn decode_from(dec: &mut Decoder) -> Self {
+        let id = dec.get_u64();
+        let epoch = dec.get_u64();
+        Self::new(id, epoch)
     }
 }
