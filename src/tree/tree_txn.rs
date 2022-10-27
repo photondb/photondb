@@ -41,7 +41,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                     view.page = new_page.into();
                     break;
                 }
-                Err((_txn, addr)) => {
+                Err(None) => return Err(Error::Again),
+                Err(Some((_txn, addr))) => {
                     // The page has been updated by other transactions.
                     // We keep retrying as long as the page epoch remains the same.
                     txn = _txn;
