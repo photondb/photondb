@@ -55,12 +55,13 @@ where
 
     page_files: Arc<PageFiles>,
     #[allow(unused)]
-    manifest: Arc<futures::lock::Mutex<Manifest>>,
+    manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
 }
 
 impl<E: Env> PageStore<E> {
     pub(crate) async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
-        let (next_file_id, manifest, table, page_files, file_infos) = Self::recover(path).await?;
+        let (next_file_id, manifest, table, page_files, file_infos) =
+            Self::recover(env.to_owned(), path).await?;
 
         let version = Version::new(
             options.write_buffer_capacity,
@@ -110,7 +111,7 @@ pub(crate) struct JobHandle {
 
 impl JobHandle {
     pub(crate) fn new<E: Env>(
-        env: &E,
+        env: &'static E,
         page_store: &PageStore<E>,
         rewriter: Arc<dyn RewritePage>,
         pick_strategy: Box<dyn GcPickStrategy>,
@@ -128,7 +129,7 @@ impl JobHandle {
             cleanup_ctx.run(cloned_global_version).await;
         });
 
-        let flush_ctx = FlushCtx::new(version.clone(), page_files.clone(), manifest.clone());
+        let flush_ctx = FlushCtx::new(version, page_files.clone(), manifest);
         let flush_task = env.spawn_background(async {
             flush_ctx.run().await;
         });
