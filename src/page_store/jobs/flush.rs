@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::page_store::{
-    version::DeltaVersion, FileInfo, Manifest, PageFiles, RecordRef, Result, Version, VersionEdit,
-    WriteBuffer,
+    version::DeltaVersion, FileInfo, Manifest, NewFile, PageFiles, RecordRef, Result, Version,
+    VersionEdit, WriteBuffer,
 };
 
 pub(crate) struct FlushCtx {
@@ -60,9 +60,9 @@ impl FlushCtx {
     }
 
     async fn flush(&self, version: &Version, write_buffer: &WriteBuffer) -> Result<()> {
-        let (deleted_pages, file_info) = self.build_page_file(write_buffer).await?;
-        let files = self.apply_deleted_pages(version, deleted_pages);
         let file_id = write_buffer.file_id();
+        let (deleted_pages, file_info) = self.build_page_file(write_buffer).await?;
+        let files = self.apply_deleted_pages(version, file_id, deleted_pages);
 
         let mut files = files;
         let deleted_files = files
@@ -118,7 +118,11 @@ impl FlushCtx {
     ) -> Result<()> {
         let deleted_files = deleted_files.iter().cloned().collect();
         let edit = VersionEdit {
-            new_files: vec![file_id],
+            new_files: vec![NewFile {
+                id: file_id,
+                up1: file_id,
+                up2: file_id,
+            }],
             deleted_files,
         };
 
@@ -131,13 +135,14 @@ impl FlushCtx {
     fn apply_deleted_pages(
         &self,
         version: &Version,
+        new_file_id: u32,
         deleted_pages: Vec<u64>,
     ) -> HashMap<u32, FileInfo> {
         let mut files = version.files().clone();
         for page_addr in deleted_pages {
             let file_id = (page_addr >> 32) as u32;
             let file_info = files.get_mut(&file_id).expect("File is missing");
-            file_info.deactivate_page(page_addr);
+            file_info.deactivate_page(new_file_id, page_addr);
         }
         files
     }
@@ -155,7 +160,8 @@ impl FlushCtx {
 }
 
 fn version_snapshot(version: &Version) -> VersionEdit {
-    let new_files = version.files().keys().cloned().collect::<Vec<_>>();
+    let new_files: Vec<NewFile> = version.files().values().map(Into::into).collect::<Vec<_>>();
+
     // FIXME: only the deleted files of the current version are recorded here, and
     // the files of previous versions are not recorded here.
     let deleted_files = version.deleted_files().clone();

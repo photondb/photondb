@@ -3,11 +3,11 @@ use std::{
     path::Path,
 };
 
-use super::{page_table::PageTable, FileInfo, PageFiles, PageStore, Result, VersionEdit};
+use super::{page_table::PageTable, FileInfo, NewFile, PageFiles, PageStore, Result, VersionEdit};
 use crate::{env::Env, page_store::Manifest};
 
 struct FilesSummary {
-    active_files: HashSet<u32>,
+    active_files: HashMap<u32, NewFile>,
     obsolated_files: HashSet<u32>,
 }
 
@@ -26,24 +26,22 @@ impl<E: Env> PageStore<E> {
         let summary = Self::apply_version_edits(versions);
 
         let page_files = PageFiles::new(path.as_ref(), "db");
-        let file_infos =
-            Self::recover_file_infos(&page_files, summary.active_files.clone()).await?;
-        let page_table =
-            Self::recover_page_table(&page_files, summary.active_files.clone()).await?;
+        let file_infos = Self::recover_file_infos(&page_files, &summary.active_files).await?;
+        let page_table = Self::recover_page_table(&page_files, &summary.active_files).await?;
 
         let deleted_files = summary.obsolated_files.into_iter().collect::<Vec<_>>();
         page_files.remove_files(deleted_files).await?;
 
-        let next_file_id = summary.active_files.iter().cloned().max().unwrap_or(0) + 1;
+        let next_file_id = summary.active_files.keys().cloned().max().unwrap_or(0) + 1;
         Ok((next_file_id, manifest, page_table, page_files, file_infos))
     }
 
     fn apply_version_edits(versions: Vec<VersionEdit>) -> FilesSummary {
-        let mut files = HashSet::new();
+        let mut files = HashMap::new();
         let mut deleted_files = HashSet::new();
         for edit in versions {
             for file in edit.new_files {
-                files.insert(file);
+                files.insert(file.id, file);
             }
             for file in edit.deleted_files {
                 files.remove(&file);
@@ -59,10 +57,10 @@ impl<E: Env> PageStore<E> {
 
     async fn recover_file_infos(
         page_files: &PageFiles,
-        active_files: HashSet<u32>,
+        active_files: &HashMap<u32, NewFile>,
     ) -> Result<HashMap<u32, FileInfo>> {
         // ensure recover files in order.
-        let mut files = active_files.into_iter().collect::<Vec<_>>();
+        let mut files = active_files.values().cloned().collect::<Vec<_>>();
         files.sort_unstable();
         let builder = page_files.new_info_builder();
         builder.recovery_base_file_infos(&files).await
@@ -70,10 +68,10 @@ impl<E: Env> PageStore<E> {
 
     async fn recover_page_table(
         page_files: &PageFiles,
-        active_files: HashSet<u32>,
+        active_files: &HashMap<u32, NewFile>,
     ) -> Result<PageTable> {
         // ensure recover files in order.
-        let mut files = active_files.into_iter().collect::<Vec<_>>();
+        let mut files = active_files.keys().cloned().collect::<Vec<_>>();
         files.sort_unstable();
 
         let table = PageTable::default();
