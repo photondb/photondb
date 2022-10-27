@@ -13,15 +13,16 @@ struct FilesSummary {
 
 impl<E: Env> PageStore<E> {
     pub(super) async fn recover<P: AsRef<Path>>(
+        env: E,
         path: P,
     ) -> Result<(
         u32, /* next file id */
-        Manifest,
+        Manifest<E>,
         PageTable,
         PageFiles,
         HashMap<u32, FileInfo>,
     )> {
-        let manifest = Manifest::open(path.as_ref()).await?;
+        let manifest = Manifest::open(env, path.as_ref()).await?;
         let versions = manifest.list_versions().await?;
         let summary = Self::apply_version_edits(versions);
 

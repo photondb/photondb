@@ -4,23 +4,26 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::page_store::{
-    version::DeltaVersion, FileInfo, Manifest, NewFile, PageFiles, RecordRef, Result, Version,
-    VersionEdit, WriteBuffer,
+use crate::{
+    env::Env,
+    page_store::{
+        version::{DeltaVersion, Version},
+        *,
+    },
 };
 
-pub(crate) struct FlushCtx {
+pub(crate) struct FlushCtx<E: Env> {
     // TODO: cancel task
     global_version: Arc<Mutex<Version>>,
     page_files: Arc<PageFiles>,
-    manifest: Arc<futures::lock::Mutex<Manifest>>,
+    manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
 }
 
-impl FlushCtx {
+impl<E: Env> FlushCtx<E> {
     pub(crate) fn new(
         global_version: Arc<Mutex<Version>>,
         page_files: Arc<PageFiles>,
-        manifest: Arc<futures::lock::Mutex<Manifest>>,
+        manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
     ) -> Self {
         FlushCtx {
             global_version,
