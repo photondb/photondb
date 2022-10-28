@@ -309,7 +309,7 @@ impl<'a> Drop for PageTxn<'a> {
         }
 
         if !self.records.is_empty() {
-            for (_, header) in &mut self.records {
+            for header in self.records.values_mut() {
                 header.set_tombstone();
             }
             self.records.clear();
@@ -387,7 +387,7 @@ mod tests {
 
         let version = new_version(512);
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), &page_table, &files);
+        let guard = Guard::new(version, &page_table, &files);
         let page_txn = guard.begin();
         assert!(matches!(page_txn.update_page(1, 3, 2), Err(None)));
     }
@@ -432,7 +432,7 @@ mod tests {
 
         let version = new_version(512);
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), &page_table, &files);
+        let guard = Guard::new(version, &page_table, &files);
         let mut page_txn = guard.begin();
         let (addr, _) = page_txn.alloc_page(123).unwrap();
         let id = page_txn.insert_page(addr);
