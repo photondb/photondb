@@ -1,23 +1,26 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use photonio::fs::File;
-
 use super::{
-    file_builder::logical_block_size, file_reader::MetaReader, types::split_page_addr, FileInfo,
+    file_builder::DEFAULT_BLOCK_SIZE, file_reader::MetaReader, types::split_page_addr, FileInfo,
     PageFileReader,
 };
-use crate::page_store::{NewFile, Result};
+use crate::{
+    env::{Env, ReadOptions},
+    page_store::{NewFile, Result},
+};
 
-pub(crate) struct FileInfoBuilder {
+pub(crate) struct FileInfoBuilder<E: Env> {
+    env: E,
     base: PathBuf,
     file_prefix: String,
 }
 
-impl FileInfoBuilder {
+impl<E: Env> FileInfoBuilder<E> {
     /// Create file info builder.
     /// it need base dir and page file name prefix.
-    pub(crate) fn new(base: impl Into<PathBuf>, file_prefix: &str) -> Self {
+    pub(crate) fn new(env: E, base: impl Into<PathBuf>, file_prefix: &str) -> Self {
         Self {
+            env,
             base: base.into(),
             file_prefix: file_prefix.into(),
         }
@@ -101,14 +104,21 @@ impl FileInfoBuilder {
     }
 
     #[inline]
-    async fn open_meta_reader(&self, file_id: &u32) -> MetaReader<File> {
+    async fn open_meta_reader(&self, file_id: &u32) -> MetaReader<E::PositionalReader> {
         let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
-        let raw_file = File::open(&path).await.expect("file {path} not exist");
-        let raw_metadata = std::fs::metadata(path).expect("read file metadata file");
-        let block_size = logical_block_size(&raw_metadata).await;
+        let raw_metadata = self
+            .env
+            .metadata(path.to_owned())
+            .await
+            .expect("read file metadata file");
+        let raw_file = self
+            .env
+            .open_positional_reader(&path, ReadOptions::default())
+            .await
+            .expect("file {path} not exist");
         MetaReader::open(
-            PageFileReader::from(raw_file, false, block_size),
-            raw_metadata.len() as u32,
+            PageFileReader::from(raw_file, false, DEFAULT_BLOCK_SIZE),
+            raw_metadata.len as u32,
             *file_id,
         )
         .await

@@ -14,7 +14,7 @@ pub(crate) use types::{FileInfo, FileMeta};
 pub(crate) mod facade {
     use std::path::PathBuf;
 
-    use super::{file_builder::logical_block_size, file_reader::MetaReader, *};
+    use super::{file_builder::DEFAULT_BLOCK_SIZE, file_reader::MetaReader, *};
     use crate::{
         env::{Env, ReadOptions},
         page_store::Result,
@@ -61,13 +61,11 @@ pub(crate) mod facade {
                 )
                 .await
                 .expect("open file_id: {file_id}'s file fail");
-            let metadata = std::fs::metadata(path).expect("open file metata fail");
-            let block_size = logical_block_size(&metadata).await;
             Ok(FileBuilder::new(
                 file_id,
                 writer,
                 self.use_direct,
-                block_size,
+                DEFAULT_BLOCK_SIZE,
             ))
         }
 
@@ -111,8 +109,8 @@ pub(crate) mod facade {
         }
 
         // Create info_builder to help recovery & mantains version's file_info.
-        pub(crate) fn new_info_builder(&self) -> FileInfoBuilder {
-            FileInfoBuilder::new(self.base.to_owned(), &self.file_prefix)
+        pub(crate) fn new_info_builder(&self) -> FileInfoBuilder<E> {
+            FileInfoBuilder::new(self.env.to_owned(), self.base.to_owned(), &self.file_prefix)
         }
 
         pub(crate) async fn open_meta_reader(
@@ -120,15 +118,19 @@ pub(crate) mod facade {
             file_id: u32,
         ) -> Result<MetaReader<<E as Env>::PositionalReader>> {
             let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
-            let raw_metadata = std::fs::metadata(&path).expect("read fs metadata fail");
-            let block_size = logical_block_size(&raw_metadata).await;
+            let file_size = self
+                .env
+                .metadata(&path)
+                .await
+                .expect("read fs metadata fail")
+                .len as u32;
             let file = self
                 .env
                 .open_positional_reader(path, ReadOptions::default())
                 .await
                 .expect("open reader for file_id: {file_id} fail");
-            let page_file_reader = PageFileReader::from(file, true, block_size);
-            MetaReader::open(page_file_reader, raw_metadata.len() as u32, file_id).await
+            let page_file_reader = PageFileReader::from(file, true, DEFAULT_BLOCK_SIZE);
+            MetaReader::open(page_file_reader, file_size, file_id).await
         }
 
         pub(crate) async fn remove_files(&self, files: Vec<u32>) -> Result<()> {

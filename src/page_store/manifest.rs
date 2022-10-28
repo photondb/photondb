@@ -46,13 +46,13 @@ impl<E: Env> Manifest<E> {
         match self.env.create_dir_all(&self.base).await {
             Ok(_) => {}
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-                let meta = self
+                if !self
                     .env
                     .metadata(&self.base)
                     .await
-                    .expect("open base dir fail");
-                use crate::env::Metadata;
-                if !meta.is_dir() {
+                    .expect("open base dir fail")
+                    .is_dir
+                {
                     panic!("base dir is not a dir")
                 }
             }
@@ -188,13 +188,11 @@ impl<E: Env> Manifest<E> {
 
     async fn file_size(&self) -> Result<u64> {
         Ok(if let Some(curr) = self.current_file_num {
-            let metadata = self
-                .env
+            self.env
                 .metadata(self.base.join(format!("{}_{}", MANIFEST_FILE_NAME, curr)))
                 .await
-                .expect("read manifest fail");
-            use crate::env::Metadata;
-            metadata.len()
+                .expect("read manifest fail")
+                .len
         } else {
             0
         })

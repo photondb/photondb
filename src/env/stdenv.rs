@@ -1,5 +1,5 @@
 use std::{
-    fs::{File, Metadata, OpenOptions},
+    fs::{File, OpenOptions},
     future::Future,
     io::Result,
     os::unix::fs::OpenOptionsExt,
@@ -9,7 +9,7 @@ use std::{
 
 use futures::{executor::block_on, future::BoxFuture};
 
-use super::{async_trait, Env, ReadAt, ReadOptions, Syncer, Write, WriteOptions};
+use super::{async_trait, Env, Metadata, ReadAt, ReadOptions, Syncer, Write, WriteOptions};
 
 /// An implementation of [`Env`] based on [`std`] with synchronous I/O.
 #[derive(Clone)]
@@ -19,7 +19,6 @@ pub struct Std;
 impl Env for Std {
     type PositionalReader = PositionalReader;
     type SequentialWriter = SequentialWriter;
-    type MetedataReader = Metadata;
 
     async fn open_positional_reader<P>(
         &self,
@@ -93,8 +92,12 @@ impl Env for Std {
         std::fs::read_dir(path)
     }
 
-    async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::MetedataReader> {
-        std::fs::metadata(path)
+    async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Metadata> {
+        let raw_metadata = std::fs::metadata(path)?;
+        Ok(Metadata {
+            len: raw_metadata.len(),
+            is_dir: raw_metadata.is_dir(),
+        })
     }
 }
 
@@ -146,23 +149,5 @@ impl Syncer for SequentialWriter {
 
     fn sync_all(&mut self) -> Self::SyncAll<'_> {
         async move { self.0.sync_all() }
-    }
-}
-
-impl super::Metadata for std::fs::Metadata {
-    fn len(&self) -> u64 {
-        std::fs::Metadata::len(self)
-    }
-
-    fn is_dir(&self) -> bool {
-        std::fs::Metadata::is_dir(self)
-    }
-
-    fn is_file(&self) -> bool {
-        std::fs::Metadata::is_file(self)
-    }
-
-    fn is_symlink(&self) -> bool {
-        std::fs::Metadata::is_symlink(self)
     }
 }

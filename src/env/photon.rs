@@ -2,11 +2,11 @@ use std::{future::Future, io::Result, os::unix::prelude::OpenOptionsExt, path::P
 
 use futures::future::BoxFuture;
 use photonio::{
-    fs::{File, Metadata, OpenOptions},
+    fs::{File, OpenOptions},
     task,
 };
 
-use super::{async_trait, Env, ReadOptions, Syncer, WriteOptions};
+use super::{async_trait, Env, Metadata, ReadOptions, Syncer, WriteOptions};
 
 /// An implementation of [`Env`] based on PhotonIO.
 #[derive(Clone)]
@@ -16,7 +16,6 @@ pub struct Photon;
 impl Env for Photon {
     type PositionalReader = File;
     type SequentialWriter = File;
-    type MetedataReader = Metadata;
 
     async fn open_positional_reader<P>(
         &self,
@@ -91,10 +90,14 @@ impl Env for Photon {
         std::fs::read_dir(path)
     }
 
-    async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::MetedataReader> {
+    async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Metadata> {
         let path = path.as_ref();
         let file = File::open(path).await?;
-        let metadata = file.metadata().await?;
+        let raw_metadata = file.metadata().await?;
+        let metadata = Metadata {
+            len: raw_metadata.len(),
+            is_dir: raw_metadata.is_dir(),
+        };
         Ok(metadata)
     }
 }
@@ -110,23 +113,5 @@ impl Syncer for File {
 
     fn sync_all(&mut self) -> Self::SyncAll<'_> {
         File::sync_all(self)
-    }
-}
-
-impl super::Metadata for Metadata {
-    fn len(&self) -> u64 {
-        Metadata::len(self)
-    }
-
-    fn is_dir(&self) -> bool {
-        Metadata::is_dir(self)
-    }
-
-    fn is_file(&self) -> bool {
-        Metadata::is_file(self)
-    }
-
-    fn is_symlink(&self) -> bool {
-        Metadata::is_symlink(self)
     }
 }

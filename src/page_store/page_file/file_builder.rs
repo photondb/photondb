@@ -519,22 +519,10 @@ impl<W: Write + Syncer> BufferedWriter<W> {
     }
 }
 
-const DEFAULT_BLOCK_SIZE: usize = 4096;
-
-pub(crate) async fn logical_block_size(meta: &std::fs::Metadata) -> usize {
-    use std::os::unix::prelude::MetadataExt;
-    // same as `major(3)` https://github.com/torvalds/linux/blob/5a18d07ce3006dbcb3c4cfc7bf1c094a5da19540/tools/include/nolibc/types.h#L191
-    let major = (meta.dev() >> 8) & 0xfff;
-    if let Ok(block_size_str) =
-        std::fs::read_to_string(format!("/sys/dev/block/{major}:0/queue/logical_block_size"))
-    {
-        let block_size_str = block_size_str.trim();
-        if let Ok(size) = block_size_str.parse::<usize>() {
-            return size;
-        }
-    }
-    DEFAULT_BLOCK_SIZE
-}
+/// Default alignment requirement for the SSD.
+// TODO: query logical sector size
+// like: https://github.com/DataDog/glommio/issues/7 or https://github.com/facebook/rocksdb/pull/1875
+pub(crate) const DEFAULT_BLOCK_SIZE: usize = 4096;
 
 pub(crate) struct AlignBuffer {
     data: std::ptr::NonNull<u8>,

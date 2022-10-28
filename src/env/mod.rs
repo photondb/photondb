@@ -53,7 +53,6 @@ impl Default for WriteOptions {
 pub trait Env: Clone + Send + Sync {
     type PositionalReader: ReadAt + Syncer + Send + Sync + 'static;
     type SequentialWriter: Write + Syncer + Send;
-    type MetedataReader: Metadata + Send;
 
     /// Opens a file for positional reads.
     async fn open_positional_reader<P>(
@@ -107,7 +106,7 @@ pub trait Env: Clone + Send + Sync {
     /// Given a path, query the file system to get information about a file,
     /// directory, etc.
     /// See alos [`std::fs::metadata`].
-    async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::MetedataReader>;
+    async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Metadata>;
 }
 
 /// Synchronizes modified for the file.
@@ -134,27 +133,11 @@ pub trait Syncer {
 }
 
 /// Metadata information about a file.
-///
-/// See also [`std::fs::Metadata`].
 #[allow(clippy::len_without_is_empty)]
-pub trait Metadata {
-    /// Returns the size of the file this metadata is for.
-    ///
-    /// See also [`std::fs::Metadata::len`].
-    fn len(&self) -> u64;
+pub struct Metadata {
+    /// The size of the file this metadata is for.
+    pub len: u64,
 
-    /// Returns true if this metadata is for a directory.
-    ///
-    /// See also [`std::fs::Metadata::is_dir`].
-    fn is_dir(&self) -> bool;
-
-    /// Returns true if this metadata is for a regular file.
-    ///
-    /// See also [`std::fs::Metadata::is_file`].
-    fn is_file(&self) -> bool;
-
-    /// Returns true if this metadata is for a symbolic link.
-    ///
-    /// See also [`std::fs::Metadata::is_symlink`].
-    fn is_symlink(&self) -> bool;
+    /// Is this metadata for a directory.
+    pub is_dir: bool,
 }
