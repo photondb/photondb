@@ -12,27 +12,30 @@ pub(crate) use facade::PageFiles;
 pub(crate) use types::{FileInfo, FileMeta};
 
 pub(crate) mod facade {
-    use std::{os::unix::prelude::OpenOptionsExt, path::PathBuf};
-
-    use photonio::fs::{File, OpenOptions};
+    use std::path::PathBuf;
 
     use super::{file_builder::logical_block_size, file_reader::MetaReader, *};
-    use crate::page_store::Result;
+    use crate::{
+        env::{Env, ReadOptions},
+        page_store::Result,
+    };
 
     /// The facade for page_file module.
     /// it hides the detail about disk location for caller(after it be created).
-    pub(crate) struct PageFiles {
+    pub(crate) struct PageFiles<E: Env> {
+        env: E,
         base: PathBuf,
 
         file_prefix: String,
         use_direct: bool,
     }
 
-    impl PageFiles {
+    impl<E: Env> PageFiles<E> {
         /// Create page file facade.
         /// It should be a singleton in the page_store.
-        pub(crate) fn new(base: impl Into<PathBuf>, file_prefile: &str) -> Self {
+        pub(crate) fn new(env: E, base: impl Into<PathBuf>, file_prefile: &str) -> Self {
             Self {
+                env,
                 base: base.into(),
                 file_prefix: file_prefile.into(),
                 use_direct: true,
@@ -40,19 +43,25 @@ pub(crate) mod facade {
         }
 
         /// Create file_builder to write a new page_file.
-        pub(crate) async fn new_file_builder(&self, file_id: u32) -> Result<FileBuilder> {
+        pub(crate) async fn new_file_builder(
+            &self,
+            file_id: u32,
+        ) -> Result<FileBuilder<E::SequentialWriter>> {
             // TODO: switch to env in suitable time.
             let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
             let flags = self.direct_flags();
-            let writer = OpenOptions::new()
-                .write(true)
-                .custom_flags(flags)
-                .create(true)
-                .truncate(true)
-                .open(path)
+            let writer = self
+                .env
+                .open_sequential_writer(
+                    path.to_owned(),
+                    crate::env::WriteOptions {
+                        custome_flags: flags,
+                        ..Default::default()
+                    },
+                )
                 .await
                 .expect("open file_id: {file_id}'s file fail");
-            let metadata = writer.metadata().await.expect("open file metata fail");
+            let metadata = std::fs::metadata(path).expect("open file metata fail");
             let block_size = logical_block_size(&metadata).await;
             Ok(FileBuilder::new(
                 file_id,
@@ -85,13 +94,17 @@ pub(crate) mod facade {
             &self,
             file_id: u32,
             block_size: usize,
-        ) -> Result<PageFileReader<File>> {
+        ) -> Result<PageFileReader<E::PositionalReader>> {
             let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
             let flags = self.direct_flags();
-            let file = OpenOptions::new()
-                .read(true)
-                .custom_flags(flags)
-                .open(path)
+            let file = self
+                .env
+                .open_positional_reader(
+                    path,
+                    ReadOptions {
+                        custome_flags: flags,
+                    },
+                )
                 .await
                 .expect("open reader for file_id: {file_id} fail");
             Ok(PageFileReader::from(file, self.use_direct, block_size))
@@ -102,13 +115,18 @@ pub(crate) mod facade {
             FileInfoBuilder::new(self.base.to_owned(), &self.file_prefix)
         }
 
-        pub(crate) async fn open_meta_reader(&self, file_id: u32) -> Result<MetaReader<File>> {
+        pub(crate) async fn open_meta_reader(
+            &self,
+            file_id: u32,
+        ) -> Result<MetaReader<<E as Env>::PositionalReader>> {
             let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
-            let file = File::open(path)
+            let raw_metadata = std::fs::metadata(&path).expect("read fs metadata fail");
+            let block_size = logical_block_size(&raw_metadata).await;
+            let file = self
+                .env
+                .open_positional_reader(path, ReadOptions::default())
                 .await
                 .expect("open reader for file_id: {file_id} fail");
-            let raw_metadata = file.metadata().await.expect("read fs metadata fail");
-            let block_size = logical_block_size(&raw_metadata).await;
             let page_file_reader = PageFileReader::from(file, true, block_size);
             MetaReader::open(page_file_reader, raw_metadata.len() as u32, file_id).await
         }
@@ -123,7 +141,8 @@ pub(crate) mod facade {
 
         async fn remove_file(&self, file_id: u32) -> Result<()> {
             let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
-            photonio::fs::remove_file(&path)
+            self.env
+                .remove_file(&path)
                 .await
                 .expect("remove file failed");
             Ok(())
@@ -138,8 +157,9 @@ pub(crate) mod facade {
 
         #[photonio::test]
         fn test_file_builder() {
+            let env = crate::env::Photon;
             let base = std::env::temp_dir();
-            let files = PageFiles::new(&base, "test_builder");
+            let files = PageFiles::new(env, &base, "test_builder");
             let mut builder = files.new_file_builder(11233).await.unwrap();
             builder.add_delete_pages(&[1, 2]);
             builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
@@ -148,9 +168,10 @@ pub(crate) mod facade {
 
         #[photonio::test]
         fn test_read_page() {
+            let env = crate::env::Photon;
             let files = {
                 let base = std::env::temp_dir();
-                PageFiles::new(&base, "test_dread")
+                PageFiles::new(env, &base, "test_dread")
             };
             let file_id = 2;
             let info = {
@@ -208,9 +229,10 @@ pub(crate) mod facade {
 
         #[photonio::test]
         fn test_test_simple_write_reader() {
+            let env = crate::env::Photon;
             let files = {
                 let base = std::env::temp_dir();
-                PageFiles::new(&base, "test_simple_rw")
+                PageFiles::new(env, &base, "test_simple_rw")
             };
 
             let file_id = 2;
@@ -267,9 +289,10 @@ pub(crate) mod facade {
 
         #[photonio::test]
         fn test_file_info_recovery_and_add_new_file() {
+            let env = crate::env::Photon;
             let files = {
                 let base = std::env::temp_dir();
-                PageFiles::new(&base, "test_recovery")
+                PageFiles::new(env, &base, "test_recovery")
             };
 
             let info_builder = files.new_info_builder();

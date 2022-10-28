@@ -4,13 +4,13 @@ use std::{
     sync::Arc,
 };
 
-use photonio::{
-    fs::{File, Metadata},
-    io::WriteExt,
-};
+use photonio::io::{Write, WriteExt};
 
 use super::{types::split_page_addr, FileInfo, FileMeta};
-use crate::page_store::{Error, Result};
+use crate::{
+    env::Syncer,
+    page_store::{Error, Result},
+};
 
 const IO_BUFFER_SIZE: usize = 4096 * 4;
 
@@ -30,9 +30,9 @@ const IO_BUFFER_SIZE: usize = 4096 * 4;
 ///
 /// `page_addr`'s high 32 bit always be `file-id`(`PageAddr = {file id} {write
 /// buffer index}`), so it only store lower 32 bit.
-pub(crate) struct FileBuilder {
+pub(crate) struct FileBuilder<W: Write + Syncer> {
     file_id: u32,
-    writer: BufferedWriter,
+    writer: BufferedWriter<W>,
 
     index: IndexBlockBuilder,
     meta: MetaBlockBuilder,
@@ -41,9 +41,9 @@ pub(crate) struct FileBuilder {
     block_size: usize,
 }
 
-impl FileBuilder {
+impl<W: Write + Syncer> FileBuilder<W> {
     /// Create new file builder for given writer.
-    pub(crate) fn new(file_id: u32, file: File, use_direct: bool, block_size: usize) -> Self {
+    pub(crate) fn new(file_id: u32, file: W, use_direct: bool, block_size: usize) -> Self {
         let writer = BufferedWriter::new(file, IO_BUFFER_SIZE, use_direct, block_size);
         Self {
             file_id,
@@ -87,7 +87,7 @@ impl FileBuilder {
     }
 }
 
-impl FileBuilder {
+impl<W: Write + Syncer> FileBuilder<W> {
     async fn finish_meta_block(&mut self) -> Result<()> {
         {
             let page_tables = self.meta.finish_page_table_block();
@@ -439,8 +439,8 @@ impl IndexBlock {
     }
 }
 
-struct BufferedWriter {
-    file: File,
+struct BufferedWriter<W: Write + Syncer> {
+    file: W,
 
     use_direct: bool,
 
@@ -452,8 +452,8 @@ struct BufferedWriter {
     buf_pos: usize,
 }
 
-impl BufferedWriter {
-    fn new(file: File, io_batch_size: usize, use_direct: bool, align_size: usize) -> Self {
+impl<W: Write + Syncer> BufferedWriter<W> {
+    fn new(file: W, io_batch_size: usize, use_direct: bool, align_size: usize) -> Self {
         let buffer = AlignBuffer::new(io_batch_size, align_size);
         Self {
             file,
@@ -505,12 +505,14 @@ impl BufferedWriter {
 
     async fn flush_and_sync(&mut self) -> Result<()> {
         self.flush().await?;
-        if self.use_direct {
-            self.file
-                .set_len(self.actual_data_size as u64)
-                .await
-                .expect("set set file len fail");
-        }
+        // TODO: ....
+        //
+        // if self.use_direct {
+        //     self.file
+        //         .set_len(self.actual_data_size as u64)
+        //         .await
+        //         .expect("set set file len fail");
+        // }
         // panic when sync fail, https://wiki.postgresql.org/wiki/Fsync_Errors
         self.file.sync_all().await.expect("sync file fail");
         Ok(())
@@ -519,7 +521,7 @@ impl BufferedWriter {
 
 const DEFAULT_BLOCK_SIZE: usize = 4096;
 
-pub(crate) async fn logical_block_size(meta: &Metadata) -> usize {
+pub(crate) async fn logical_block_size(meta: &std::fs::Metadata) -> usize {
     use std::os::unix::prelude::MetadataExt;
     // same as `major(3)` https://github.com/torvalds/linux/blob/5a18d07ce3006dbcb3c4cfc7bf1c094a5da19540/tools/include/nolibc/types.h#L191
     let major = (meta.dev() >> 8) & 0xfff;
@@ -610,22 +612,25 @@ pub(crate) fn is_block_aligned_ptr(p: *const u8, align: usize) -> bool {
 mod tests {
 
     use super::*;
+    use crate::env::{Env, ReadOptions, WriteOptions};
 
     #[photonio::test]
     async fn test_buffered_writer() {
-        use std::os::unix::prelude::OpenOptionsExt;
-
         use photonio::io::ReadAtExt;
+
+        let env = crate::env::Photon;
 
         let (use_direct, flags) = (true, 0x4000);
         let path1 = std::env::temp_dir().join("buf_test1");
         {
-            let file1 = photonio::fs::OpenOptions::new()
-                .write(true)
-                .custom_flags(flags)
-                .create(true)
-                .truncate(true)
-                .open(path1.to_owned())
+            let file1 = env
+                .open_sequential_writer(
+                    path1.to_owned(),
+                    WriteOptions {
+                        custome_flags: flags,
+                        ..Default::default()
+                    },
+                )
                 .await
                 .expect("open file_id: {file_id}'s file fail");
             let mut bw1 = BufferedWriter::new(file1, 4096 + 1, use_direct, 512);
@@ -635,9 +640,8 @@ mod tests {
             bw1.flush_and_sync().await.unwrap(); // flush again
         }
         {
-            let file2 = photonio::fs::OpenOptions::new()
-                .read(true)
-                .open(path1)
+            let file2 = env
+                .open_positional_reader(path1, ReadOptions::default())
                 .await
                 .expect("open file_id: {file_id}'s file fail");
             let mut buf = vec![0u8; 1];

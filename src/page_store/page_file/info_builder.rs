@@ -104,7 +104,7 @@ impl FileInfoBuilder {
     async fn open_meta_reader(&self, file_id: &u32) -> MetaReader<File> {
         let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
         let raw_file = File::open(&path).await.expect("file {path} not exist");
-        let raw_metadata = raw_file.metadata().await.expect("read file metadata file");
+        let raw_metadata = std::fs::metadata(path).expect("read file metadata file");
         let block_size = logical_block_size(&raw_metadata).await;
         MetaReader::open(
             PageFileReader::from(raw_file, false, block_size),

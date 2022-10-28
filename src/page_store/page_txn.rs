@@ -8,23 +8,26 @@ use super::{
     write_buffer::{RecordHeader, ReleaseState},
     Error, PageFiles, PageTable, Result, WriteBuffer, NAN_ID,
 };
-use crate::page::{PageBuf, PageRef};
+use crate::{
+    env::Env,
+    page::{PageBuf, PageRef},
+};
 
-pub(crate) struct Guard<'a>
+pub(crate) struct Guard<'a, E: Env>
 where
     Self: Send,
 {
     version: Arc<Version>,
     page_table: &'a PageTable,
-    page_files: &'a PageFiles,
+    page_files: &'a PageFiles<E>,
     owned_pages: Mutex<Vec<Vec<u8>>>,
 }
 
-impl<'a> Guard<'a> {
+impl<'a, E: Env> Guard<'a, E> {
     pub(crate) fn new(
         version: Arc<Version>,
         page_table: &'a PageTable,
-        page_files: &'a PageFiles,
+        page_files: &'a PageFiles<E>,
     ) -> Self {
         Guard {
             version,
@@ -34,7 +37,7 @@ impl<'a> Guard<'a> {
         }
     }
 
-    pub(crate) fn begin(&self) -> PageTxn {
+    pub(crate) fn begin(&self) -> PageTxn<E> {
         let file_id = loop {
             let current = self.version.buffer_set.current();
             let writer_buffer = current.last_writer_buffer();
@@ -107,18 +110,18 @@ impl<'a> Guard<'a> {
 ///
 /// On drop, the transaction will be aborted and all its operations will be
 /// rolled back.
-pub(crate) struct PageTxn<'a>
+pub(crate) struct PageTxn<'a, E: Env>
 where
     Self: Send,
 {
-    guard: &'a Guard<'a>,
+    guard: &'a Guard<'a, E>,
 
     file_id: u32,
     records: HashMap<u64 /* page addr */, &'a mut RecordHeader>,
     page_ids: Vec<u64>,
 }
 
-impl<'a> PageTxn<'a> {
+impl<'a, E: Env> PageTxn<'a, E> {
     /// Allocates a page buffer with the given size.
     ///
     /// Returns the address and buffer of the allocated page.
@@ -308,7 +311,7 @@ impl<'a> PageTxn<'a> {
     }
 }
 
-impl<'a> Drop for PageTxn<'a> {
+impl<'a, E: Env> Drop for PageTxn<'a, E> {
     fn drop(&mut self) {
         for id in &self.page_ids {
             // TODO: safety conditions.
@@ -343,9 +346,10 @@ mod tests {
 
     #[test]
     fn page_txn_update_page() {
+        let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(&base, "test_page_txn_update_page"))
+            Arc::new(PageFiles::new(env, &base, "test_page_txn_update_page"))
         };
 
         let version = new_version(512);
@@ -360,9 +364,14 @@ mod tests {
 
     #[test]
     fn page_txn_failed_update_page() {
+        let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(&base, "test_page_txn_failed_update_page"))
+            Arc::new(PageFiles::new(
+                env,
+                &base,
+                "test_page_txn_failed_update_page",
+            ))
         };
 
         let version = new_version(1 << 10);
@@ -384,9 +393,11 @@ mod tests {
 
     #[test]
     fn page_txn_increment_page_addr_update() {
+        let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
             Arc::new(PageFiles::new(
+                env,
                 &base,
                 "test_page_increment_page_addr_update",
             ))
@@ -401,9 +412,10 @@ mod tests {
 
     #[test]
     fn page_txn_replace_page() {
+        let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(&base, "test_page_txn_replace_page"))
+            Arc::new(PageFiles::new(env, &base, "test_page_txn_replace_page"))
         };
 
         let version = new_version(1 << 10);
@@ -418,9 +430,10 @@ mod tests {
 
     #[test]
     fn page_txn_seal_write_buffer() {
+        let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(&base, "test_page_seal_write_buffer"))
+            Arc::new(PageFiles::new(env, &base, "test_page_seal_write_buffer"))
         };
 
         let version = new_version(512);
@@ -432,9 +445,10 @@ mod tests {
 
     #[test]
     fn page_txn_insert_page() {
+        let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(&base, "test_page_insert_page"))
+            Arc::new(PageFiles::new(env, &base, "test_page_insert_page"))
         };
 
         let version = new_version(512);

@@ -16,7 +16,7 @@ use crate::{
 pub(crate) struct FlushCtx<E: Env> {
     shutdown: Shutdown,
     global_version: Arc<Mutex<Version>>,
-    page_files: Arc<PageFiles>,
+    page_files: Arc<PageFiles<E>>,
     manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
 }
 
@@ -24,7 +24,7 @@ impl<E: Env> FlushCtx<E> {
     pub(crate) fn new(
         shutdown: Shutdown,
         global_version: Arc<Mutex<Version>>,
-        page_files: Arc<PageFiles>,
+        page_files: Arc<PageFiles<E>>,
         manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
     ) -> Self {
         FlushCtx {

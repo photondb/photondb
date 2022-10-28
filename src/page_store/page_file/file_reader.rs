@@ -5,13 +5,13 @@ use photonio::io::{ReadAt, ReadAtExt};
 use super::{file_builder::*, types::FileMeta};
 use crate::page_store::{Error, Result};
 
-pub(crate) struct PageFileReader<R: ReadAt> {
+pub(crate) struct PageFileReader<R: ReadAt + Send> {
     reader: R,
     use_direct: bool,
     align_size: usize,
 }
 
-impl<R: ReadAt> PageFileReader<R> {
+impl<R: ReadAt + Send> PageFileReader<R> {
     /// Open page reader.
     pub(super) fn from(reader: R, use_direct: bool, align_size: usize) -> Self {
         Self {
@@ -75,12 +75,12 @@ impl<R: ReadAt> PageFileReader<R> {
     }
 }
 
-pub(crate) struct MetaReader<R: ReadAt> {
+pub(crate) struct MetaReader<R: ReadAt + Send> {
     reader: PageFileReader<R>,
     file_meta: Arc<FileMeta>,
 }
 
-impl<R: ReadAt> MetaReader<R> {
+impl<R: ReadAt + Send> MetaReader<R> {
     // Returns file_meta by read file's footer and index_block.
     pub(crate) async fn read_file_meta(
         reader: &PageFileReader<R>,
@@ -141,7 +141,7 @@ impl<R: ReadAt> MetaReader<R> {
     }
 }
 
-impl<R: ReadAt> MetaReader<R> {
+impl<R: ReadAt + Send> MetaReader<R> {
     async fn read_footer(read: &PageFileReader<R>, file_size: u32) -> Result<Footer> {
         if file_size <= Footer::size() {
             return Err(Error::Corrupted);

@@ -51,7 +51,7 @@ impl Default for WriteOptions {
 /// Provides an environment to interact with a specific platform.
 #[async_trait]
 pub trait Env: Clone + Send + Sync {
-    type PositionalReader: ReadAt + Syncer + Send;
+    type PositionalReader: ReadAt + Syncer + Send + Sync + 'static;
     type SequentialWriter: Write + Syncer + Send;
     type MetedataReader: Metadata + Send;
 
