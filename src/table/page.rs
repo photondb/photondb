@@ -4,7 +4,7 @@ pub(super) struct PageView<'a> {
     pub(super) id: u64,
     pub(super) addr: u64,
     pub(super) page: PageRef<'a>,
-    pub(super) range: Range<'a>,
+    pub(super) range: Option<Range<'a>>,
 }
 
 pub(super) struct MergingPageIter<'a, K, V>
