@@ -10,10 +10,11 @@ use crate::{
         version::{DeltaVersion, Version},
         *,
     },
+    util::shutdown::{with_shutdown, Shutdown},
 };
 
 pub(crate) struct FlushCtx<E: Env> {
-    // TODO: cancel task
+    shutdown: Shutdown,
     global_version: Arc<Mutex<Version>>,
     page_files: Arc<PageFiles>,
     manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
@@ -21,18 +22,20 @@ pub(crate) struct FlushCtx<E: Env> {
 
 impl<E: Env> FlushCtx<E> {
     pub(crate) fn new(
+        shutdown: Shutdown,
         global_version: Arc<Mutex<Version>>,
         page_files: Arc<PageFiles>,
         manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
     ) -> Self {
         FlushCtx {
+            shutdown,
             global_version,
             page_files,
             manifest,
         }
     }
 
-    pub(crate) async fn run(self) {
+    pub(crate) async fn run(mut self) {
         loop {
             let version = self.version();
             let write_buffer = {
@@ -48,7 +51,12 @@ impl<E: Env> FlushCtx<E> {
             // [`Notify`] is single permits. But this may also lead to [`WriteBuffer`]
             // flushed but notified is not consumed, so loop detection is required.
             while !write_buffer.is_flushable() {
-                version.buffer_set.wait_flushable().await;
+                if with_shutdown(&mut self.shutdown, version.buffer_set.wait_flushable())
+                    .await
+                    .is_none()
+                {
+                    return;
+                }
             }
 
             match self.flush(&version, write_buffer.as_ref()).await {
