@@ -1,20 +1,49 @@
-use super::{page::*, Tree};
-use crate::{env::Env, page::*, page_store::*};
+use std::sync::Arc;
 
-pub(super) struct TreeTxn<'a, E: Env> {
-    tree: &'a Tree<E>,
-    guard: Guard<'a>,
+use super::{page::*, AtomicStats, Options};
+use crate::{
+    page::*,
+    page_store::{Error, Guard, Result, RewritePage, MIN_ID, NAN_ID},
+};
+
+pub(super) struct Tree {
+    pub(super) options: Options,
+    pub(super) stats: AtomicStats,
 }
 
-impl<'a, E: Env> TreeTxn<'a, E> {
-    /// Creates a new transaction on the tree.
-    pub(super) fn new(tree: &'a Tree<E>) -> Self {
+impl Tree {
+    pub(super) fn new(options: Options) -> Self {
         Self {
-            tree,
-            guard: tree.store.guard(),
+            options,
+            stats: AtomicStats::default(),
         }
     }
 
+    pub(super) fn begin<'a>(&'a self, guard: &'a Guard<'_>) -> Session<'a> {
+        Session { tree: self, guard }
+    }
+}
+
+#[async_trait::async_trait]
+impl RewritePage for Arc<Tree> {
+    async fn rewrite(&self, id: u64, guard: &Guard<'_>) -> Result<()> {
+        loop {
+            let txn = self.begin(guard);
+            match txn.rewrite_page(id).await {
+                Ok(_) => return Ok(()),
+                Err(Error::Again) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+pub(super) struct Session<'a> {
+    tree: &'a Tree,
+    guard: &'a Guard<'a>,
+}
+
+impl<'a> Session<'a> {
     /// Gets the value corresponding to the key.
     pub(super) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
         let (view, _) = self.find_leaf(&key).await?;
@@ -64,6 +93,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         Ok(())
     }
 
+    /// Returns a view to the page.
     pub(super) async fn page_view<'g>(
         &'g self,
         id: u64,
@@ -101,7 +131,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             if view.page.tier().is_leaf() {
                 return Ok((view, parent));
             }
-            // Find the child page that may contain the key and update the current page.
+            // Find the child page that may contain the key.
             let (child_index, child_range) = self
                 .find_child(key.raw, &view)
                 .await?

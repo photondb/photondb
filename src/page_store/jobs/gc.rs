@@ -16,7 +16,7 @@ use crate::{
 #[async_trait]
 pub(crate) trait RewritePage: Send + Sync {
     /// Rewrite the corresponding page to the end of page files.
-    async fn rewrite(&self, page_id: u64) -> Result<()>;
+    async fn rewrite(&self, page_id: u64, guard: &Guard<'_>) -> Result<()>;
 }
 
 pub(crate) struct GcCtx {
@@ -91,7 +91,8 @@ impl GcCtx {
         let page_table = reader.read_page_table().await?;
         let dealloc_pages = reader.read_delete_pages().await?;
 
-        self.rewrite_active_pages(file, &page_table).await?;
+        self.rewrite_active_pages(file, version, &page_table)
+            .await?;
         self.rewrite_dealloc_pages(version, &dealloc_pages).await?;
 
         Ok(())
@@ -100,8 +101,11 @@ impl GcCtx {
     async fn rewrite_active_pages(
         &self,
         file: &FileInfo,
+        version: &Version,
         page_table: &BTreeMap<u64, u64>,
     ) -> Result<()> {
+        let version = Arc::new(version.clone());
+        let guard = Guard::new(version.clone(), &self.page_table, &self.page_files);
         let mut rewrite_pages = HashSet::new();
         for page_addr in file.iter() {
             let page_id = page_table
@@ -112,7 +116,7 @@ impl GcCtx {
                 continue;
             }
             rewrite_pages.insert(page_id);
-            self.rewriter.rewrite(page_id).await?;
+            self.rewriter.rewrite(page_id, &guard).await?;
         }
         Ok(())
     }
