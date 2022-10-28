@@ -124,7 +124,7 @@ impl<E: Env + 'static> RewritePage for Arc<Tree<E>> {
     async fn rewrite(&self, page_id: u64) -> crate::page_store::Result<()> {
         loop {
             let txn = self.begin();
-            match txn.rewrite(page_id).await {
+            match txn.rewrite_page(page_id).await {
                 Ok(_) => return Ok(()),
                 Err(Error::Again) => continue,
                 Err(e) => return Err(e),
