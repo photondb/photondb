@@ -82,6 +82,8 @@ pub trait PositionalReader: ReadAt + Send + Sync + 'static {
     /// For reader, it's normally used to sync on folder.
     async fn sync_all(&mut self) -> Result<()>;
 
+    /// Enable direct_io for the reader.
+    /// return error if direct_io unsupported.
     fn direct_io_ify(&self) -> Result<()>;
 }
 
