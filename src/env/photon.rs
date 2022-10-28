@@ -1,6 +1,13 @@
-use std::{future::Future, io::Result, os::fd::AsRawFd, path::Path};
+use std::{
+    future::Future,
+    io::Result,
+    os::fd::AsRawFd,
+    path::Path,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
-use futures::future::BoxFuture;
+use futures::FutureExt;
 use photonio::{
     fs::{File, OpenOptions},
     task,
@@ -16,6 +23,7 @@ pub struct Photon;
 impl Env for Photon {
     type PositionalReader = PositionalReader;
     type SequentialWriter = SequentialWriter;
+    type JoinHandle<T: Send> = JoinHandle<T>;
 
     async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
@@ -52,13 +60,13 @@ impl Env for Photon {
         Ok(SequentialWriter(w))
     }
 
-    fn spawn_background<'a, F>(&self, f: F) -> BoxFuture<'a, F::Output>
+    fn spawn_background<F>(&self, f: F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send,
     {
         let handle = task::spawn(f);
-        Box::pin(async { handle.await.unwrap() })
+        JoinHandle { handle }
     }
 
     /// An async version of [`std::fs::rename`].
@@ -146,5 +154,22 @@ impl super::PositionalReader for PositionalReader {
 
     fn direct_io_ify(&self) -> Result<()> {
         super::direct_io_ify(self.0.as_raw_fd())
+    }
+}
+
+pub struct JoinHandle<T> {
+    handle: task::JoinHandle<T>,
+}
+
+impl<T> Future for JoinHandle<T> {
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match this.handle.poll_unpin(cx) {
+            Poll::Ready(Ok(v)) => Poll::Ready(v),
+            Poll::Ready(Err(e)) => panic!("JoinHandle error: {:?}", e),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
