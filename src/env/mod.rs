@@ -74,7 +74,7 @@ pub trait Env: Clone + Send + Sync {
         P: AsRef<Path> + Send;
 
     /// Spawns a task to run in the background.
-    fn spawn_background<F>(&self, f: F) -> BoxFuture<'static, F::Output>
+    fn spawn_background<'a, F>(&self, f: F) -> BoxFuture<'a, F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send;

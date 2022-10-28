@@ -30,9 +30,9 @@ impl FileInfo {
     ) -> Self {
         Self {
             active_pages,
+            active_size,
             up1,
             up2,
-            active_size,
             meta,
         }
     }
@@ -100,8 +100,27 @@ impl FileInfo {
     }
 
     #[inline]
+    pub(crate) fn empty_pages_rate(&self) -> f64 {
+        let active_pages = self.active_pages.len() as f64;
+        let total_pages = self.meta.total_page_size() as f64 + 0.1;
+        active_pages / total_pages
+    }
+
+    #[inline]
     pub(crate) fn effective_size(&self) -> usize {
         self.active_size as usize
+    }
+
+    #[inline]
+    pub(crate) fn effective_rate(&self) -> f64 {
+        let active_size = self.active_size as f64;
+        let file_size = self.meta.file_size() as f64 + 0.1;
+        active_size / file_size
+    }
+
+    #[inline]
+    pub(crate) fn file_size(&self) -> usize {
+        self.meta.file_size()
     }
 
     #[inline]

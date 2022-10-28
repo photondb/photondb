@@ -199,6 +199,11 @@ impl Version {
         &self.inner.files
     }
 
+    #[inline]
+    pub(crate) fn next_file_id(&self) -> u32 {
+        self.inner.buffers_range.end
+    }
+
     /// Invoke `f` with the specified [`WriteBuffer`].
     ///
     /// # Panic

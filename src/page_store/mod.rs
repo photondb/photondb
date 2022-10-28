@@ -24,7 +24,7 @@ mod version;
 use version::Version;
 
 mod jobs;
-pub(crate) use jobs::{GcPickStrategy, RewritePage};
+pub(crate) use jobs::RewritePage;
 
 mod write_buffer;
 pub(crate) use write_buffer::{RecordRef, WriteBuffer};
@@ -37,6 +37,7 @@ pub(crate) use page_file::{FileInfo, PageFiles};
 
 mod recover;
 mod strategy;
+pub(crate) use strategy::{MinDeclineRateStrategyBuilder, StrategyBuilder};
 
 pub(crate) struct PageStore<E: Env>
 where
@@ -101,6 +102,11 @@ impl<E: Env> PageStore<E> {
     fn global_version(&self) -> Version {
         self.version.lock().expect("Poisoned").clone()
     }
+
+    #[inline]
+    fn env(&self) -> &E {
+        &self.env
+    }
 }
 
 pub(crate) struct JobHandle {
@@ -110,14 +116,14 @@ pub(crate) struct JobHandle {
 }
 
 impl JobHandle {
-    pub(crate) fn new<E: Env>(
-        env: &'static E,
+    pub(crate) fn new<E: Env + 'static>(
         page_store: &PageStore<E>,
-        rewriter: Arc<dyn RewritePage>,
-        pick_strategy: Box<dyn GcPickStrategy>,
+        rewriter: Box<dyn RewritePage>,
+        strategy_builder: Box<dyn StrategyBuilder>,
     ) -> JobHandle {
         use self::jobs::{cleanup::CleanupCtx, flush::FlushCtx, gc::GcCtx};
 
+        let env = page_store.env();
         let page_files = page_store.page_files.clone();
         let version = page_store.version.clone();
         let manifest = page_store.manifest.clone();
@@ -134,7 +140,7 @@ impl JobHandle {
             flush_ctx.run().await;
         });
 
-        let gc_ctx = GcCtx::new(rewriter, pick_strategy, page_files);
+        let gc_ctx = GcCtx::new(rewriter, strategy_builder, page_files);
         let gc_task = env.spawn_background(async {
             gc_ctx.run(global_version).await;
         });
