@@ -22,7 +22,7 @@ use tree::Tree;
 pub struct Table<E: Env> {
     tree: Arc<Tree>,
     store: PageStore<E>,
-    _job_guard: JobHandle,
+    _job_guard: JobHandle<E>,
 }
 
 impl<E: Env + 'static> Table<E> {

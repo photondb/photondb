@@ -1,6 +1,13 @@
-use std::{future::Future, io::Result, os::unix::prelude::OpenOptionsExt, path::Path};
+use std::{
+    future::Future,
+    io::Result,
+    os::unix::prelude::OpenOptionsExt,
+    path::Path,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
-use futures::future::BoxFuture;
+use futures::FutureExt;
 use photonio::{
     fs::{File, Metadata, OpenOptions},
     task,
@@ -17,6 +24,7 @@ impl Env for Photon {
     type PositionalReader = File;
     type SequentialWriter = File;
     type MetedataReader = Metadata;
+    type JoinHandle<T: Send> = JoinHandle<T>;
 
     async fn open_positional_reader<P>(
         &self,
@@ -52,13 +60,13 @@ impl Env for Photon {
             .await
     }
 
-    fn spawn_background<'a, F>(&self, f: F) -> BoxFuture<'a, F::Output>
+    fn spawn_background<F>(&self, f: F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send,
     {
         let handle = task::spawn(f);
-        Box::pin(async { handle.await.unwrap() })
+        JoinHandle { handle }
     }
 
     /// An async version of [`std::fs::rename`].
@@ -128,5 +136,22 @@ impl super::Metadata for Metadata {
 
     fn is_symlink(&self) -> bool {
         Metadata::is_symlink(self)
+    }
+}
+
+pub struct JoinHandle<T> {
+    handle: task::JoinHandle<T>,
+}
+
+impl<T> Future for JoinHandle<T> {
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match this.handle.poll_unpin(cx) {
+            Poll::Ready(Ok(v)) => Poll::Ready(v),
+            Poll::Ready(Err(e)) => panic!("JoinHandle error: {:?}", e),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }

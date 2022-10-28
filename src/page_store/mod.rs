@@ -10,7 +10,6 @@ mod error;
 pub(crate) use error::{Error, Result};
 
 mod page_txn;
-use futures::future::BoxFuture;
 pub(crate) use page_txn::Guard;
 
 mod page_table;
@@ -57,10 +56,7 @@ impl Default for Options {
     }
 }
 
-pub(crate) struct PageStore<E: Env>
-where
-    Self: Send + Sync,
-{
+pub(crate) struct PageStore<E: Env> {
     #[allow(unused)]
     options: Options,
     #[allow(unused)]
@@ -127,19 +123,19 @@ impl<E: Env> PageStore<E> {
     }
 }
 
-pub(crate) struct JobHandle {
-    flush_task: Option<BoxFuture<'static, ()>>,
-    cleanup_task: Option<BoxFuture<'static, ()>>,
-    gc_task: Option<BoxFuture<'static, ()>>,
+pub(crate) struct JobHandle<E: Env> {
+    flush_task: Option<E::JoinHandle<()>>,
+    cleanup_task: Option<E::JoinHandle<()>>,
+    gc_task: Option<E::JoinHandle<()>>,
     notifier: ShutdownNotifier,
 }
 
-impl JobHandle {
-    pub(crate) fn new<E: Env + 'static>(
+impl<E: Env + 'static> JobHandle<E> {
+    pub(crate) fn new(
         page_store: &PageStore<E>,
         rewriter: Box<dyn RewritePage>,
         strategy_builder: Box<dyn StrategyBuilder>,
-    ) -> JobHandle {
+    ) -> JobHandle<E> {
         use self::jobs::{cleanup::CleanupCtx, flush::FlushCtx, gc::GcCtx};
 
         let env = page_store.env();
@@ -182,7 +178,7 @@ impl JobHandle {
     }
 }
 
-impl Drop for JobHandle {
+impl<E: Env> Drop for JobHandle<E> {
     fn drop(&mut self) {
         self.notifier.terminate();
         futures::executor::block_on(async {

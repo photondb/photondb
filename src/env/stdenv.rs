@@ -4,10 +4,12 @@ use std::{
     io::Result,
     os::unix::fs::OpenOptionsExt,
     path::Path,
+    pin::Pin,
+    task::{Context, Poll},
     thread,
 };
 
-use futures::{executor::block_on, future::BoxFuture};
+use futures::executor::block_on;
 
 use super::{async_trait, Env, ReadAt, ReadOptions, Syncer, Write, WriteOptions};
 
@@ -20,6 +22,7 @@ impl Env for Std {
     type PositionalReader = PositionalReader;
     type SequentialWriter = SequentialWriter;
     type MetedataReader = Metadata;
+    type JoinHandle<T: Send> = JoinHandle<T>;
 
     async fn open_positional_reader<P>(
         &self,
@@ -54,13 +57,15 @@ impl Env for Std {
         Ok(SequentialWriter(file))
     }
 
-    fn spawn_background<'a, F>(&self, f: F) -> BoxFuture<'a, F::Output>
+    fn spawn_background<F>(&self, f: F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send,
     {
         let handle = thread::spawn(move || block_on(f));
-        Box::pin(async { handle.join().unwrap() })
+        JoinHandle {
+            handle: Some(handle),
+        }
     }
 
     /// An async version of [`std::fs::rename`].
@@ -164,5 +169,21 @@ impl super::Metadata for std::fs::Metadata {
 
     fn is_symlink(&self) -> bool {
         std::fs::Metadata::is_symlink(self)
+    }
+}
+
+pub struct JoinHandle<T> {
+    handle: Option<thread::JoinHandle<T>>,
+}
+
+impl<T> Future for JoinHandle<T> {
+    type Output = T;
+
+    fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        let handle = self.handle.take().unwrap();
+        match handle.join() {
+            Ok(v) => Poll::Ready(v),
+            Err(e) => std::panic::resume_unwind(e),
+        }
     }
 }
