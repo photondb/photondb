@@ -59,21 +59,16 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
         // Try to consolidate the page if it is too long.
         if self.should_consolidate_page(view.page) {
-            let _ = self.consolidate_page(view, parent).await;
+            let _ = self.consolidate_and_restructure_page(view, parent).await;
         }
         Ok(())
     }
 
-    /// Rewrites the corresponding page.
-    pub(super) async fn rewrite(&self, page_id: u64) -> Result<()> {
-        let range = Range::full();
-        let view = self.page_view(page_id, range).await?;
-        // FIXME: disable split since parent is `None`.
-        self.consolidate_page(view, None).await?;
-        Ok(())
-    }
-
-    pub(super) async fn page_view<'g>(&'g self, id: u64, range: Range<'g>) -> Result<PageView<'g>> {
+    pub(super) async fn page_view<'g>(
+        &'g self,
+        id: u64,
+        range: Option<Range<'g>>,
+    ) -> Result<PageView<'g>> {
         let addr = self.guard.page_addr(id);
         let page = self.guard.read_page(addr).await?;
         Ok(PageView {
@@ -96,7 +91,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         let mut range = Range::full();
         let mut parent = None;
         loop {
-            let view = self.page_view(index.id, range).await?;
+            let view = self.page_view(index.id, Some(range)).await?;
             // If the page epoch has changed, the page may not contain the data we expect
             // anymore. Try to reconcile pending conflicts and restart the operation.
             if view.page.epoch() != index.epoch {
@@ -326,12 +321,15 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         view: PageView<'_>,
         mut parent: PageView<'_>,
     ) -> Result<()> {
-        let left_key = view.range.start;
+        let Some(range) = view.range else {
+            return Err(Error::InvalidArgument);
+        };
+        let left_key = range.start;
         let left_index = Index::new(view.id, view.page.epoch());
         let (split_key, split_index) = split_delta_from_page(view.page);
         // Build a delta page with the child on the left and the new split page on
         // the right.
-        let delta = if let Some(range_end) = view.range.end {
+        let delta = if let Some(range_end) = range.end {
             debug_assert!(split_key < range_end);
             vec![
                 (left_key, left_index),
@@ -359,7 +357,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
         // Try to consolidate the parent page if it is too long.
         if self.should_consolidate_page(parent.page) {
-            let _ = self.consolidate_page(parent, None).await;
+            let _ = self.consolidate_page(parent).await;
         }
         Ok(())
     }
@@ -385,19 +383,22 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             .map_err(|_| Error::Again)
     }
 
+    /// Rewrites the page to reclaim its space.
+    pub(super) async fn rewrite_page(&self, id: u64) -> Result<()> {
+        let view = self.page_view(id, None).await?;
+        self.consolidate_page(view).await?;
+        Ok(())
+    }
+
     /// Consolidates delta pages on the page chain.
-    async fn consolidate_page(
-        &self,
-        view: PageView<'_>,
-        parent: Option<PageView<'_>>,
-    ) -> Result<()> {
+    async fn consolidate_page<'g>(&'g self, view: PageView<'g>) -> Result<PageView<'g>> {
         match view.page.tier() {
             PageTier::Leaf => {
-                self.consolidate_page_impl(view, parent, MergingLeafPageIter::new)
+                self.consolidate_page_impl(view, MergingLeafPageIter::new)
                     .await
             }
             PageTier::Inner => {
-                self.consolidate_page_impl(view, parent, MergingInnerPageIter::new)
+                self.consolidate_page_impl(view, MergingInnerPageIter::new)
                     .await
             }
         }
@@ -406,9 +407,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     async fn consolidate_page_impl<'g, F, I, K, V>(
         &'g self,
         mut view: PageView<'g>,
-        parent: Option<PageView<'g>>,
         f: F,
-    ) -> Result<()>
+    ) -> Result<PageView<'g>>
     where
         F: Fn(MergingPageIter<'g, K, V>) -> I,
         I: RewindableIterator<Item = (K, V)>,
@@ -431,17 +431,12 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                 self.tree.stats.success.consolidate_page.inc();
                 view.addr = new_addr;
                 view.page = new_page.into();
+                view
             })
             .map_err(|_| {
                 self.tree.stats.restart.consolidate_page.inc();
                 Error::Again
-            })?;
-
-        // Try to split the page if it is too large.
-        if self.should_split_page(view.page) {
-            let _ = self.split_page(view, parent);
-        }
-        Ok(())
+            })
     }
 
     async fn build_consolidation<'g, K, V>(
@@ -488,6 +483,19 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             last_page,
             page_addrs,
         })
+    }
+
+    async fn consolidate_and_restructure_page<'g>(
+        &'g self,
+        mut view: PageView<'g>,
+        parent: Option<PageView<'g>>,
+    ) -> Result<()> {
+        view = self.consolidate_page(view).await?;
+        // Try to split the page if it is too large.
+        if self.should_split_page(view.page) {
+            let _ = self.split_page(view, parent);
+        }
+        Ok(())
     }
 
     // Returns true if the page should be split.

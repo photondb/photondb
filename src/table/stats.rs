@@ -1,6 +1,6 @@
 use crate::util::atomic::Counter;
 
-/// Statistics of a tree.
+/// Statistics of a table.
 #[derive(Clone, Debug, Default)]
 pub struct Stats {
     pub success: TxnStats,
