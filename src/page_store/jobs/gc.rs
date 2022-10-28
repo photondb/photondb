@@ -5,8 +5,11 @@ use std::{
 
 use async_trait::async_trait;
 
-use crate::page_store::{
-    page_table::PageTable, Error, FileInfo, Guard, PageFiles, Result, StrategyBuilder, Version,
+use crate::{
+    page_store::{
+        page_table::PageTable, Error, FileInfo, Guard, PageFiles, Result, StrategyBuilder, Version,
+    },
+    util::shutdown::{with_shutdown, Shutdown},
 };
 
 /// An abstraction describes how to move pages to the end of page files.
@@ -17,7 +20,8 @@ pub(crate) trait RewritePage: Send + Sync {
 }
 
 pub(crate) struct GcCtx {
-    // TODO: cancel task
+    shutdown: Shutdown,
+
     rewriter: Box<dyn RewritePage>,
     strategy_builder: Box<dyn StrategyBuilder>,
 
@@ -29,12 +33,14 @@ pub(crate) struct GcCtx {
 
 impl GcCtx {
     pub(crate) fn new(
+        shutdown: Shutdown,
         rewriter: Box<dyn RewritePage>,
         strategy_builder: Box<dyn StrategyBuilder>,
         page_table: PageTable,
         page_files: Arc<PageFiles>,
     ) -> Self {
         GcCtx {
+            shutdown,
             rewriter,
             strategy_builder,
             page_table,
@@ -46,7 +52,10 @@ impl GcCtx {
     pub(crate) async fn run(mut self, mut version: Version) {
         loop {
             self.gc(&version).await;
-            version = version.wait_next_version().await;
+            match with_shutdown(&mut self.shutdown, version.wait_next_version()).await {
+                Some(next_version) => version = next_version,
+                None => break,
+            }
         }
     }
 
@@ -64,6 +73,10 @@ impl GcCtx {
         }
 
         while let Some(file_id) = strategy.apply() {
+            if self.shutdown.is_terminated() {
+                break;
+            }
+
             let file = version.files().get(&file_id).expect("File must exists");
             if let Err(err) = self.rewrite_file(file, version).await {
                 todo!("do_recycle: {err:?}");

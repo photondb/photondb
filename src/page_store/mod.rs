@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::env::Env;
+use crate::{env::Env, util::shutdown::ShutdownNotifier};
 
 mod error;
 pub(crate) use error::{Error, Result};
@@ -131,6 +131,7 @@ pub(crate) struct JobHandle {
     flush_task: Option<BoxFuture<'static, ()>>,
     cleanup_task: Option<BoxFuture<'static, ()>>,
     gc_task: Option<BoxFuture<'static, ()>>,
+    notifier: ShutdownNotifier,
 }
 
 impl JobHandle {
@@ -147,24 +148,33 @@ impl JobHandle {
         let version = page_store.version.clone();
         let manifest = page_store.manifest.clone();
 
-        let cleanup_ctx = CleanupCtx::new(page_files.clone());
+        let notifier = ShutdownNotifier::new();
+
+        let cleanup_ctx = CleanupCtx::new(notifier.subscribe(), page_files.clone());
         let global_version = { version.lock().expect("Poisoned").clone() };
         let cloned_global_version = global_version.clone();
         let cleanup_task = env.spawn_background(async {
             cleanup_ctx.run(cloned_global_version).await;
         });
 
-        let flush_ctx = FlushCtx::new(version, page_files.clone(), manifest);
+        let flush_ctx = FlushCtx::new(notifier.subscribe(), version, page_files.clone(), manifest);
         let flush_task = env.spawn_background(async {
             flush_ctx.run().await;
         });
 
-        let gc_ctx = GcCtx::new(rewriter, strategy_builder, page_table, page_files);
+        let gc_ctx = GcCtx::new(
+            notifier.subscribe(),
+            rewriter,
+            strategy_builder,
+            page_table,
+            page_files,
+        );
         let gc_task = env.spawn_background(async {
             gc_ctx.run(global_version).await;
         });
 
         JobHandle {
+            notifier,
             flush_task: Some(flush_task),
             cleanup_task: Some(cleanup_task),
             gc_task: Some(gc_task),
@@ -174,6 +184,7 @@ impl JobHandle {
 
 impl Drop for JobHandle {
     fn drop(&mut self) {
+        self.notifier.terminate();
         futures::executor::block_on(async {
             if let Some(task) = self.flush_task.take() {
                 task.await;
