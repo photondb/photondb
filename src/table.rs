@@ -1,61 +1,49 @@
 use std::{path::Path, sync::Arc};
 
 use crate::{
-    env::{Env, Photon},
+    env::Env,
     page::{Key, Value},
-    page_store::{JobHandle, MinDeclineRateStrategyBuilder},
+    page_store::{JobHandle, MinDeclineRateStrategyBuilder, Options as PageStoreOptions},
     tree::{PageRewriter, Stats, Tree},
-    util::atomic::Sequencer,
-    Options, Result,
+    Result,
 };
 
-pub struct Table {
-    raw: RawTable<Photon>,
-    lsn: Sequencer,
+/// Options to configure a table.
+#[non_exhaustive]
+#[derive(Clone)]
+pub struct Options {
+    /// Approximate size of user data packed per page before it is split.
+    ///
+    /// Note that the size specified here corresponds to uncompressed data.
+    ///
+    /// Default: 8KB
+    pub page_size: usize,
+
+    /// Approximate number of delta pages chained per page before it is
+    /// consolidated.
+    ///
+    /// Default: 4
+    pub page_chain_length: usize,
+
+    pub page_store: PageStoreOptions,
 }
 
-impl Table {
-    /// Opens a table in the path.
-    pub async fn open<P: AsRef<Path>>(path: P, options: Options) -> Result<Self> {
-        let raw = RawTable::open(Photon, path, options).await?;
-        Ok(Self {
-            raw,
-            lsn: Sequencer::new(0),
-        })
-    }
-
-    /// Gets the value corresponding to the key.
-    pub async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        let lsn = self.lsn.get();
-        self.raw
-            .get(key, lsn, |value| value.map(|value| value.to_vec()))
-            .await
-    }
-
-    /// Inserts the key-value pair into the table.
-    pub async fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        let lsn = self.lsn.inc();
-        self.raw.put(key, lsn, value).await
-    }
-
-    /// Deletes the key from the table.
-    pub async fn delete(&self, key: &[u8]) -> Result<()> {
-        let lsn = self.lsn.inc();
-        self.raw.delete(key, lsn).await
-    }
-
-    /// Returns the statistics of the table.
-    pub fn stats(&self) -> Stats {
-        self.raw.stats()
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            page_size: 8 << 10,
+            page_chain_length: 4,
+            page_store: PageStoreOptions::default(),
+        }
     }
 }
 
-pub struct RawTable<E: Env + 'static> {
+pub struct Table<E: Env + 'static> {
     tree: Arc<Tree<E>>,
     _job_guard: JobHandle,
 }
 
-impl<E: Env + 'static> RawTable<E> {
+impl<E: Env + 'static> Table<E> {
     pub async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
         let tree = Arc::new(Tree::open(env, path, options).await?);
         let rewriter = Box::new(PageRewriter::new(tree.clone()));
