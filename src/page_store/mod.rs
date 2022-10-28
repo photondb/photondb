@@ -124,6 +124,7 @@ impl JobHandle {
         use self::jobs::{cleanup::CleanupCtx, flush::FlushCtx, gc::GcCtx};
 
         let env = page_store.env();
+        let page_table = page_store.table.clone();
         let page_files = page_store.page_files.clone();
         let version = page_store.version.clone();
         let manifest = page_store.manifest.clone();
@@ -140,7 +141,7 @@ impl JobHandle {
             flush_ctx.run().await;
         });
 
-        let gc_ctx = GcCtx::new(rewriter, strategy_builder, page_files);
+        let gc_ctx = GcCtx::new(rewriter, strategy_builder, page_table, page_files);
         let gc_task = env.spawn_background(async {
             gc_ctx.run(global_version).await;
         });
