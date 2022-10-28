@@ -1,11 +1,13 @@
 use std::{io::ErrorKind, path::PathBuf};
 
-use photonio::io::{ReadAt, ReadAtExt, Write, WriteExt};
 use prost::Message;
 
 use super::{meta::VersionEdit, Error};
 use crate::{
-    env::{Env, ReadOptions, WriteOptions},
+    env::{
+        Env, PositionalReader, PositionalReaderExt, SequentialWriter, SequentialWriterExt,
+        WriteOptions,
+    },
     page_store::Result,
 };
 
@@ -46,13 +48,13 @@ impl<E: Env> Manifest<E> {
         match self.env.create_dir_all(&self.base).await {
             Ok(_) => {}
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-                let meta = self
+                if !self
                     .env
                     .metadata(&self.base)
                     .await
-                    .expect("open base dir fail");
-                use crate::env::Metadata;
-                if !meta.is_dir() {
+                    .expect("open base dir fail")
+                    .is_dir
+                {
                     panic!("base dir is not a dir")
                 }
             }
@@ -91,14 +93,7 @@ impl<E: Env> Manifest<E> {
 
             (
                 self.env
-                    .open_sequential_writer(
-                        &path,
-                        WriteOptions {
-                            truncate: false,
-                            append: true,
-                            ..Default::default()
-                        },
-                    )
+                    .open_sequential_writer(&path, WriteOptions { append: true })
                     .await
                     .expect("create new manifest file fail"),
                 path,
@@ -127,7 +122,6 @@ impl<E: Env> Manifest<E> {
             // TODO: notify cleaner previous manifest + size, so it can be delete when need.
             self.current_file_num = Some(current_file_num);
         } else {
-            use crate::env::Syncer;
             writer.sync_data().await.expect("sync manifest data fail");
         }
 
@@ -149,7 +143,7 @@ impl<E: Env> Manifest<E> {
                 .join(format!("{}_{}", MANIFEST_FILE_NAME, current_file));
             let reader = self
                 .env
-                .open_positional_reader(path, ReadOptions::default())
+                .open_positional_reader(path)
                 .await
                 .expect("open manifest fail");
             let mut decoder = VersionEditDecoder::new(reader);
@@ -166,7 +160,7 @@ impl<E: Env> Manifest<E> {
     async fn load_current(&self) -> Result<Option<u32 /* file_num */>> {
         let curr_file_reader = match self
             .env
-            .open_positional_reader(self.base.join(CURRENT_FILE_NAME), ReadOptions::default())
+            .open_positional_reader(self.base.join(CURRENT_FILE_NAME))
             .await
         {
             Ok(f) => f,
@@ -188,13 +182,11 @@ impl<E: Env> Manifest<E> {
 
     async fn file_size(&self) -> Result<u64> {
         Ok(if let Some(curr) = self.current_file_num {
-            let metadata = self
-                .env
+            self.env
                 .metadata(self.base.join(format!("{}_{}", MANIFEST_FILE_NAME, curr)))
                 .await
-                .expect("read manifest fail");
-            use crate::env::Metadata;
-            metadata.len()
+                .expect("read manifest fail")
+                .len
         } else {
             0
         })
@@ -232,10 +224,9 @@ impl<E: Env> Manifest<E> {
             }?;
         }
         {
-            use crate::env::Syncer;
             let mut base_dir = self
                 .env
-                .open_positional_reader(&self.base, ReadOptions::default())
+                .open_positional_reader(&self.base)
                 .await
                 .expect("open base folder fail");
             base_dir.sync_all().await.expect("sync base folder fail");
@@ -289,7 +280,7 @@ impl<E: Env> Manifest<E> {
 struct VersionEditEncoder(VersionEdit);
 
 impl VersionEditEncoder {
-    async fn encode<W: Write + Send>(&self, w: &mut W) -> Result<usize> {
+    async fn encode<W: SequentialWriter>(&self, w: &mut W) -> Result<usize> {
         let bytes = self.0.encode_to_vec();
         w.write_all(&bytes.len().to_le_bytes())
             .await
@@ -299,12 +290,12 @@ impl VersionEditEncoder {
     }
 }
 
-struct VersionEditDecoder<R: ReadAt> {
+struct VersionEditDecoder<R: PositionalReader> {
     reader: R,
     offset: u64,
 }
 
-impl<R: ReadAt> VersionEditDecoder<R> {
+impl<R: PositionalReader> VersionEditDecoder<R> {
     fn new(reader: R) -> Self {
         Self { reader, offset: 0 }
     }

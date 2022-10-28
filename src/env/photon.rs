@@ -1,12 +1,12 @@
-use std::{future::Future, io::Result, os::unix::prelude::OpenOptionsExt, path::Path};
+use std::{future::Future, io::Result, os::fd::AsRawFd, path::Path};
 
 use futures::future::BoxFuture;
 use photonio::{
-    fs::{File, Metadata, OpenOptions},
+    fs::{File, OpenOptions},
     task,
 };
 
-use super::{async_trait, Env, ReadOptions, Syncer, WriteOptions};
+use super::*;
 
 /// An implementation of [`Env`] based on PhotonIO.
 #[derive(Clone)]
@@ -14,24 +14,16 @@ pub struct Photon;
 
 #[async_trait]
 impl Env for Photon {
-    type PositionalReader = File;
-    type SequentialWriter = File;
-    type MetedataReader = Metadata;
+    type PositionalReader = PositionalReader;
+    type SequentialWriter = SequentialWriter;
 
-    async fn open_positional_reader<P>(
-        &self,
-        path: P,
-        opt: ReadOptions,
-    ) -> Result<Self::PositionalReader>
+    async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
         P: AsRef<Path> + Send,
     {
         let path = path.as_ref();
-        OpenOptions::new()
-            .read(true)
-            .custom_flags(opt.custome_flags)
-            .open(path)
-            .await
+        let r = OpenOptions::new().read(true).open(path).await?;
+        Ok(PositionalReader(r))
     }
 
     async fn open_sequential_writer<P>(
@@ -42,14 +34,22 @@ impl Env for Photon {
     where
         P: AsRef<Path> + Send,
     {
-        OpenOptions::new()
-            .write(true)
-            .custom_flags(opt.custome_flags)
-            .create(opt.create)
-            .truncate(opt.truncate)
-            .append(opt.append)
-            .open(path)
-            .await
+        let w = if opt.append {
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .append(true)
+                .open(path)
+                .await
+        } else {
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path)
+                .await
+        }?;
+        Ok(SequentialWriter(w))
     }
 
     fn spawn_background<'a, F>(&self, f: F) -> BoxFuture<'a, F::Output>
@@ -91,42 +91,60 @@ impl Env for Photon {
         std::fs::read_dir(path)
     }
 
-    async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::MetedataReader> {
+    async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Metadata> {
         let path = path.as_ref();
         let file = File::open(path).await?;
-        let metadata = file.metadata().await?;
+        let raw_metadata = file.metadata().await?;
+        let metadata = Metadata {
+            len: raw_metadata.len(),
+            is_dir: raw_metadata.is_dir(),
+        };
         Ok(metadata)
     }
 }
 
-impl Syncer for File {
-    type SyncData<'a> = impl Future<Output = Result<()>> + 'a;
+pub struct SequentialWriter(File);
 
-    fn sync_data(&mut self) -> Self::SyncData<'_> {
-        File::sync_data(self)
+#[async_trait]
+impl super::SequentialWriter for SequentialWriter {
+    type Write<'a> = impl Future<Output = Result<usize>> + 'a + Send;
+
+    fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::Write<'a> {
+        self.0.write(buf)
     }
 
-    type SyncAll<'b> = impl Future<Output = Result<()>> + 'b;
+    async fn sync_data(&mut self) -> Result<()> {
+        self.0.sync_data().await
+    }
 
-    fn sync_all(&mut self) -> Self::SyncAll<'_> {
-        File::sync_all(self)
+    async fn sync_all(&mut self) -> Result<()> {
+        self.0.sync_all().await
+    }
+
+    async fn truncate(&self, len: u64) -> Result<()> {
+        self.0.set_len(len).await
+    }
+
+    fn direct_io_ify(&self) -> Result<()> {
+        super::direct_io_ify(self.0.as_raw_fd())
     }
 }
 
-impl super::Metadata for Metadata {
-    fn len(&self) -> u64 {
-        Metadata::len(self)
+pub struct PositionalReader(File);
+
+#[async_trait]
+impl super::PositionalReader for PositionalReader {
+    type ReadAt<'a> = impl Future<Output = Result<usize>> + 'a;
+
+    fn read_at<'a>(&'a self, buf: &'a mut [u8], pos: u64) -> Self::ReadAt<'a> {
+        self.0.read_at(buf, pos)
     }
 
-    fn is_dir(&self) -> bool {
-        Metadata::is_dir(self)
+    async fn sync_all(&mut self) -> Result<()> {
+        self.0.sync_all().await
     }
 
-    fn is_file(&self) -> bool {
-        Metadata::is_file(self)
-    }
-
-    fn is_symlink(&self) -> bool {
-        Metadata::is_symlink(self)
+    fn direct_io_ify(&self) -> Result<()> {
+        super::direct_io_ify(self.0.as_raw_fd())
     }
 }

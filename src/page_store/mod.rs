@@ -72,7 +72,7 @@ where
     /// installed.
     version: Arc<Mutex<Version>>,
 
-    page_files: Arc<PageFiles>,
+    page_files: Arc<PageFiles<E>>,
     #[allow(unused)]
     manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
 }
@@ -103,7 +103,7 @@ impl<E: Env> PageStore<E> {
         })
     }
 
-    pub(crate) fn guard(&self) -> Guard {
+    pub(crate) fn guard(&self) -> Guard<E> {
         Guard::new(self.current_version(), &self.table, &self.page_files)
     }
 
@@ -137,7 +137,7 @@ pub(crate) struct JobHandle {
 impl JobHandle {
     pub(crate) fn new<E: Env + 'static>(
         page_store: &PageStore<E>,
-        rewriter: Box<dyn RewritePage>,
+        rewriter: Box<dyn RewritePage<E>>,
         strategy_builder: Box<dyn StrategyBuilder>,
     ) -> JobHandle {
         use self::jobs::{cleanup::CleanupCtx, flush::FlushCtx, gc::GcCtx};

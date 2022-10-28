@@ -202,9 +202,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.135"
+version = "0.2.137"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68783febc7782c6c5cb401fbda4de5a9898be1762314da0bb2c10ced61f18b0c"
+checksum = "fc7fcc620a3bff7cdd7a365be3376c97191aeaccc2a603e600951e452615bf89"
 
 [[package]]
 name = "lock_api"
@@ -300,6 +300,7 @@ dependencies = [
  "bytes",
  "crossbeam-epoch",
  "futures",
+ "libc",
  "once_cell",
  "photonio",
  "prost",
@@ -310,7 +311,7 @@ dependencies = [
 [[package]]
 name = "photonio"
 version = "0.0.4"
-source = "git+https://github.com/zojw/photonio.git?rev=a9373b0#a9373b0e24fa0bfd7822493627cff4d891189c06"
+source = "git+https://github.com/photondb/photonio.git#8ac278d4bc6086122b278cd088f93a3d57039b0f"
 dependencies = [
  "photonio-macros",
  "photonio-tokio",
@@ -320,12 +321,12 @@ dependencies = [
 [[package]]
 name = "photonio-base"
 version = "0.0.4"
-source = "git+https://github.com/zojw/photonio.git?rev=a9373b0#a9373b0e24fa0bfd7822493627cff4d891189c06"
+source = "git+https://github.com/photondb/photonio.git#8ac278d4bc6086122b278cd088f93a3d57039b0f"
 
 [[package]]
 name = "photonio-macros"
 version = "0.0.4"
-source = "git+https://github.com/zojw/photonio.git?rev=a9373b0#a9373b0e24fa0bfd7822493627cff4d891189c06"
+source = "git+https://github.com/photondb/photonio.git#8ac278d4bc6086122b278cd088f93a3d57039b0f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -335,7 +336,7 @@ dependencies = [
 [[package]]
 name = "photonio-tokio"
 version = "0.0.4"
-source = "git+https://github.com/zojw/photonio.git?rev=a9373b0#a9373b0e24fa0bfd7822493627cff4d891189c06"
+source = "git+https://github.com/photondb/photonio.git#8ac278d4bc6086122b278cd088f93a3d57039b0f"
 dependencies = [
  "futures",
  "photonio-base",
@@ -345,7 +346,7 @@ dependencies = [
 [[package]]
 name = "photonio-uring"
 version = "0.0.4"
-source = "git+https://github.com/zojw/photonio.git?rev=a9373b0#a9373b0e24fa0bfd7822493627cff4d891189c06"
+source = "git+https://github.com/photondb/photonio.git#8ac278d4bc6086122b278cd088f93a3d57039b0f"
 dependencies = [
  "futures",
  "io-uring",

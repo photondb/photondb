@@ -19,14 +19,14 @@ impl<E: Env> PageStore<E> {
         u32, /* next file id */
         Manifest<E>,
         PageTable,
-        PageFiles,
+        PageFiles<E>,
         HashMap<u32, FileInfo>,
     )> {
-        let manifest = Manifest::open(env, path.as_ref()).await?;
+        let manifest = Manifest::open(env.to_owned(), path.as_ref()).await?;
         let versions = manifest.list_versions().await?;
         let summary = Self::apply_version_edits(versions);
 
-        let page_files = PageFiles::new(path.as_ref(), "db");
+        let page_files = PageFiles::new(env, path.as_ref(), "db");
         let file_infos = Self::recover_file_infos(&page_files, &summary.active_files).await?;
         let page_table = Self::recover_page_table(&page_files, &summary.active_files).await?;
 
@@ -57,7 +57,7 @@ impl<E: Env> PageStore<E> {
     }
 
     async fn recover_file_infos(
-        page_files: &PageFiles,
+        page_files: &PageFiles<E>,
         active_files: &HashMap<u32, NewFile>,
     ) -> Result<HashMap<u32, FileInfo>> {
         // ensure recover files in order.
@@ -68,7 +68,7 @@ impl<E: Env> PageStore<E> {
     }
 
     async fn recover_page_table(
-        page_files: &PageFiles,
+        page_files: &PageFiles<E>,
         active_files: &HashMap<u32, NewFile>,
     ) -> Result<PageTable> {
         // ensure recover files in order.

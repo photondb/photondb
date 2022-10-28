@@ -1,32 +1,35 @@
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
 use super::{page::*, AtomicStats, Options};
 use crate::{
+    env::Env,
     page::*,
     page_store::{Error, Guard, Result, RewritePage, MIN_ID, NAN_ID},
 };
 
-pub(super) struct Tree {
+pub(super) struct Tree<E: Env> {
     pub(super) options: Options,
     pub(super) stats: AtomicStats,
+    _marker: PhantomData<E>,
 }
 
-impl Tree {
+impl<E: Env> Tree<E> {
     pub(super) fn new(options: Options) -> Self {
         Self {
             options,
             stats: AtomicStats::default(),
+            _marker: PhantomData,
         }
     }
 
-    pub(super) fn begin<'a>(&'a self, guard: &'a Guard<'_>) -> Session<'a> {
+    pub(super) fn begin<'a>(&'a self, guard: &'a Guard<'_, E>) -> Session<'a, E> {
         Session { tree: self, guard }
     }
 }
 
 #[async_trait::async_trait]
-impl RewritePage for Arc<Tree> {
-    async fn rewrite(&self, id: u64, guard: &Guard<'_>) -> Result<()> {
+impl<E: Env> RewritePage<E> for Arc<Tree<E>> {
+    async fn rewrite(&self, id: u64, guard: &Guard<'_, E>) -> Result<()> {
         loop {
             let txn = self.begin(guard);
             match txn.rewrite_page(id).await {
@@ -38,12 +41,12 @@ impl RewritePage for Arc<Tree> {
     }
 }
 
-pub(super) struct Session<'a> {
-    tree: &'a Tree,
-    guard: &'a Guard<'a>,
+pub(super) struct Session<'a, E: Env> {
+    tree: &'a Tree<E>,
+    guard: &'a Guard<'a, E>,
 }
 
-impl<'a> Session<'a> {
+impl<'a, E: Env> Session<'a, E> {
     /// Gets the value corresponding to the key.
     pub(super) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
         let (view, _) = self.find_leaf(&key).await?;

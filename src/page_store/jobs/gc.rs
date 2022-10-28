@@ -6,6 +6,7 @@ use std::{
 use async_trait::async_trait;
 
 use crate::{
+    env::Env,
     page_store::{
         page_table::PageTable, Error, FileInfo, Guard, PageFiles, Result, StrategyBuilder, Version,
     },
@@ -14,30 +15,30 @@ use crate::{
 
 /// An abstraction describes how to move pages to the end of page files.
 #[async_trait]
-pub(crate) trait RewritePage: Send + Sync {
+pub(crate) trait RewritePage<E: Env>: Send + Sync {
     /// Rewrite the corresponding page to the end of page files.
-    async fn rewrite(&self, page_id: u64, guard: &Guard<'_>) -> Result<()>;
+    async fn rewrite(&self, page_id: u64, guard: &Guard<'_, E>) -> Result<()>;
 }
 
-pub(crate) struct GcCtx {
+pub(crate) struct GcCtx<E: Env> {
     shutdown: Shutdown,
 
-    rewriter: Box<dyn RewritePage>,
+    rewriter: Box<dyn RewritePage<E>>,
     strategy_builder: Box<dyn StrategyBuilder>,
 
     page_table: PageTable,
-    page_files: Arc<PageFiles>,
+    page_files: Arc<PageFiles<E>>,
 
     cleaned_files: HashSet<u32>,
 }
 
-impl GcCtx {
+impl<E: Env> GcCtx<E> {
     pub(crate) fn new(
         shutdown: Shutdown,
-        rewriter: Box<dyn RewritePage>,
+        rewriter: Box<dyn RewritePage<E>>,
         strategy_builder: Box<dyn StrategyBuilder>,
         page_table: PageTable,
-        page_files: Arc<PageFiles>,
+        page_files: Arc<PageFiles<E>>,
     ) -> Self {
         GcCtx {
             shutdown,

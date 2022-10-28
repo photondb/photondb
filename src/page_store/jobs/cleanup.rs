@@ -1,17 +1,18 @@
 use std::sync::Arc;
 
 use crate::{
+    env::Env,
     page_store::{PageFiles, Version},
     util::shutdown::{with_shutdown, Shutdown},
 };
 
-pub(crate) struct CleanupCtx {
+pub(crate) struct CleanupCtx<E: Env> {
     shutdown: Shutdown,
-    page_files: Arc<PageFiles>,
+    page_files: Arc<PageFiles<E>>,
 }
 
-impl CleanupCtx {
-    pub(crate) fn new(shutdown: Shutdown, page_files: Arc<PageFiles>) -> Self {
+impl<E: Env> CleanupCtx<E> {
+    pub(crate) fn new(shutdown: Shutdown, page_files: Arc<PageFiles<E>>) -> Self {
         CleanupCtx {
             shutdown,
             page_files,

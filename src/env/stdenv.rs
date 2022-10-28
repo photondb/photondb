@@ -1,15 +1,15 @@
 use std::{
-    fs::{File, Metadata, OpenOptions},
+    fs::{File, OpenOptions},
     future::Future,
     io::Result,
-    os::unix::fs::OpenOptionsExt,
+    os::fd::AsRawFd,
     path::Path,
     thread,
 };
 
 use futures::{executor::block_on, future::BoxFuture};
 
-use super::{async_trait, Env, ReadAt, ReadOptions, Syncer, Write, WriteOptions};
+use super::*;
 
 /// An implementation of [`Env`] based on [`std`] with synchronous I/O.
 #[derive(Clone)]
@@ -19,20 +19,12 @@ pub struct Std;
 impl Env for Std {
     type PositionalReader = PositionalReader;
     type SequentialWriter = SequentialWriter;
-    type MetedataReader = Metadata;
 
-    async fn open_positional_reader<P>(
-        &self,
-        path: P,
-        opt: ReadOptions,
-    ) -> Result<Self::PositionalReader>
+    async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
         P: AsRef<Path> + Send,
     {
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(opt.custome_flags)
-            .open(path.as_ref())?;
+        let file = OpenOptions::new().read(true).open(path.as_ref())?;
         Ok(PositionalReader(file))
     }
 
@@ -44,13 +36,19 @@ impl Env for Std {
     where
         P: AsRef<Path> + Send,
     {
-        let file = OpenOptions::new()
-            .write(true)
-            .custom_flags(opt.custome_flags)
-            .create(opt.create)
-            .truncate(opt.truncate)
-            .append(opt.append)
-            .open(path.as_ref())?;
+        let file = if opt.append {
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .append(true)
+                .open(path.as_ref())?
+        } else {
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path.as_ref())?
+        };
         Ok(SequentialWriter(file))
     }
 
@@ -93,14 +91,19 @@ impl Env for Std {
         std::fs::read_dir(path)
     }
 
-    async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::MetedataReader> {
-        std::fs::metadata(path)
+    async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Metadata> {
+        let raw_metadata = std::fs::metadata(path)?;
+        Ok(Metadata {
+            len: raw_metadata.len(),
+            is_dir: raw_metadata.is_dir(),
+        })
     }
 }
 
 pub struct PositionalReader(File);
 
-impl ReadAt for PositionalReader {
+#[async_trait]
+impl super::PositionalReader for PositionalReader {
     type ReadAt<'a> = impl Future<Output = Result<usize>> + 'a;
 
     #[cfg(unix)]
@@ -108,61 +111,39 @@ impl ReadAt for PositionalReader {
         use std::os::unix::fs::FileExt;
         async move { self.0.read_at(buf, offset) }
     }
-}
-
-impl Syncer for PositionalReader {
-    type SyncData<'a> = impl Future<Output = Result<()>> + 'a;
-
-    fn sync_data(&mut self) -> Self::SyncData<'_> {
-        async move { self.0.sync_data() }
+    async fn sync_all(&mut self) -> Result<()> {
+        async move { self.0.sync_all() }.await
     }
 
-    type SyncAll<'b> = impl Future<Output = Result<()>> + 'b;
-
-    fn sync_all(&mut self) -> Self::SyncAll<'_> {
-        async move { self.0.sync_all() }
+    fn direct_io_ify(&self) -> Result<()> {
+        super::direct_io_ify(self.0.as_raw_fd())
     }
 }
 
 pub struct SequentialWriter(File);
 
-impl Write for SequentialWriter {
-    type Write<'a> = impl Future<Output = Result<usize>> + 'a;
+#[async_trait]
+impl super::SequentialWriter for SequentialWriter {
+    type Write<'a> = impl Future<Output = Result<usize>> + 'a + Send;
 
     fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::Write<'a> {
         use std::io::Write as _;
         async move { self.0.write(buf) }
     }
-}
 
-impl Syncer for SequentialWriter {
-    type SyncData<'a> = impl Future<Output = Result<()>> + 'a;
-
-    fn sync_data(&mut self) -> Self::SyncData<'_> {
-        async move { self.0.sync_data() }
+    async fn sync_data(&mut self) -> Result<()> {
+        async move { self.0.sync_data() }.await
     }
 
-    type SyncAll<'b> = impl Future<Output = Result<()>> + 'b;
-
-    fn sync_all(&mut self) -> Self::SyncAll<'_> {
-        async move { self.0.sync_all() }
-    }
-}
-
-impl super::Metadata for std::fs::Metadata {
-    fn len(&self) -> u64 {
-        std::fs::Metadata::len(self)
+    async fn sync_all(&mut self) -> Result<()> {
+        async move { self.0.sync_all() }.await
     }
 
-    fn is_dir(&self) -> bool {
-        std::fs::Metadata::is_dir(self)
+    async fn truncate(&self, len: u64) -> Result<()> {
+        async move { self.0.set_len(len) }.await
     }
 
-    fn is_file(&self) -> bool {
-        std::fs::Metadata::is_file(self)
-    }
-
-    fn is_symlink(&self) -> bool {
-        std::fs::Metadata::is_symlink(self)
+    fn direct_io_ify(&self) -> Result<()> {
+        super::direct_io_ify(self.0.as_raw_fd())
     }
 }
