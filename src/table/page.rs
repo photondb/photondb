@@ -1,5 +1,11 @@
 use crate::{page::*, page_store::*};
 
+/// The root id is always the minimal id in the page store.
+pub(super) const ROOT_ID: u64 = MIN_ID;
+pub(super) const ROOT_RANGE: Range = Range::full();
+pub(super) const ROOT_INDEX: Index = Index::new(MIN_ID, 0);
+pub(super) const NULL_INDEX: Index = Index::new(NAN_ID, 0);
+
 pub(super) struct PageView<'a> {
     pub(super) id: u64,
     pub(super) addr: u64,
@@ -98,7 +104,7 @@ impl<'a> Iterator for MergingInnerPageIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         for (start, index) in &mut self.iter {
             // Skip placeholders
-            if index.id == NAN_ID {
+            if index == NULL_INDEX {
                 continue;
             }
             // Skip overwritten indexes
