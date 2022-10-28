@@ -32,3 +32,14 @@ jobs:
       uses: actions-rs/cargo@v1
       with:
         command: test
+
+  tests-on-macos:
+    runs-on: macos-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - uses: Swatinem/rust-cache@v1
+    - name: Run unit tests
+      uses: actions-rs/cargo@v1
+      with:
+        command: test
