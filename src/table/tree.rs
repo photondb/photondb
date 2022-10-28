@@ -4,7 +4,7 @@ use super::{page::*, AtomicStats, Options};
 use crate::{
     env::Env,
     page::*,
-    page_store::{Error, Guard, Result, RewritePage, MIN_ID, NAN_ID},
+    page_store::{Error, Guard, Result, RewritePage},
 };
 
 pub(super) struct Tree<E: Env> {
@@ -25,14 +25,36 @@ impl<E: Env> Tree<E> {
     pub(super) fn begin<'a>(&'a self, guard: &'a Guard<'_, E>) -> Session<'a, E> {
         Session { tree: self, guard }
     }
+
+    // Returns true if the page should be split.
+    fn should_split_page(&self, page: PageRef<'_>) -> bool {
+        let mut max_size = self.options.page_size;
+        if page.tier().is_inner() {
+            // Adjust the page size for inner pages.
+            // TODO: do some benchmarks to evaluate this.
+            max_size /= 2;
+        }
+        page.size() > max_size
+    }
+
+    // Returns true if the page should be consolidated.
+    fn should_consolidate_page(&self, page: PageRef<'_>) -> bool {
+        let mut max_chain_len = self.options.page_chain_length;
+        if page.tier().is_inner() {
+            // Adjust the chain length for inner pages.
+            // TODO: do some benchmarks to evaluate this.
+            max_chain_len /= 2;
+        }
+        page.chain_len() as usize > max_chain_len.max(1)
+    }
 }
 
 #[async_trait::async_trait]
 impl<E: Env> RewritePage<E> for Arc<Tree<E>> {
     async fn rewrite(&self, id: u64, guard: &Guard<'_, E>) -> Result<()> {
         loop {
-            let txn = self.begin(guard);
-            match txn.rewrite_page(id).await {
+            let session = self.begin(guard);
+            match session.rewrite_page(id).await {
                 Ok(_) => return Ok(()),
                 Err(Error::Again) => continue,
                 Err(e) => return Err(e),
@@ -90,7 +112,7 @@ impl<'a, E: Env> Session<'a, E> {
         }
 
         // Try to consolidate the page if it is too long.
-        if self.should_consolidate_page(view.page) {
+        if self.tree.should_consolidate_page(view.page) {
             let _ = self.consolidate_and_restructure_page(view, parent).await;
         }
         Ok(())
@@ -120,8 +142,8 @@ impl<'a, E: Env> Session<'a, E> {
         key: &Key<'_>,
     ) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
         // The index, range, and parent of the current page, starting from the root.
-        let mut index = Index::new(MIN_ID, 0);
-        let mut range = Range::full();
+        let mut index = ROOT_INDEX;
+        let mut range = ROOT_RANGE;
         let mut parent = None;
         loop {
             let view = self.page_view(index.id, Some(range)).await?;
@@ -255,7 +277,7 @@ impl<'a, E: Env> Session<'a, E> {
                     Err(i) => (i.checked_sub(1).and_then(|i| page.get(i)), page.get(i)),
                 };
                 if let Some((start, index)) = left {
-                    if index.id != NAN_ID {
+                    if index != NULL_INDEX {
                         let range = Range {
                             start,
                             end: right.map(|(end, _)| end),
@@ -338,7 +360,7 @@ impl<'a, E: Env> Session<'a, E> {
             PageKind::Split => {
                 if let Some(parent) = parent {
                     self.reconcile_split_page(view, parent).await?;
-                } else if view.id == MIN_ID {
+                } else if view.id == ROOT_ID {
                     self.reconcile_split_root(view).await?;
                 } else {
                     return Err(Error::InvalidArgument);
@@ -368,7 +390,7 @@ impl<'a, E: Env> Session<'a, E> {
                 (left_key, left_index),
                 (split_key, split_index),
                 // This is a placeholder to indicate the range end of the right page.
-                (range_end, Index::new(NAN_ID, 0)),
+                (range_end, NULL_INDEX),
             ]
         } else {
             vec![(left_key, left_index), (split_key, split_index)]
@@ -389,7 +411,7 @@ impl<'a, E: Env> Session<'a, E> {
             .map_err(|_| Error::Again)?;
 
         // Try to consolidate the parent page if it is too long.
-        if self.should_consolidate_page(parent.page) {
+        if self.tree.should_consolidate_page(parent.page) {
             let _ = self.consolidate_page(parent).await;
         }
         Ok(())
@@ -397,7 +419,7 @@ impl<'a, E: Env> Session<'a, E> {
 
     // Reconciles a pending split on the root page.
     async fn reconcile_split_root(&self, view: PageView<'_>) -> Result<()> {
-        debug_assert_eq!(view.id, MIN_ID);
+        debug_assert_eq!(view.id, ROOT_ID);
         // Move the root to another place.
         let mut txn = self.guard.begin();
         let left_id = txn.insert_page(view.addr);
@@ -417,7 +439,7 @@ impl<'a, E: Env> Session<'a, E> {
     }
 
     /// Rewrites the page to reclaim its space.
-    pub(super) async fn rewrite_page(&self, id: u64) -> Result<()> {
+    async fn rewrite_page(&self, id: u64) -> Result<()> {
         let view = self.page_view(id, None).await?;
         self.consolidate_page(view).await?;
         Ok(())
@@ -448,18 +470,18 @@ impl<'a, E: Env> Session<'a, E> {
         K: EncodeTo + DecodeFrom + Ord,
         V: EncodeTo + DecodeFrom,
     {
-        // Consolidate some delta pages on the chain.
-        let cons = self.build_consolidation(&view).await?;
-        let iter = f(cons.iter);
+        // Collect information for this consolidation.
+        let info = self.collect_consolidation_info(&view).await?;
+        let iter = f(info.iter);
         let builder = SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(iter);
         let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
         builder.build(&mut new_page);
         new_page.set_epoch(view.page.epoch());
-        new_page.set_chain_len(cons.last_page.chain_len());
-        new_page.set_chain_next(cons.last_page.chain_next());
+        new_page.set_chain_len(info.last_page.chain_len());
+        new_page.set_chain_next(info.last_page.chain_next());
         // Update the page and deallocate the consolidated delta pages.
-        txn.replace_page(view.id, view.addr, new_addr, &cons.page_addrs)
+        txn.replace_page(view.id, view.addr, new_addr, &info.page_addrs)
             .map(|_| {
                 self.tree.stats.success.consolidate_page.inc();
                 view.addr = new_addr;
@@ -472,10 +494,11 @@ impl<'a, E: Env> Session<'a, E> {
             })
     }
 
-    async fn build_consolidation<'g, K, V>(
+    /// Collects some information to consolidate a page.
+    async fn collect_consolidation_info<'g, K, V>(
         &'g self,
         view: &PageView<'g>,
-    ) -> Result<Consolidation<'g, K, V>>
+    ) -> Result<ConsolidationInfo<'g, K, V>>
     where
         K: DecodeFrom + Ord,
         V: DecodeFrom,
@@ -511,13 +534,14 @@ impl<'a, E: Env> Session<'a, E> {
         })
         .await?;
         let iter = MergingPageIter::new(builder.build(), range_limit);
-        Ok(Consolidation {
+        Ok(ConsolidationInfo {
             iter,
             last_page,
             page_addrs,
         })
     }
 
+    /// Consolidates and restructures a page.
     async fn consolidate_and_restructure_page<'g>(
         &'g self,
         mut view: PageView<'g>,
@@ -525,36 +549,14 @@ impl<'a, E: Env> Session<'a, E> {
     ) -> Result<()> {
         view = self.consolidate_page(view).await?;
         // Try to split the page if it is too large.
-        if self.should_split_page(view.page) {
+        if self.tree.should_split_page(view.page) {
             let _ = self.split_page(view, parent);
         }
         Ok(())
     }
-
-    // Returns true if the page should be split.
-    fn should_split_page(&self, page: PageRef<'_>) -> bool {
-        let mut max_size = self.tree.options.page_size;
-        if page.tier().is_inner() {
-            // Adjust the page size for inner pages.
-            // TODO: do some benchmarks to evaluate this.
-            max_size /= 2;
-        }
-        page.size() > max_size
-    }
-
-    // Returns true if the page should be consolidated.
-    fn should_consolidate_page(&self, page: PageRef<'_>) -> bool {
-        let mut max_chain_len = self.tree.options.page_chain_length;
-        if page.tier().is_inner() {
-            // Adjust the chain length for inner pages.
-            // TODO: do some benchmarks to evaluate this.
-            max_chain_len /= 2;
-        }
-        page.chain_len() as usize > max_chain_len.max(1)
-    }
 }
 
-struct Consolidation<'a, K, V>
+struct ConsolidationInfo<'a, K, V>
 where
     K: DecodeFrom + Ord,
     V: DecodeFrom,
