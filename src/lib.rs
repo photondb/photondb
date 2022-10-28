@@ -10,20 +10,17 @@
     pointer_is_aligned
 )]
 
+mod error;
+pub use error::{Error, Result};
+
 mod store;
 pub use store::Store;
 
 mod table;
 pub use table::Table;
 
-mod error;
-pub use error::{Error, Result};
-
-mod options;
-
 pub mod env;
 
 mod page;
 mod page_store;
-mod tree;
 mod util;
