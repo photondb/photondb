@@ -14,15 +14,16 @@ pub struct Photon;
 
 #[async_trait]
 impl Env for Photon {
-    type PositionalReader = File;
-    type SequentialWriter = File;
+    type PositionalReader = PositionalReader;
+    type SequentialWriter = SequentialWriter;
 
     async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
         P: AsRef<Path> + Send,
     {
         let path = path.as_ref();
-        OpenOptions::new().read(true).open(path).await
+        let r = OpenOptions::new().read(true).open(path).await?;
+        Ok(PositionalReader(r))
     }
 
     async fn open_sequential_writer<P>(
@@ -33,7 +34,7 @@ impl Env for Photon {
     where
         P: AsRef<Path> + Send,
     {
-        if opt.append {
+        let w = if opt.append {
             OpenOptions::new()
                 .write(true)
                 .create(true)
@@ -47,7 +48,8 @@ impl Env for Photon {
                 .truncate(true)
                 .open(path)
                 .await
-        }
+        }?;
+        Ok(SequentialWriter(w))
     }
 
     fn spawn_background<'a, F>(&self, f: F) -> BoxFuture<'a, F::Output>
@@ -101,32 +103,48 @@ impl Env for Photon {
     }
 }
 
+pub struct SequentialWriter(File);
+
 #[async_trait]
-impl SequentialWriter for File {
+impl super::SequentialWriter for SequentialWriter {
+    type Write<'a> = impl Future<Output = Result<usize>> + 'a + Send;
+
+    fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::Write<'a> {
+        self.0.write(buf)
+    }
+
     async fn sync_data(&mut self) -> Result<()> {
-        File::sync_data(self).await
+        self.0.sync_data().await
     }
 
     async fn sync_all(&mut self) -> Result<()> {
-        File::sync_all(self).await
+        self.0.sync_all().await
     }
 
     async fn truncate(&self, len: u64) -> Result<()> {
-        File::set_len(self, len).await
+        self.0.set_len(len).await
     }
 
     fn direct_io_ify(&self) -> Result<()> {
-        super::direct_io_ify(self.as_raw_fd())
+        super::direct_io_ify(self.0.as_raw_fd())
     }
 }
 
+pub struct PositionalReader(File);
+
 #[async_trait]
-impl PositionalReader for File {
+impl super::PositionalReader for PositionalReader {
+    type ReadAt<'a> = impl Future<Output = Result<usize>> + 'a;
+
+    fn read_at<'a>(&'a self, buf: &'a mut [u8], pos: u64) -> Self::ReadAt<'a> {
+        self.0.read_at(buf, pos)
+    }
+
     async fn sync_all(&mut self) -> Result<()> {
-        File::sync_all(self).await
+        self.0.sync_all().await
     }
 
     fn direct_io_ify(&self) -> Result<()> {
-        super::direct_io_ify(self.as_raw_fd())
+        super::direct_io_ify(self.0.as_raw_fd())
     }
 }

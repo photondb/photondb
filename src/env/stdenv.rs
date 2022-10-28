@@ -102,7 +102,8 @@ impl Env for Std {
 
 pub struct PositionalReader(File);
 
-impl ReadAt for PositionalReader {
+#[async_trait]
+impl super::PositionalReader for PositionalReader {
     type ReadAt<'a> = impl Future<Output = Result<usize>> + 'a;
 
     #[cfg(unix)]
@@ -110,10 +111,6 @@ impl ReadAt for PositionalReader {
         use std::os::unix::fs::FileExt;
         async move { self.0.read_at(buf, offset) }
     }
-}
-
-#[async_trait]
-impl super::PositionalReader for PositionalReader {
     async fn sync_all(&mut self) -> Result<()> {
         async move { self.0.sync_all() }.await
     }
@@ -125,17 +122,15 @@ impl super::PositionalReader for PositionalReader {
 
 pub struct SequentialWriter(File);
 
-impl Write for SequentialWriter {
-    type Write<'a> = impl Future<Output = Result<usize>> + 'a;
+#[async_trait]
+impl super::SequentialWriter for SequentialWriter {
+    type Write<'a> = impl Future<Output = Result<usize>> + 'a + Send;
 
     fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::Write<'a> {
         use std::io::Write as _;
         async move { self.0.write(buf) }
     }
-}
 
-#[async_trait]
-impl super::SequentialWriter for SequentialWriter {
     async fn sync_data(&mut self) -> Result<()> {
         async move { self.0.sync_data() }.await
     }

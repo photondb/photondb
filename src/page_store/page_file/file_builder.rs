@@ -4,11 +4,9 @@ use std::{
     sync::Arc,
 };
 
-use photonio::io::WriteExt;
-
 use super::{types::split_page_addr, FileInfo, FileMeta};
 use crate::{
-    env::SequentialWriter,
+    env::{SequentialWriter, SequentialWriterExt},
     page_store::{Error, Result},
 };
 
@@ -603,9 +601,7 @@ mod tests {
     #[cfg(unix)]
     #[photonio::test]
     async fn test_buffered_writer() {
-        use photonio::io::ReadAtExt;
-
-        use crate::env::WriteOptions;
+        use crate::env::{PositionalReaderExt, WriteOptions};
 
         let env = crate::env::Photon;
 
@@ -624,13 +620,13 @@ mod tests {
         }
         {
             let file2 = env
-                .open_positional_reader(path1)
+                .open_positional_reader(path1.to_owned())
                 .await
                 .expect("open file_id: {file_id}'s file fail");
             let mut buf = vec![0u8; 1];
             file2.read_exact_at(&mut buf, 4096 * 3).await.unwrap();
             assert_eq!(buf[0], 3);
-            let length = file2.metadata().await.unwrap().len();
+            let length = env.metadata(path1).await.unwrap().len;
             assert_eq!(length, 10 + (4096 * 2 + 1) * 2)
         }
     }

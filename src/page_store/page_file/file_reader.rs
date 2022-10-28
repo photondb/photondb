@@ -1,10 +1,8 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use photonio::io::ReadAtExt;
-
 use super::{file_builder::*, types::FileMeta};
 use crate::{
-    env::PositionalReader,
+    env::{PositionalReader, PositionalReaderExt},
     page_store::{Error, Result},
 };
 

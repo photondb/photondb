@@ -77,7 +77,17 @@ pub trait Env: Clone + Send + Sync {
 }
 
 #[async_trait]
-pub trait PositionalReader: ReadAt + Send + Sync + 'static {
+pub trait PositionalReader: Send + Sync + 'static {
+    /// A future that resolves to the result of [`Self::read_at`].
+    type ReadAt<'a>: Future<Output = Result<usize>> + 'a + Send
+    where
+        Self: 'a;
+
+    /// Reads some bytes from this object at `pos` into `buf`.
+    ///
+    /// Returns the number of bytes read.
+    fn read_at<'a>(&'a self, buf: &'a mut [u8], pos: u64) -> Self::ReadAt<'a>;
+
     /// Synchronizes all modified data (include metadata) this file to disk.
     /// For reader, it's normally used to sync on folder.
     async fn sync_all(&mut self) -> Result<()>;
@@ -87,8 +97,52 @@ pub trait PositionalReader: ReadAt + Send + Sync + 'static {
     fn direct_io_ify(&self) -> Result<()>;
 }
 
+pub trait PositionalReaderExt {
+    /// A future that resolves to the result of [`Self::read_exact_at`].
+    type ReadExactAt<'a>: Future<Output = Result<()>> + 'a
+    where
+        Self: 'a;
+
+    /// Reads the exact number of bytes from this object at `pos` to fill `buf`.
+    fn read_exact_at<'a>(&'a self, buf: &'a mut [u8], pos: u64) -> Self::ReadExactAt<'a>;
+}
+
+impl<T> PositionalReaderExt for T
+where
+    T: PositionalReader,
+{
+    type ReadExactAt<'a> = impl Future<Output = Result<()>> + 'a where Self: 'a;
+
+    fn read_exact_at<'a>(&'a self, mut buf: &'a mut [u8], mut pos: u64) -> Self::ReadExactAt<'a> {
+        async move {
+            while !buf.is_empty() {
+                match self.read_at(buf, pos).await {
+                    Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+                    Ok(n) => {
+                        buf = &mut buf[n..];
+                        pos += n as u64;
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 #[async_trait]
-pub trait SequentialWriter: Write + Send + Sync + 'static {
+pub trait SequentialWriter: Send + Sync + 'static {
+    /// A future that resolves to the result of [`Self::write`].
+    type Write<'a>: Future<Output = Result<usize>> + 'a + Send
+    where
+        Self: 'a;
+
+    /// Writes some bytes from `buf` into this object.
+    ///
+    /// Returns the number of bytes written.
+    fn write<'a>(&'a mut self, buf: &'a [u8]) -> Self::Write<'a>;
+
     ///  Synchronizes all modified content but without metadata of this file to
     /// disk.
     ///
@@ -106,6 +160,40 @@ pub trait SequentialWriter: Write + Send + Sync + 'static {
     /// Enable direct_io for the writer.
     /// return error if direct_io unsupported.
     fn direct_io_ify(&self) -> Result<()>;
+}
+
+/// Provides extension methods for [`SequentialWriter`].
+pub trait SequentialWriterExt {
+    /// A future that resolves to the result of [`Self::write_all`].
+    type WriteAll<'a>: Future<Output = Result<()>> + 'a
+    where
+        Self: 'a;
+
+    /// Writes all bytes from `buf` into this object.
+    fn write_all<'a>(&'a mut self, buf: &'a [u8]) -> Self::WriteAll<'a>;
+}
+
+impl<T> SequentialWriterExt for T
+where
+    T: SequentialWriter,
+{
+    type WriteAll<'a> = impl Future<Output = Result<()>> + 'a
+    where
+        Self: 'a;
+
+    fn write_all<'a>(&'a mut self, mut buf: &'a [u8]) -> Self::WriteAll<'a> {
+        async move {
+            while !buf.is_empty() {
+                match self.write(buf).await {
+                    Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+                    Ok(n) => buf = &buf[n..],
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Metadata information about a file.

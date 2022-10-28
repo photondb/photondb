@@ -1,11 +1,13 @@
 use std::{io::ErrorKind, path::PathBuf};
 
-use photonio::io::{ReadAt, ReadAtExt, Write, WriteExt};
 use prost::Message;
 
 use super::{meta::VersionEdit, Error};
 use crate::{
-    env::{Env, PositionalReader, SequentialWriter, WriteOptions},
+    env::{
+        Env, PositionalReader, PositionalReaderExt, SequentialWriter, SequentialWriterExt,
+        WriteOptions,
+    },
     page_store::Result,
 };
 
@@ -278,7 +280,7 @@ impl<E: Env> Manifest<E> {
 struct VersionEditEncoder(VersionEdit);
 
 impl VersionEditEncoder {
-    async fn encode<W: Write + Send>(&self, w: &mut W) -> Result<usize> {
+    async fn encode<W: SequentialWriter>(&self, w: &mut W) -> Result<usize> {
         let bytes = self.0.encode_to_vec();
         w.write_all(&bytes.len().to_le_bytes())
             .await
@@ -288,12 +290,12 @@ impl VersionEditEncoder {
     }
 }
 
-struct VersionEditDecoder<R: ReadAt> {
+struct VersionEditDecoder<R: PositionalReader> {
     reader: R,
     offset: u64,
 }
 
-impl<R: ReadAt> VersionEditDecoder<R> {
+impl<R: PositionalReader> VersionEditDecoder<R> {
     fn new(reader: R) -> Self {
         Self { reader, offset: 0 }
     }
