@@ -137,7 +137,7 @@ pub(crate) struct JobHandle {
 impl JobHandle {
     pub(crate) fn new<E: Env + 'static>(
         page_store: &PageStore<E>,
-        rewriter: Box<dyn RewritePage>,
+        rewriter: Box<dyn RewritePage<E>>,
         strategy_builder: Box<dyn StrategyBuilder>,
     ) -> JobHandle {
         use self::jobs::{cleanup::CleanupCtx, flush::FlushCtx, gc::GcCtx};

@@ -20,7 +20,7 @@ mod tree;
 use tree::Tree;
 
 pub struct Table<E: Env> {
-    tree: Arc<Tree>,
+    tree: Arc<Tree<E>>,
     store: PageStore<E>,
     _job_guard: JobHandle,
 }
