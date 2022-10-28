@@ -238,7 +238,8 @@ impl<'a> Iterator for FileInfoIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let file_id = self.info.get_file_id();
-        self.iter.next().map(|v| (file_id as u64) | (v as u64))
+        let offset = self.iter.next()?;
+        Some(((file_id as u64) << 32) | (offset as u64))
     }
 }
 

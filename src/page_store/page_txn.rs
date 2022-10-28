@@ -207,6 +207,13 @@ impl<'a> PageTxn<'a> {
         Ok(())
     }
 
+    /// Deallocates some pages.
+    pub(crate) fn dealloc_pages(mut self, dealloc_addrs: &[u64]) -> Result<()> {
+        self.dealloc_pages_impl(dealloc_addrs)?;
+        self.commit();
+        Ok(())
+    }
+
     fn seal_write_buffer(&mut self) {
         let release_state = {
             let buffer_set = self.guard.version.buffer_set.current();
