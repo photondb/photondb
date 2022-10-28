@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{env::Env, Options};
+use crate::env::Env;
 
 mod error;
 pub(crate) use error::{Error, Result};
@@ -38,6 +38,24 @@ pub(crate) use page_file::{FileInfo, PageFiles};
 mod recover;
 mod strategy;
 pub(crate) use strategy::{MinDeclineRateStrategyBuilder, StrategyBuilder};
+
+/// Options to configure a page store.
+#[non_exhaustive]
+#[derive(Clone)]
+pub struct Options {
+    /// The capacity of [`WriteBuffer`]. It should be power of two.
+    ///
+    /// Default: 128MB
+    pub write_buffer_capacity: u32,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            write_buffer_capacity: 128 << 20,
+        }
+    }
+}
 
 pub(crate) struct PageStore<E: Env>
 where

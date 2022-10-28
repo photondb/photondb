@@ -10,14 +10,16 @@
     pointer_is_aligned
 )]
 
+mod store;
+pub use store::Store;
+
 mod table;
-pub use table::{RawTable, Table};
+pub use table::Table;
 
 mod error;
 pub use error::{Error, Result};
 
 mod options;
-pub use options::Options;
 
 pub mod env;
 

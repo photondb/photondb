@@ -16,7 +16,7 @@ use crate::{
     env::Env,
     page::{Key, Value},
     page_store::{Error, PageStore, Result},
-    Options,
+    table::Options,
 };
 
 /// A latch-free, log-structured tree.
@@ -30,7 +30,7 @@ impl<E: Env> Tree<E> {
     /// Opens a tree in the path.
     pub(crate) async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
         let stats = AtomicStats::default();
-        let store = PageStore::open(env, path, options.clone()).await?;
+        let store = PageStore::open(env, path, options.page_store.clone()).await?;
         Ok(Self {
             options,
             stats,
