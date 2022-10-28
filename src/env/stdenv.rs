@@ -2,14 +2,14 @@ use std::{
     fs::{File, OpenOptions},
     future::Future,
     io::Result,
-    os::unix::fs::OpenOptionsExt,
+    os::fd::AsRawFd,
     path::Path,
     thread,
 };
 
 use futures::{executor::block_on, future::BoxFuture};
 
-use super::{async_trait, Env, Metadata, ReadAt, ReadOptions, Syncer, Write, WriteOptions};
+use super::*;
 
 /// An implementation of [`Env`] based on [`std`] with synchronous I/O.
 #[derive(Clone)]
@@ -20,18 +20,11 @@ impl Env for Std {
     type PositionalReader = PositionalReader;
     type SequentialWriter = SequentialWriter;
 
-    async fn open_positional_reader<P>(
-        &self,
-        path: P,
-        opt: ReadOptions,
-    ) -> Result<Self::PositionalReader>
+    async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
         P: AsRef<Path> + Send,
     {
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(opt.custome_flags)
-            .open(path.as_ref())?;
+        let file = OpenOptions::new().read(true).open(path.as_ref())?;
         Ok(PositionalReader(file))
     }
 
@@ -43,13 +36,19 @@ impl Env for Std {
     where
         P: AsRef<Path> + Send,
     {
-        let file = OpenOptions::new()
-            .write(true)
-            .custom_flags(opt.custome_flags)
-            .create(opt.create)
-            .truncate(opt.truncate)
-            .append(opt.append)
-            .open(path.as_ref())?;
+        let file = if opt.append {
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .append(true)
+                .open(path.as_ref())?
+        } else {
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path.as_ref())?
+        };
         Ok(SequentialWriter(file))
     }
 
@@ -113,17 +112,14 @@ impl ReadAt for PositionalReader {
     }
 }
 
-impl Syncer for PositionalReader {
-    type SyncData<'a> = impl Future<Output = Result<()>> + 'a;
-
-    fn sync_data(&mut self) -> Self::SyncData<'_> {
-        async move { self.0.sync_data() }
+#[async_trait]
+impl super::PositionalReader for PositionalReader {
+    async fn sync_all(&mut self) -> Result<()> {
+        async move { self.0.sync_all() }.await
     }
 
-    type SyncAll<'b> = impl Future<Output = Result<()>> + 'b;
-
-    fn sync_all(&mut self) -> Self::SyncAll<'_> {
-        async move { self.0.sync_all() }
+    fn direct_io_ify(&self) -> Result<()> {
+        super::direct_io_ify(self.0.as_raw_fd())
     }
 }
 
@@ -138,16 +134,21 @@ impl Write for SequentialWriter {
     }
 }
 
-impl Syncer for SequentialWriter {
-    type SyncData<'a> = impl Future<Output = Result<()>> + 'a;
-
-    fn sync_data(&mut self) -> Self::SyncData<'_> {
-        async move { self.0.sync_data() }
+#[async_trait]
+impl super::SequentialWriter for SequentialWriter {
+    async fn sync_data(&mut self) -> Result<()> {
+        async move { self.0.sync_data() }.await
     }
 
-    type SyncAll<'b> = impl Future<Output = Result<()>> + 'b;
+    async fn sync_all(&mut self) -> Result<()> {
+        async move { self.0.sync_all() }.await
+    }
 
-    fn sync_all(&mut self) -> Self::SyncAll<'_> {
-        async move { self.0.sync_all() }
+    async fn truncate(&self, len: u64) -> Result<()> {
+        async move { self.0.set_len(len) }.await
+    }
+
+    fn direct_io_ify(&self) -> Result<()> {
+        super::direct_io_ify(self.0.as_raw_fd())
     }
 }

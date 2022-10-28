@@ -10,56 +10,23 @@ pub use stdenv::Std;
 mod photon;
 pub use photon::Photon;
 
-///  Options to configure how the file is read.
-#[derive(Default)]
-pub struct ReadOptions {
-    /// Pass custom flags to the `flags` argument of `open`.
-    /// See [`OpenOptionsExt::custome_flags`].
-    pub custome_flags: i32,
-}
-
 ///  Options to configure how the file is written.
+// TODO: remove this after make manifest always open new file when restarting.
+#[derive(Default)]
 pub struct WriteOptions {
-    /// Pass custom flags to the `flags` argument of `open`.
-    /// See also [` os::unix::fs::OpenOptionsExt::custome_flags`].
-    pub custome_flags: i32,
-
-    /// Sets the option to create a new file, or open it if it already exists.
-    /// See also [`std::fs::OpenOptions::create`].
-    pub create: bool,
-
-    /// Sets the option for truncating a previous file.
-    /// See also [`std::fs::OpenOptions::truncate`].
-    pub truncate: bool,
-
     /// Sets the option for the append mode.
     /// See also [`std::fs::OpenOptions::append`].
     pub append: bool,
 }
 
-impl Default for WriteOptions {
-    fn default() -> Self {
-        Self {
-            custome_flags: 0,
-            create: true,
-            truncate: true,
-            append: false,
-        }
-    }
-}
-
 /// Provides an environment to interact with a specific platform.
 #[async_trait]
 pub trait Env: Clone + Send + Sync {
-    type PositionalReader: ReadAt + Syncer + Send + Sync + 'static;
-    type SequentialWriter: Write + Syncer + Send;
+    type PositionalReader: PositionalReader;
+    type SequentialWriter: SequentialWriter;
 
     /// Opens a file for positional reads.
-    async fn open_positional_reader<P>(
-        &self,
-        path: P,
-        opt: ReadOptions,
-    ) -> Result<Self::PositionalReader>
+    async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
         P: AsRef<Path> + Send;
 
@@ -109,27 +76,34 @@ pub trait Env: Clone + Send + Sync {
     async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Metadata>;
 }
 
-/// Synchronizes modified for the file.
-pub trait Syncer {
-    /// A future that resolves to the result of [`Self::sync_data`].
-    type SyncData<'a>: Future<Output = Result<()>> + 'a + Send
-    where
-        Self: 'a;
+#[async_trait]
+pub trait PositionalReader: ReadAt + Send + Sync + 'static {
+    /// Synchronizes all modified data (include metadata) this file to disk.
+    /// For reader, it's normally used to sync on folder.
+    async fn sync_all(&mut self) -> Result<()>;
 
+    fn direct_io_ify(&self) -> Result<()>;
+}
+
+#[async_trait]
+pub trait SequentialWriter: Write + Send + Sync + 'static {
     ///  Synchronizes all modified content but without metadata of this file to
     /// disk.
     ///
     /// Returns Ok when success.
-    fn sync_data(&mut self) -> Self::SyncData<'_>;
+    async fn sync_data(&mut self) -> Result<()>;
 
-    /// A future that resolves to the result of [`Self::sync_all`].
-    type SyncAll<'b>: Future<Output = Result<()>> + 'b + Send
-    where
-        Self: 'b;
     ///  Synchronizes all modified data (include metadata) this file to disk.
     ///
     /// Returns Ok when success.
-    fn sync_all(&mut self) -> Self::SyncAll<'_>;
+    async fn sync_all(&mut self) -> Result<()>;
+
+    /// Truncate the writtern file to a specified length.
+    async fn truncate(&self, len: u64) -> Result<()>;
+
+    /// Enable direct_io for the writer.
+    /// return error if direct_io unsupported.
+    fn direct_io_ify(&self) -> Result<()>;
 }
 
 /// Metadata information about a file.
@@ -140,4 +114,28 @@ pub struct Metadata {
 
     /// Is this metadata for a directory.
     pub is_dir: bool,
+}
+
+pub(in crate::env) fn direct_io_ify(fd: i32) -> Result<()> {
+    if cfg!(linux) {
+        macro_rules! syscall {
+            ($fn: ident ( $($arg: expr),* $(,)* ) ) => {{
+                #[allow(unused_unsafe)]
+                let res = unsafe { libc::$fn($($arg, )*) };
+                if res == -1 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(res)
+                }
+            }};
+        }
+        let flags = syscall!(fcntl(fd, libc::F_GETFL))?;
+        syscall!(fcntl(fd, libc::F_SETFL, flags | libc::O_DIRECT))?;
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "enable direct io fail",
+        ))
+    }
 }

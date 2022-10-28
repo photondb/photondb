@@ -1,4 +1,4 @@
-use std::{future::Future, io::Result, os::unix::prelude::OpenOptionsExt, path::Path};
+use std::{future::Future, io::Result, os::fd::AsRawFd, path::Path};
 
 use futures::future::BoxFuture;
 use photonio::{
@@ -6,7 +6,7 @@ use photonio::{
     task,
 };
 
-use super::{async_trait, Env, Metadata, ReadOptions, Syncer, WriteOptions};
+use super::*;
 
 /// An implementation of [`Env`] based on PhotonIO.
 #[derive(Clone)]
@@ -17,20 +17,12 @@ impl Env for Photon {
     type PositionalReader = File;
     type SequentialWriter = File;
 
-    async fn open_positional_reader<P>(
-        &self,
-        path: P,
-        opt: ReadOptions,
-    ) -> Result<Self::PositionalReader>
+    async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
         P: AsRef<Path> + Send,
     {
         let path = path.as_ref();
-        OpenOptions::new()
-            .read(true)
-            .custom_flags(opt.custome_flags)
-            .open(path)
-            .await
+        OpenOptions::new().read(true).open(path).await
     }
 
     async fn open_sequential_writer<P>(
@@ -41,14 +33,21 @@ impl Env for Photon {
     where
         P: AsRef<Path> + Send,
     {
-        OpenOptions::new()
-            .write(true)
-            .custom_flags(opt.custome_flags)
-            .create(opt.create)
-            .truncate(opt.truncate)
-            .append(opt.append)
-            .open(path)
-            .await
+        if opt.append {
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .append(true)
+                .open(path)
+                .await
+        } else {
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(path)
+                .await
+        }
     }
 
     fn spawn_background<'a, F>(&self, f: F) -> BoxFuture<'a, F::Output>
@@ -102,16 +101,32 @@ impl Env for Photon {
     }
 }
 
-impl Syncer for File {
-    type SyncData<'a> = impl Future<Output = Result<()>> + 'a;
-
-    fn sync_data(&mut self) -> Self::SyncData<'_> {
-        File::sync_data(self)
+#[async_trait]
+impl SequentialWriter for File {
+    async fn sync_data(&mut self) -> Result<()> {
+        File::sync_data(self).await
     }
 
-    type SyncAll<'b> = impl Future<Output = Result<()>> + 'b;
+    async fn sync_all(&mut self) -> Result<()> {
+        File::sync_all(self).await
+    }
 
-    fn sync_all(&mut self) -> Self::SyncAll<'_> {
-        File::sync_all(self)
+    async fn truncate(&self, len: u64) -> Result<()> {
+        File::set_len(self, len).await
+    }
+
+    fn direct_io_ify(&self) -> Result<()> {
+        super::direct_io_ify(self.as_raw_fd())
+    }
+}
+
+#[async_trait]
+impl PositionalReader for File {
+    async fn sync_all(&mut self) -> Result<()> {
+        File::sync_all(self).await
+    }
+
+    fn direct_io_ify(&self) -> Result<()> {
+        super::direct_io_ify(self.as_raw_fd())
     }
 }

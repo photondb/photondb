@@ -5,7 +5,7 @@ use super::{
     PageFileReader,
 };
 use crate::{
-    env::{Env, ReadOptions},
+    env::Env,
     page_store::{NewFile, Result},
 };
 
@@ -113,7 +113,7 @@ impl<E: Env> FileInfoBuilder<E> {
             .expect("read file metadata file");
         let raw_file = self
             .env
-            .open_positional_reader(&path, ReadOptions::default())
+            .open_positional_reader(&path)
             .await
             .expect("file {path} not exist");
         MetaReader::open(

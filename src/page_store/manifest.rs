@@ -5,7 +5,7 @@ use prost::Message;
 
 use super::{meta::VersionEdit, Error};
 use crate::{
-    env::{Env, ReadOptions, WriteOptions},
+    env::{Env, PositionalReader, SequentialWriter, WriteOptions},
     page_store::Result,
 };
 
@@ -91,14 +91,7 @@ impl<E: Env> Manifest<E> {
 
             (
                 self.env
-                    .open_sequential_writer(
-                        &path,
-                        WriteOptions {
-                            truncate: false,
-                            append: true,
-                            ..Default::default()
-                        },
-                    )
+                    .open_sequential_writer(&path, WriteOptions { append: true })
                     .await
                     .expect("create new manifest file fail"),
                 path,
@@ -127,7 +120,6 @@ impl<E: Env> Manifest<E> {
             // TODO: notify cleaner previous manifest + size, so it can be delete when need.
             self.current_file_num = Some(current_file_num);
         } else {
-            use crate::env::Syncer;
             writer.sync_data().await.expect("sync manifest data fail");
         }
 
@@ -149,7 +141,7 @@ impl<E: Env> Manifest<E> {
                 .join(format!("{}_{}", MANIFEST_FILE_NAME, current_file));
             let reader = self
                 .env
-                .open_positional_reader(path, ReadOptions::default())
+                .open_positional_reader(path)
                 .await
                 .expect("open manifest fail");
             let mut decoder = VersionEditDecoder::new(reader);
@@ -166,7 +158,7 @@ impl<E: Env> Manifest<E> {
     async fn load_current(&self) -> Result<Option<u32 /* file_num */>> {
         let curr_file_reader = match self
             .env
-            .open_positional_reader(self.base.join(CURRENT_FILE_NAME), ReadOptions::default())
+            .open_positional_reader(self.base.join(CURRENT_FILE_NAME))
             .await
         {
             Ok(f) => f,
@@ -230,10 +222,9 @@ impl<E: Env> Manifest<E> {
             }?;
         }
         {
-            use crate::env::Syncer;
             let mut base_dir = self
                 .env
-                .open_positional_reader(&self.base, ReadOptions::default())
+                .open_positional_reader(&self.base)
                 .await
                 .expect("open base folder fail");
             base_dir.sync_all().await.expect("sync base folder fail");

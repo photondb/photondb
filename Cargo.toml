@@ -19,6 +19,7 @@ prost = "0.10"
 thiserror = "1.0.37"
 roaring = "0.10"
 bytes = "1.2.1"
+libc = "0.2.137"
 
 [profile.bench]
 debug = true

@@ -16,7 +16,7 @@ pub(crate) mod facade {
 
     use super::{file_builder::DEFAULT_BLOCK_SIZE, file_reader::MetaReader, *};
     use crate::{
-        env::{Env, ReadOptions},
+        env::{Env, PositionalReader, SequentialWriter, WriteOptions},
         page_store::Result,
     };
 
@@ -49,40 +49,18 @@ pub(crate) mod facade {
         ) -> Result<FileBuilder<E::SequentialWriter>> {
             // TODO: switch to env in suitable time.
             let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
-            let flags = self.direct_flags();
             let writer = self
                 .env
-                .open_sequential_writer(
-                    path.to_owned(),
-                    crate::env::WriteOptions {
-                        custome_flags: flags,
-                        ..Default::default()
-                    },
-                )
+                .open_sequential_writer(path.to_owned(), WriteOptions::default())
                 .await
-                .expect("open file_id: {file_id}'s file fail");
+                .expect("open reader for file_id: {file_id} fail");
+            let use_direct = self.use_direct && writer.direct_io_ify().is_ok();
             Ok(FileBuilder::new(
                 file_id,
                 writer,
-                self.use_direct,
+                use_direct,
                 DEFAULT_BLOCK_SIZE,
             ))
-        }
-
-        #[inline]
-        fn direct_flags(&self) -> i32 {
-            const O_DIRECT_LINUX: i32 = 0x4000;
-            const O_DIRECT_AARCH64: i32 = 0x10000;
-            if !self.use_direct {
-                return 0;
-            }
-            if cfg!(not(target_os = "linux")) {
-                0
-            } else if cfg!(target_arch = "aarch64") {
-                O_DIRECT_AARCH64
-            } else {
-                O_DIRECT_LINUX
-            }
         }
 
         /// Open page_reader for a page_file.
@@ -94,18 +72,14 @@ pub(crate) mod facade {
             block_size: usize,
         ) -> Result<PageFileReader<E::PositionalReader>> {
             let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
-            let flags = self.direct_flags();
+
             let file = self
                 .env
-                .open_positional_reader(
-                    path,
-                    ReadOptions {
-                        custome_flags: flags,
-                    },
-                )
+                .open_positional_reader(path)
                 .await
                 .expect("open reader for file_id: {file_id} fail");
-            Ok(PageFileReader::from(file, self.use_direct, block_size))
+            let use_direct = self.use_direct && file.direct_io_ify().is_ok();
+            Ok(PageFileReader::from(file, use_direct, block_size))
         }
 
         // Create info_builder to help recovery & mantains version's file_info.
@@ -126,7 +100,7 @@ pub(crate) mod facade {
                 .len as u32;
             let file = self
                 .env
-                .open_positional_reader(path, ReadOptions::default())
+                .open_positional_reader(path)
                 .await
                 .expect("open reader for file_id: {file_id} fail");
             let page_file_reader = PageFileReader::from(file, true, DEFAULT_BLOCK_SIZE);
