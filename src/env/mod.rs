@@ -1,7 +1,6 @@
 use std::{future::Future, io::Result, path::Path};
 
 pub use async_trait::async_trait;
-use futures::future::BoxFuture;
 pub use photonio::io::{Read, ReadAt, Write, WriteAt};
 
 mod stdenv;
@@ -24,6 +23,7 @@ pub struct WriteOptions {
 pub trait Env: Clone + Send + Sync {
     type PositionalReader: PositionalReader;
     type SequentialWriter: SequentialWriter;
+    type JoinHandle<T: Send>: Future<Output = T> + Send;
 
     /// Opens a file for positional reads.
     async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
@@ -40,7 +40,7 @@ pub trait Env: Clone + Send + Sync {
         P: AsRef<Path> + Send;
 
     /// Spawns a task to run in the background.
-    fn spawn_background<'a, F>(&self, f: F) -> BoxFuture<'a, F::Output>
+    fn spawn_background<F>(&self, f: F) -> Self::JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send;

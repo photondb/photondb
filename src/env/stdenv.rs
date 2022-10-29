@@ -4,10 +4,12 @@ use std::{
     io::Result,
     os::fd::AsRawFd,
     path::Path,
+    pin::Pin,
+    task::{Context, Poll},
     thread,
 };
 
-use futures::{executor::block_on, future::BoxFuture};
+use futures::executor::block_on;
 
 use super::*;
 
@@ -19,6 +21,7 @@ pub struct Std;
 impl Env for Std {
     type PositionalReader = PositionalReader;
     type SequentialWriter = SequentialWriter;
+    type JoinHandle<T: Send> = JoinHandle<T>;
 
     async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
@@ -52,13 +55,15 @@ impl Env for Std {
         Ok(SequentialWriter(file))
     }
 
-    fn spawn_background<'a, F>(&self, f: F) -> BoxFuture<'a, F::Output>
+    fn spawn_background<F>(&self, f: F) -> JoinHandle<F::Output>
     where
         F: Future + Send + 'static,
         F::Output: Send,
     {
         let handle = thread::spawn(move || block_on(f));
-        Box::pin(async { handle.join().unwrap() })
+        JoinHandle {
+            handle: Some(handle),
+        }
     }
 
     /// An async version of [`std::fs::rename`].
@@ -145,5 +150,21 @@ impl super::SequentialWriter for SequentialWriter {
 
     fn direct_io_ify(&self) -> Result<()> {
         super::direct_io_ify(self.0.as_raw_fd())
+    }
+}
+
+pub struct JoinHandle<T> {
+    handle: Option<thread::JoinHandle<T>>,
+}
+
+impl<T> Future for JoinHandle<T> {
+    type Output = T;
+
+    fn poll(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        let handle = self.handle.take().unwrap();
+        match handle.join() {
+            Ok(v) => Poll::Ready(v),
+            Err(e) => std::panic::resume_unwind(e),
+        }
     }
 }
