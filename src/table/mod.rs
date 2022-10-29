@@ -24,7 +24,7 @@ pub struct Table<E: Env> {
     store: PageStore<E>,
 }
 
-impl<E: Env + 'static> Table<E> {
+impl<E: Env> Table<E> {
     /// Opens a tree in the path.
     pub async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
         let tree = Arc::new(Tree::new(options.clone()));
