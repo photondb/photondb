@@ -20,7 +20,7 @@ pub struct WriteOptions {
 
 /// Provides an environment to interact with a specific platform.
 #[async_trait]
-pub trait Env: Clone + Send + Sync {
+pub trait Env: Clone + Send + Sync + 'static {
     type PositionalReader: PositionalReader;
     type SequentialWriter: SequentialWriter;
     type JoinHandle<T: Send>: Future<Output = T> + Send;

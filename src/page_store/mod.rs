@@ -78,7 +78,7 @@ pub(crate) struct PageStore<E: Env> {
     shutdown: ShutdownNotifier,
 }
 
-impl<E: Env + 'static> PageStore<E> {
+impl<E: Env> PageStore<E> {
     pub(crate) async fn open<P: AsRef<Path>>(
         env: E,
         path: P,
@@ -144,18 +144,14 @@ impl<E: Env + 'static> PageStore<E> {
             self.page_files.clone(),
             self.manifest.clone(),
         );
-        let handle = self.env.spawn_background(async {
-            job.run().await;
-        });
+        let handle = self.env.spawn_background(job.run());
         self.jobs.push(handle);
     }
 
     fn spawn_cleanup_job(&mut self) {
         let job = CleanupCtx::new(self.shutdown.subscribe(), self.page_files.clone());
         let global_version = self.global_version();
-        let handle = self.env.spawn_background(async {
-            job.run(global_version).await;
-        });
+        let handle = self.env.spawn_background(job.run(global_version));
         self.jobs.push(handle);
     }
 
@@ -169,9 +165,7 @@ impl<E: Env + 'static> PageStore<E> {
             self.page_files.clone(),
         );
         let global_version = self.global_version();
-        let handle = self.env.spawn_background(async {
-            job.run(global_version).await;
-        });
+        let handle = self.env.spawn_background(job.run(global_version));
         self.jobs.push(handle);
     }
 }

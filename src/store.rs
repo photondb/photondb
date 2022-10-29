@@ -11,12 +11,12 @@ use crate::{
 pub struct Options {}
 
 #[allow(dead_code)]
-pub struct Store<E: Env + 'static> {
+pub struct Store<E: Env> {
     table: Table<E>,
 }
 
 #[allow(dead_code)]
-impl<E: Env + 'static> Store<E> {
+impl<E: Env> Store<E> {
     pub async fn open<P: AsRef<Path>>(_env: E, _path: P, _options: Options) -> Result<Self> {
         todo!()
     }
