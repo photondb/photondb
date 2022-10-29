@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    mem,
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -24,6 +25,7 @@ use version::Version;
 
 mod jobs;
 pub(crate) use jobs::RewritePage;
+use jobs::{cleanup::CleanupCtx, flush::FlushCtx, gc::GcCtx};
 
 mod write_buffer;
 pub(crate) use write_buffer::{RecordRef, WriteBuffer};
@@ -71,10 +73,18 @@ pub(crate) struct PageStore<E: Env> {
     page_files: Arc<PageFiles<E>>,
     #[allow(unused)]
     manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
+
+    jobs: Vec<E::JoinHandle<()>>,
+    shutdown: ShutdownNotifier,
 }
 
-impl<E: Env> PageStore<E> {
-    pub(crate) async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
+impl<E: Env + 'static> PageStore<E> {
+    pub(crate) async fn open<P: AsRef<Path>>(
+        env: E,
+        path: P,
+        options: Options,
+        rewriter: Box<dyn RewritePage<E>>,
+    ) -> Result<Self> {
         let (next_file_id, manifest, table, page_files, file_infos) =
             Self::recover(env.to_owned(), path).await?;
 
@@ -88,15 +98,25 @@ impl<E: Env> PageStore<E> {
         let version = Arc::new(Mutex::new(version));
         let manifest = Arc::new(futures::lock::Mutex::new(manifest));
         let page_files = Arc::new(page_files);
+        let shutdown = ShutdownNotifier::new();
 
-        Ok(PageStore {
+        let mut store = PageStore {
             options,
             env,
             table,
             version,
             page_files,
             manifest,
-        })
+            jobs: Vec::new(),
+            shutdown,
+        };
+
+        // Spawn background jobs.
+        store.spawn_flush_job();
+        store.spawn_cleanup_job();
+        store.spawn_gc_job(rewriter);
+
+        Ok(store)
     }
 
     pub(crate) fn guard(&self) -> Guard<E> {
@@ -117,79 +137,52 @@ impl<E: Env> PageStore<E> {
         self.version.lock().expect("Poisoned").clone()
     }
 
-    #[inline]
-    fn env(&self) -> &E {
-        &self.env
+    fn spawn_flush_job(&mut self) {
+        let job = FlushCtx::new(
+            self.shutdown.subscribe(),
+            self.version.clone(),
+            self.page_files.clone(),
+            self.manifest.clone(),
+        );
+        let handle = self.env.spawn_background(async {
+            job.run().await;
+        });
+        self.jobs.push(handle);
     }
-}
 
-pub(crate) struct JobHandle<E: Env> {
-    flush_task: Option<E::JoinHandle<()>>,
-    cleanup_task: Option<E::JoinHandle<()>>,
-    gc_task: Option<E::JoinHandle<()>>,
-    notifier: ShutdownNotifier,
-}
-
-impl<E: Env + 'static> JobHandle<E> {
-    pub(crate) fn new(
-        page_store: &PageStore<E>,
-        rewriter: Box<dyn RewritePage<E>>,
-        strategy_builder: Box<dyn StrategyBuilder>,
-    ) -> JobHandle<E> {
-        use self::jobs::{cleanup::CleanupCtx, flush::FlushCtx, gc::GcCtx};
-
-        let env = page_store.env();
-        let page_table = page_store.table.clone();
-        let page_files = page_store.page_files.clone();
-        let version = page_store.version.clone();
-        let manifest = page_store.manifest.clone();
-
-        let notifier = ShutdownNotifier::new();
-
-        let cleanup_ctx = CleanupCtx::new(notifier.subscribe(), page_files.clone());
-        let global_version = { version.lock().expect("Poisoned").clone() };
-        let cloned_global_version = global_version.clone();
-        let cleanup_task = env.spawn_background(async {
-            cleanup_ctx.run(cloned_global_version).await;
+    fn spawn_cleanup_job(&mut self) {
+        let job = CleanupCtx::new(self.shutdown.subscribe(), self.page_files.clone());
+        let global_version = self.global_version();
+        let handle = self.env.spawn_background(async {
+            job.run(global_version).await;
         });
+        self.jobs.push(handle);
+    }
 
-        let flush_ctx = FlushCtx::new(notifier.subscribe(), version, page_files.clone(), manifest);
-        let flush_task = env.spawn_background(async {
-            flush_ctx.run().await;
-        });
-
-        let gc_ctx = GcCtx::new(
-            notifier.subscribe(),
+    fn spawn_gc_job(&mut self, rewriter: Box<dyn RewritePage<E>>) {
+        let strategy_builder = Box::new(MinDeclineRateStrategyBuilder::new(1 << 30, usize::MAX));
+        let job = GcCtx::new(
+            self.shutdown.subscribe(),
             rewriter,
             strategy_builder,
-            page_table,
-            page_files,
+            self.table.clone(),
+            self.page_files.clone(),
         );
-        let gc_task = env.spawn_background(async {
-            gc_ctx.run(global_version).await;
+        let global_version = self.global_version();
+        let handle = self.env.spawn_background(async {
+            job.run(global_version).await;
         });
-
-        JobHandle {
-            notifier,
-            flush_task: Some(flush_task),
-            cleanup_task: Some(cleanup_task),
-            gc_task: Some(gc_task),
-        }
+        self.jobs.push(handle);
     }
 }
 
-impl<E: Env> Drop for JobHandle<E> {
+impl<E: Env> Drop for PageStore<E> {
     fn drop(&mut self) {
-        self.notifier.terminate();
+        self.shutdown.terminate();
+        let jobs = mem::take(&mut self.jobs);
         futures::executor::block_on(async {
-            if let Some(task) = self.flush_task.take() {
-                task.await;
-            }
-            if let Some(task) = self.cleanup_task.take() {
-                task.await;
-            }
-            if let Some(task) = self.gc_task.take() {
-                task.await;
+            for job in jobs {
+                job.await;
             }
         });
     }

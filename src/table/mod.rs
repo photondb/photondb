@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use crate::{
     env::Env,
     page::{Key, Value},
-    page_store::{Error, JobHandle, MinDeclineRateStrategyBuilder, PageStore},
+    page_store::{Error, PageStore},
     Result,
 };
 
@@ -22,23 +22,15 @@ use tree::Tree;
 pub struct Table<E: Env> {
     tree: Arc<Tree<E>>,
     store: PageStore<E>,
-    _job_guard: JobHandle<E>,
 }
 
 impl<E: Env + 'static> Table<E> {
     /// Opens a tree in the path.
     pub async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
         let tree = Arc::new(Tree::new(options.clone()));
-        let store = PageStore::open(env, path, options.page_store).await?;
         let rewriter = Box::new(tree.clone());
-        // TODO: add options.
-        let strategy_builder = Box::new(MinDeclineRateStrategyBuilder::new(1 << 30, usize::MAX));
-        let _job_guard = JobHandle::new(&store, rewriter, strategy_builder);
-        Ok(Self {
-            tree,
-            store,
-            _job_guard,
-        })
+        let store = PageStore::open(env, path, options.page_store, rewriter).await?;
+        Ok(Self { tree, store })
     }
 
     /// Gets the value corresponding to the key and applies the function to it.
