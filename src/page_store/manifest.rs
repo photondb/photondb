@@ -13,6 +13,7 @@ const MAX_MANIFEST_SIZE: u64 = 128 << 20; // 128 MiB
 pub(crate) struct Manifest<E: Env> {
     env: E,
     base: PathBuf,
+    base_dir: Option<E::Directory>,
 
     max_file_size: u64,
 
@@ -29,15 +30,19 @@ impl<E: Env> Manifest<E> {
     // Open manifest in specified folder.
     // it will reopen manifest by find CURRENT and do some cleanup.
     pub(crate) async fn open(env: E, base: impl Into<PathBuf>) -> Result<Self> {
+        let base = base.into();
+
         let mut manifest = Self {
             env,
-            base: base.into(),
+            base,
+            base_dir: None,
             max_file_size: MAX_MANIFEST_SIZE,
             current_file_num: Default::default(),
             current_writer: None,
         };
         manifest.create_base_dir_if_not_exist().await?;
         manifest.current_file_num = manifest.load_current().await?;
+        manifest.open_base_dir().await?;
         manifest.cleanup_obsolete_files().await?;
 
         Ok(manifest)
@@ -59,6 +64,16 @@ impl<E: Env> Manifest<E> {
             }
             Err(err) => panic!("open base dir fail, {}", err),
         }
+        Ok(())
+    }
+
+    async fn open_base_dir(&mut self) -> Result<()> {
+        let base_dir = self
+            .env
+            .open_dir(&self.base)
+            .await
+            .expect("open base dir fail");
+        self.base_dir = Some(base_dir);
         Ok(())
     }
 
@@ -214,14 +229,12 @@ impl<E: Env> Manifest<E> {
                 }
             }?;
         }
-        {
-            let mut base_dir = self
-                .env
-                .open_positional_reader(&self.base)
-                .await
-                .expect("open base folder fail");
-            base_dir.sync_all().await.expect("sync base folder fail");
-        }
+        self.base_dir
+            .as_ref()
+            .unwrap()
+            .sync_all()
+            .await
+            .expect("sync base folder fail");
         Ok(())
     }
 
@@ -257,11 +270,21 @@ impl<E: Env> Manifest<E> {
             }
         }
 
+        let need_remove = !wait_remove_paths.is_empty();
         for path in wait_remove_paths {
             self.env
                 .remove_file(path)
                 .await
                 .expect("remove obsolote file fail")
+        }
+
+        if need_remove {
+            self.base_dir
+                .as_ref()
+                .unwrap()
+                .sync_all()
+                .await
+                .expect("sync base dir fail");
         }
 
         Ok(())

@@ -21,6 +21,7 @@ impl Env for Photon {
     type PositionalReader = PositionalReader;
     type SequentialWriter = SequentialWriter;
     type JoinHandle<T: Send> = JoinHandle<T>;
+    type Directory = Directory;
 
     async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
@@ -85,6 +86,17 @@ impl Env for Photon {
         };
         Ok(metadata)
     }
+
+    async fn open_dir<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::Directory> {
+        let file = File::open(path).await?;
+        if !file.metadata().await?.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                "not a dir",
+            ));
+        }
+        Ok(Directory(file))
+    }
 }
 
 pub struct SequentialWriter(File);
@@ -98,11 +110,8 @@ impl super::SequentialWriter for SequentialWriter {
     }
 
     async fn sync_data(&mut self) -> Result<()> {
+        // TODO: sync range(sync start->current => sync last_offset->current)
         self.0.sync_data().await
-    }
-
-    async fn sync_all(&mut self) -> Result<()> {
-        self.0.sync_all().await
     }
 
     async fn truncate(&self, len: u64) -> Result<()> {
@@ -124,10 +133,6 @@ impl super::PositionalReader for PositionalReader {
         self.0.read_at(buf, pos)
     }
 
-    async fn sync_all(&mut self) -> Result<()> {
-        self.0.sync_all().await
-    }
-
     fn direct_io_ify(&self) -> Result<()> {
         super::direct_io_ify(self.0.as_raw_fd())
     }
@@ -147,5 +152,14 @@ impl<T> Future for JoinHandle<T> {
             Poll::Ready(Err(e)) => panic!("JoinHandle error: {:?}", e),
             Poll::Pending => Poll::Pending,
         }
+    }
+}
+
+pub struct Directory(File);
+
+#[async_trait]
+impl super::Directory for Directory {
+    async fn sync_all(&self) -> Result<()> {
+        self.0.sync_all().await
     }
 }

@@ -3,7 +3,6 @@ use std::{
     future::Future,
     io::Result,
     os::fd::AsRawFd,
-    path::Path,
     pin::Pin,
     task::{Context, Poll},
     thread,
@@ -22,6 +21,7 @@ impl Env for Std {
     type PositionalReader = PositionalReader;
     type SequentialWriter = SequentialWriter;
     type JoinHandle<T: Send> = JoinHandle<T>;
+    type Directory = Directory;
 
     async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
@@ -85,6 +85,17 @@ impl Env for Std {
             is_dir: raw_metadata.is_dir(),
         })
     }
+
+    async fn open_dir<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::Directory> {
+        let file = File::open(path)?;
+        if !file.metadata()?.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                "not a dir",
+            ));
+        }
+        Ok(Directory(file))
+    }
 }
 
 pub struct PositionalReader(File);
@@ -97,9 +108,6 @@ impl super::PositionalReader for PositionalReader {
     fn read_at<'a>(&'a self, buf: &'a mut [u8], offset: u64) -> Self::ReadAt<'a> {
         use std::os::unix::fs::FileExt;
         async move { self.0.read_at(buf, offset) }
-    }
-    async fn sync_all(&mut self) -> Result<()> {
-        async move { self.0.sync_all() }.await
     }
 
     fn direct_io_ify(&self) -> Result<()> {
@@ -120,10 +128,6 @@ impl super::SequentialWriter for SequentialWriter {
 
     async fn sync_data(&mut self) -> Result<()> {
         async move { self.0.sync_data() }.await
-    }
-
-    async fn sync_all(&mut self) -> Result<()> {
-        async move { self.0.sync_all() }.await
     }
 
     async fn truncate(&self, len: u64) -> Result<()> {
@@ -148,5 +152,14 @@ impl<T> Future for JoinHandle<T> {
             Ok(v) => Poll::Ready(v),
             Err(e) => std::panic::resume_unwind(e),
         }
+    }
+}
+
+pub struct Directory(File);
+
+#[async_trait]
+impl super::Directory for Directory {
+    async fn sync_all(&self) -> Result<()> {
+        self.0.sync_all()
     }
 }

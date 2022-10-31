@@ -6,7 +6,7 @@ use std::{
 
 use super::{types::split_page_addr, FileInfo, FileMeta};
 use crate::{
-    env::{SequentialWriter, SequentialWriterExt},
+    env::{Directory, SequentialWriter, SequentialWriterExt},
     page_store::{Error, Result},
 };
 
@@ -28,9 +28,14 @@ const IO_BUFFER_SIZE: usize = 4096 * 4;
 ///
 /// `page_addr`'s high 32 bit always be `file-id`(`PageAddr = {file id} {write
 /// buffer index}`), so it only store lower 32 bit.
-pub(crate) struct FileBuilder<W: SequentialWriter> {
+pub(crate) struct FileBuilder<'a, W, D>
+where
+    W: SequentialWriter,
+    D: Directory + Send + Sync + 'static,
+{
     file_id: u32,
-    writer: BufferedWriter<W>,
+
+    writer: BufferedWriter<'a, W, D>,
 
     index: IndexBlockBuilder,
     meta: MetaBlockBuilder,
@@ -39,10 +44,20 @@ pub(crate) struct FileBuilder<W: SequentialWriter> {
     block_size: usize,
 }
 
-impl<W: SequentialWriter> FileBuilder<W> {
+impl<'a, W, D> FileBuilder<'a, W, D>
+where
+    W: SequentialWriter,
+    D: Directory + Send + Sync + 'static,
+{
     /// Create new file builder for given writer.
-    pub(crate) fn new(file_id: u32, file: W, use_direct: bool, block_size: usize) -> Self {
-        let writer = BufferedWriter::new(file, IO_BUFFER_SIZE, use_direct, block_size);
+    pub(crate) fn new(
+        file_id: u32,
+        base_dir: &'a D,
+        file: W,
+        use_direct: bool,
+        block_size: usize,
+    ) -> Self {
+        let writer = BufferedWriter::new(file, IO_BUFFER_SIZE, use_direct, block_size, base_dir);
         Self {
             file_id,
             writer,
@@ -85,7 +100,11 @@ impl<W: SequentialWriter> FileBuilder<W> {
     }
 }
 
-impl<W: SequentialWriter> FileBuilder<W> {
+impl<'a, W, D> FileBuilder<'a, W, D>
+where
+    W: SequentialWriter,
+    D: Directory + Send + Sync + 'static,
+{
     async fn finish_meta_block(&mut self) -> Result<()> {
         {
             let page_tables = self.meta.finish_page_table_block();
@@ -437,8 +456,13 @@ impl IndexBlock {
     }
 }
 
-struct BufferedWriter<W: SequentialWriter> {
+struct BufferedWriter<'a, W, D>
+where
+    W: SequentialWriter,
+    D: Directory + Send + Sync + 'static,
+{
     file: W,
+    base_dir: &'a D,
 
     use_direct: bool,
 
@@ -450,11 +474,22 @@ struct BufferedWriter<W: SequentialWriter> {
     buf_pos: usize,
 }
 
-impl<W: SequentialWriter> BufferedWriter<W> {
-    fn new(file: W, io_batch_size: usize, use_direct: bool, align_size: usize) -> Self {
+impl<'a, W, D> BufferedWriter<'a, W, D>
+where
+    W: SequentialWriter,
+    D: Directory + Send + Sync + 'static,
+{
+    fn new(
+        file: W,
+        io_batch_size: usize,
+        use_direct: bool,
+        align_size: usize,
+        base_dir: &'a D,
+    ) -> Self {
         let buffer = AlignBuffer::new(io_batch_size, align_size);
         Self {
             file,
+            base_dir,
             use_direct,
             next_page_offset: 0,
             actual_data_size: 0,
@@ -510,7 +545,7 @@ impl<W: SequentialWriter> BufferedWriter<W> {
                 .expect("set set file len fail");
         }
         // panic when sync fail, https://wiki.postgresql.org/wiki/Fsync_Errors
-        self.file.sync_all().await.expect("sync file fail");
+        self.base_dir.sync_all().await.expect("sync file fail");
         Ok(())
     }
 }
@@ -606,13 +641,15 @@ mod tests {
         let env = crate::env::Photon;
 
         let use_direct = true;
-        let path1 = std::env::temp_dir().join("buf_test1");
+        let base = std::env::temp_dir();
+        let path1 = base.join("buf_test1");
+        let base = env.open_dir(base).await.unwrap();
         {
             let file1 = env
                 .open_sequential_writer(path1.to_owned())
                 .await
                 .expect("open file_id: {file_id}'s file fail");
-            let mut bw1 = BufferedWriter::new(file1, 4096 + 1, use_direct, 512);
+            let mut bw1 = BufferedWriter::new(file1, 4096 + 1, use_direct, 512, &base);
             bw1.write(&[1].repeat(10)).await.unwrap(); // only fill buffer
             bw1.write(&[2].repeat(4096 * 2 + 1)).await.unwrap(); // trigger flush
             bw1.write(&[3].repeat(4096 * 2 + 1)).await.unwrap(); // trigger flush
