@@ -30,6 +30,8 @@ impl<E: Env> Table<E> {
         let tree = Arc::new(Tree::new(options.clone()));
         let rewriter = Box::new(tree.clone());
         let store = PageStore::open(env, path, options.page_store, rewriter).await?;
+        let guard = store.guard();
+        tree.init(guard).await?;
         Ok(Self { tree, store })
     }
 
