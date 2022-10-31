@@ -96,11 +96,6 @@ impl PagePtr {
         unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 
-    /// Returns the size of the page content.
-    pub(super) fn content_size(&self) -> usize {
-        self.len - PAGE_HEADER_LEN
-    }
-
     /// Returns a byte slice of the page content.
     pub(super) fn content<'a>(&self) -> &'a [u8] {
         unsafe { slice::from_raw_parts(self.content_ptr(), self.content_size()) }
@@ -143,6 +138,10 @@ impl PagePtr {
 
     fn set_flags(&mut self, flags: PageFlags) {
         unsafe { self.flags_ptr().write(flags.0) }
+    }
+
+    fn content_size(&self) -> usize {
+        self.len - PAGE_HEADER_LEN
     }
 }
 
@@ -342,6 +341,10 @@ impl PageBuilder {
         Self { tier, kind }
     }
 
+    pub(crate) fn size(&self, content_size: usize) -> usize {
+        PAGE_HEADER_LEN + content_size
+    }
+
     pub(crate) fn build(&self, page: &mut PageBuf<'_>) {
         let flags = PageFlags::new(self.tier, self.kind);
         page.set_flags(flags);
@@ -357,15 +360,18 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn page() {
-        let layout = Layout::from_size_align(PAGE_HEADER_LEN + 1, 8).unwrap();
-        let mut buf = unsafe {
+    fn alloc_page(size: usize) -> Box<[u8]> {
+        let layout = Layout::from_size_align(size, 8).unwrap();
+        unsafe {
             let ptr = alloc(layout);
             let buf = slice::from_raw_parts_mut(ptr, layout.size());
             Box::from_raw(buf)
-        };
+        }
+    }
 
+    #[test]
+    fn page() {
+        let mut buf = alloc_page(PAGE_HEADER_LEN + 1);
         let mut page = PageBuf::new(buf.as_mut());
         {
             let builder = PageBuilder::new(PageTier::Leaf, PageKind::Data);
@@ -389,7 +395,9 @@ mod tests {
         assert_eq!(page.chain_next(), 0);
         page.set_chain_next(3);
         assert_eq!(page.chain_next(), 3);
-        assert_eq!(page.data().len(), layout.size());
-        assert_eq!(page.content().len(), layout.size() - PAGE_HEADER_LEN);
+        assert_eq!(page.size(), PAGE_HEADER_LEN + 1);
+        assert_eq!(page.data().len(), PAGE_HEADER_LEN + 1);
+        assert_eq!(page.content().len(), 1);
+        assert_eq!(page.content_mut().len(), 1);
     }
 }

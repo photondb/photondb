@@ -8,8 +8,8 @@ use super::{
 pub(crate) struct SortedPageBuilder<I> {
     base: PageBuilder,
     iter: Option<I>,
-    size: usize,
     num_items: usize,
+    content_size: usize,
 }
 
 impl<'a, I, K, V> SortedPageBuilder<I>
@@ -22,31 +22,32 @@ where
         Self {
             base: PageBuilder::new(tier, kind),
             iter: None,
-            size: 0,
             num_items: 0,
+            content_size: 0,
         }
     }
 
     pub(crate) fn size(&self) -> usize {
-        self.size
+        self.base.size(self.content_size)
     }
 
     pub(crate) fn with_iter(mut self, mut iter: I) -> Self {
         for (k, v) in &mut iter {
-            self.size += k.encode_size() + v.encode_size();
             self.num_items += 1;
+            self.content_size += k.encode_size() + v.encode_size();
         }
-        self.size += self.num_items * mem::size_of::<u32>();
+        self.content_size += self.num_items * mem::size_of::<u32>();
         self.iter = Some(iter);
         self
     }
 
     pub(crate) fn build(mut self, page: &'a mut PageBuf<'_>) {
-        assert_eq!(page.size(), self.size);
         self.base.build(page);
+        let content = page.content_mut();
+        assert_eq!(content.len(), self.content_size);
         if let Some(mut iter) = self.iter.take() {
             unsafe {
-                let mut buf = SortedPageBuf::new(page, self.num_items);
+                let mut buf = SortedPageBuf::new(content, self.num_items);
                 iter.rewind();
                 for (k, v) in iter {
                     buf.add(k, v);
@@ -67,8 +68,7 @@ where
     K: EncodeTo,
     V: EncodeTo,
 {
-    unsafe fn new(page: &mut PageBuf<'_>, num_items: usize) -> Self {
-        let content = page.content_mut();
+    unsafe fn new(content: &mut [u8], num_items: usize) -> Self {
         let offsets_size = num_items * mem::size_of::<u32>();
         let (offsets, payload) = content.split_at_mut(offsets_size);
         Self {
@@ -253,6 +253,24 @@ where
     }
 }
 
+#[cfg(test)]
+impl EncodeTo for u64 {
+    fn encode_size(&self) -> usize {
+        mem::size_of::<u64>()
+    }
+
+    unsafe fn encode_to(&self, enc: &mut Encoder) {
+        enc.put_u64(*self)
+    }
+}
+
+#[cfg(test)]
+impl DecodeFrom for u64 {
+    unsafe fn decode_from(dec: &mut Decoder) -> Self {
+        dec.get_u64()
+    }
+}
+
 impl EncodeTo for &[u8] {
     fn encode_size(&self) -> usize {
         mem::size_of::<u32>() + self.len()
@@ -290,6 +308,7 @@ impl DecodeFrom for Key<'_> {
     }
 }
 
+/// These values are persisted to disk, don't change them.
 const VALUE_KIND_PUT: u8 = 0;
 const VALUE_KIND_DELETE: u8 = 1;
 
@@ -339,5 +358,52 @@ impl DecodeFrom for Index {
         let id = dec.get_u64();
         let epoch = dec.get_u64();
         Self::new(id, epoch)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::alloc::{alloc, Layout};
+
+    use super::{super::SliceIter, *};
+
+    fn alloc_page(size: usize) -> Box<[u8]> {
+        let layout = Layout::from_size_align(size, 8).unwrap();
+        unsafe {
+            let ptr = alloc(layout);
+            let buf = slice::from_raw_parts_mut(ptr, layout.size());
+            Box::from_raw(buf)
+        }
+    }
+
+    #[test]
+    fn sorted_page() {
+        let data = [(1, 1), (3, 3), (5, 5)];
+        let iter = SliceIter::new(&data);
+        let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
+        let mut buf = alloc_page(builder.size());
+        let mut page = PageBuf::new(buf.as_mut());
+        builder.build(&mut page);
+
+        let page: SortedPageRef<u64, u64> = SortedPageRef::new(page.into());
+        assert_eq!(page.len(), data.len());
+        assert_eq!(page.get(0), Some((1, 1)));
+        assert_eq!(page.get(1), Some((3, 3)));
+        assert_eq!(page.get(2), Some((5, 5)));
+        assert_eq!(page.get(3), None);
+        assert_eq!(page.rank(&0), Err(0));
+        assert_eq!(page.rank(&1), Ok(0));
+        assert_eq!(page.rank(&2), Err(1));
+        assert_eq!(page.rank(&3), Ok(1));
+        assert_eq!(page.rank(&4), Err(2));
+        assert_eq!(page.rank(&5), Ok(2));
+
+        let mut iter = SortedPageIter::new(page);
+        for _ in 0..2 {
+            for (a, b) in (&mut iter).zip(data.clone()) {
+                assert_eq!(a, b);
+            }
+            iter.rewind();
+        }
     }
 }

@@ -304,6 +304,8 @@ where
     }
 
     /// Creates a [`MergingIter`] from the specified iterators.
+    ///
+    /// The returned iterator will be positioned at the first item.
     pub(crate) fn build(self) -> MergingIter<I> {
         MergingIter::init(self.iters)
     }
