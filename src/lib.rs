@@ -10,6 +10,8 @@
     pointer_is_aligned
 )]
 
+pub mod env;
+
 mod error;
 pub use error::{Error, Result};
 
@@ -18,8 +20,6 @@ pub use store::Store;
 
 mod table;
 pub use table::Table;
-
-pub mod env;
 
 mod page;
 mod page_store;

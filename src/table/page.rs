@@ -1,11 +1,12 @@
 use crate::{page::*, page_store::*};
 
-/// The root id is always the minimal id in the page store.
+/// The root id is fixed to the minimal id in the page store.
 pub(super) const ROOT_ID: u64 = MIN_ID;
 pub(super) const ROOT_RANGE: Range = Range::full();
 pub(super) const ROOT_INDEX: Index = Index::new(MIN_ID, 0);
 pub(super) const NULL_INDEX: Index = Index::new(NAN_ID, 0);
 
+/// Related information of a page.
 pub(super) struct PageView<'a> {
     pub(super) id: u64,
     pub(super) addr: u64,

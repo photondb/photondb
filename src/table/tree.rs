@@ -1,65 +1,66 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
-use super::{page::*, AtomicStats, Options};
+use super::{page::*, stats::*, Options};
 use crate::{
     env::Env,
     page::*,
     page_store::{Error, Guard, Result, RewritePage},
 };
 
-pub(super) struct Tree<E: Env> {
-    pub(super) options: Options,
-    pub(super) stats: AtomicStats,
-    _marker: PhantomData<E>,
+pub(super) struct Tree {
+    options: Options,
+    stats: AtomicStats,
+    safe_lsn: AtomicU64,
 }
 
-impl<E: Env> Tree<E> {
+impl Tree {
     pub(super) fn new(options: Options) -> Self {
         Self {
             options,
             stats: AtomicStats::default(),
-            _marker: PhantomData,
+            safe_lsn: AtomicU64::new(0),
         }
     }
 
-    pub(super) async fn init(&self, guard: Guard<'_, E>) -> Result<()> {
-        let session = self.begin(&guard);
-        session.init().await
+    pub(super) fn begin<'a, E: Env>(&'a self, guard: &'a Guard<'_, E>) -> TreeTxn<'a, E> {
+        TreeTxn::new(self, guard)
     }
 
-    pub(super) fn begin<'a>(&'a self, guard: &'a Guard<'_, E>) -> Session<'a, E> {
-        Session { tree: self, guard }
+    pub(super) fn stats(&self) -> Stats {
+        self.stats.snapshot()
     }
 
-    // Returns true if the page should be split.
-    fn should_split_page(&self, page: PageRef<'_>) -> bool {
-        let mut max_size = self.options.page_size;
-        if page.tier().is_inner() {
-            // Adjust the page size for inner pages.
-            // TODO: do some benchmarks to evaluate this.
-            max_size /= 2;
+    pub(super) fn safe_lsn(&self) -> u64 {
+        self.safe_lsn.load(Ordering::Acquire)
+    }
+
+    pub(super) fn set_safe_lsn(&self, lsn: u64) {
+        loop {
+            let safe_lsn = self.safe_lsn.load(Ordering::Acquire);
+            // Make sure that the safe LSN is increasing.
+            if safe_lsn >= lsn {
+                return;
+            }
+            if self
+                .safe_lsn
+                .compare_exchange(safe_lsn, lsn, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return;
+            }
         }
-        page.size() > max_size
-    }
-
-    // Returns true if the page should be consolidated.
-    fn should_consolidate_page(&self, page: PageRef<'_>) -> bool {
-        let mut max_chain_len = self.options.page_chain_length;
-        if page.tier().is_inner() {
-            // Adjust the chain length for inner pages.
-            // TODO: do some benchmarks to evaluate this.
-            max_chain_len /= 2;
-        }
-        page.chain_len() as usize > max_chain_len.max(1)
     }
 }
 
 #[async_trait::async_trait]
-impl<E: Env> RewritePage<E> for Arc<Tree<E>> {
-    async fn rewrite(&self, id: u64, guard: &Guard<'_, E>) -> Result<()> {
+impl<E: Env> RewritePage<E> for Arc<Tree> {
+    async fn rewrite(&self, id: u64, guard: &Guard<'_, E>) -> Result<(), Error> {
         loop {
-            let session = self.begin(guard);
-            match session.rewrite_page(id).await {
+            let txn = self.begin(guard);
+            match txn.rewrite_page(id).await {
                 Ok(_) => return Ok(()),
                 Err(Error::Again) => continue,
                 Err(e) => return Err(e),
@@ -68,13 +69,18 @@ impl<E: Env> RewritePage<E> for Arc<Tree<E>> {
     }
 }
 
-pub(super) struct Session<'a, E: Env> {
-    tree: &'a Tree<E>,
+pub(super) struct TreeTxn<'a, E: Env> {
+    tree: &'a Tree,
     guard: &'a Guard<'a, E>,
 }
 
-impl<'a, E: Env> Session<'a, E> {
-    async fn init(&self) -> Result<()> {
+impl<'a, E: Env> TreeTxn<'a, E> {
+    pub(super) fn new(tree: &'a Tree, guard: &'a Guard<'a, E>) -> Self {
+        Self { tree, guard }
+    }
+
+    /// Initializes the tree if it is not initialized yet.
+    pub(super) async fn init(&self) -> Result<()> {
         let addr = self.guard.page_addr(ROOT_ID);
         if addr != 0 {
             return Ok(());
@@ -95,12 +101,38 @@ impl<'a, E: Env> Session<'a, E> {
 
     /// Gets the value corresponding to the key.
     pub(super) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
+        match self.get_impl(key).await {
+            Ok(v) => {
+                self.tree.stats.success.get.inc();
+                Ok(v)
+            }
+            Err(e) => {
+                self.tree.stats.failure.get.inc();
+                Err(e)
+            }
+        }
+    }
+
+    async fn get_impl(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
         let (view, _) = self.find_leaf(&key).await?;
         self.find_value(&key, &view).await
     }
 
     /// Writes the key-value pair to the tree.
     pub(super) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
+        match self.write_impl(key, value).await {
+            Ok(_) => {
+                self.tree.stats.success.write.inc();
+                Ok(())
+            }
+            Err(e) => {
+                self.tree.stats.failure.write.inc();
+                Err(e)
+            }
+        }
+    }
+
+    async fn write_impl(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
         let (mut view, parent) = self.find_leaf(&key).await?;
         // Build a delta page with the given key-value pair.
         let iter = ItemIter::new((key, value));
@@ -136,7 +168,7 @@ impl<'a, E: Env> Session<'a, E> {
         }
 
         // Try to consolidate the page if it is too long.
-        if self.tree.should_consolidate_page(view.page) {
+        if self.should_consolidate_page(view.page) {
             let _ = self.consolidate_and_restructure_page(view, parent).await;
         }
         Ok(())
@@ -367,7 +399,7 @@ impl<'a, E: Env> Session<'a, E> {
                     view.page = new_page.into();
                 })
                 .map_err(|_| {
-                    self.tree.stats.restart.split_page.inc();
+                    self.tree.stats.failure.split_page.inc();
                     Error::Again
                 })?;
         }
@@ -435,7 +467,7 @@ impl<'a, E: Env> Session<'a, E> {
             .map_err(|_| Error::Again)?;
 
         // Try to consolidate the parent page if it is too long.
-        if self.tree.should_consolidate_page(parent.page) {
+        if self.should_consolidate_page(parent.page) {
             let _ = self.consolidate_page(parent).await;
         }
         Ok(())
@@ -513,7 +545,7 @@ impl<'a, E: Env> Session<'a, E> {
                 view
             })
             .map_err(|_| {
-                self.tree.stats.restart.consolidate_page.inc();
+                self.tree.stats.failure.consolidate_page.inc();
                 Error::Again
             })
     }
@@ -573,10 +605,32 @@ impl<'a, E: Env> Session<'a, E> {
     ) -> Result<()> {
         view = self.consolidate_page(view).await?;
         // Try to split the page if it is too large.
-        if self.tree.should_split_page(view.page) {
+        if self.should_split_page(view.page) {
             let _ = self.split_page(view, parent);
         }
         Ok(())
+    }
+
+    // Returns true if the page should be split.
+    fn should_split_page(&self, page: PageRef<'_>) -> bool {
+        let mut max_size = self.tree.options.page_size;
+        if page.tier().is_inner() {
+            // Adjust the page size for inner pages.
+            // TODO: do some benchmarks to evaluate this.
+            max_size /= 2;
+        }
+        page.size() > max_size
+    }
+
+    // Returns true if the page should be consolidated.
+    fn should_consolidate_page(&self, page: PageRef<'_>) -> bool {
+        let mut max_chain_len = self.tree.options.page_chain_length;
+        if page.tier().is_inner() {
+            // Adjust the chain length for inner pages.
+            // TODO: do some benchmarks to evaluate this.
+            max_chain_len /= 2;
+        }
+        page.chain_len() as usize > max_chain_len.max(1)
     }
 }
 
