@@ -218,8 +218,8 @@ impl<'a, E: Env> Session<'a, E> {
         view: &PageView<'g>,
     ) -> Result<MergingPageIter<'g, K, V>>
     where
-        K: EncodeTo + DecodeFrom + Ord,
-        V: EncodeTo + DecodeFrom,
+        K: SortedPageKey,
+        V: SortedPageValue,
     {
         let mut builder = MergingIterBuilder::with_capacity(view.page.chain_len() as usize);
         let mut range_limit = None;
@@ -331,8 +331,8 @@ impl<'a, E: Env> Session<'a, E> {
         parent: Option<PageView<'_>>,
     ) -> Result<()>
     where
-        K: EncodeTo + DecodeFrom + Ord + Clone,
-        V: EncodeTo + DecodeFrom,
+        K: SortedPageKey,
+        V: SortedPageValue,
     {
         // We can only split base data pages.
         if !view.page.kind().is_data() || view.page.chain_next() != 0 {
@@ -491,8 +491,8 @@ impl<'a, E: Env> Session<'a, E> {
     where
         F: Fn(MergingPageIter<'g, K, V>) -> I,
         I: RewindableIterator<Item = (K, V)>,
-        K: EncodeTo + DecodeFrom + Ord,
-        V: EncodeTo + DecodeFrom,
+        K: SortedPageKey,
+        V: SortedPageValue,
     {
         // Collect information for this consolidation.
         let info = self.collect_consolidation_info(&view).await?;
@@ -524,8 +524,8 @@ impl<'a, E: Env> Session<'a, E> {
         view: &PageView<'g>,
     ) -> Result<ConsolidationInfo<'g, K, V>>
     where
-        K: DecodeFrom + Ord,
-        V: DecodeFrom,
+        K: SortedPageKey,
+        V: SortedPageValue,
     {
         let chain_len = view.page.chain_len() as usize;
         let mut builder = MergingIterBuilder::with_capacity(chain_len);
@@ -582,8 +582,8 @@ impl<'a, E: Env> Session<'a, E> {
 
 struct ConsolidationInfo<'a, K, V>
 where
-    K: DecodeFrom + Ord,
-    V: DecodeFrom,
+    K: SortedPageKey,
+    V: SortedPageValue,
 {
     iter: MergingPageIter<'a, K, V>,
     last_page: PageRef<'a>,

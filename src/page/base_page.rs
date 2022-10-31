@@ -331,21 +331,21 @@ impl PageFlags {
 }
 
 /// Builds a page with basic information.
-pub(crate) struct PageBuilder {
+pub(super) struct PageBuilder {
     tier: PageTier,
     kind: PageKind,
 }
 
 impl PageBuilder {
-    pub(crate) fn new(tier: PageTier, kind: PageKind) -> Self {
+    pub(super) fn new(tier: PageTier, kind: PageKind) -> Self {
         Self { tier, kind }
     }
 
-    pub(crate) fn size(&self, content_size: usize) -> usize {
+    pub(super) fn size(&self, content_size: usize) -> usize {
         PAGE_HEADER_LEN + content_size
     }
 
-    pub(crate) fn build(&self, page: &mut PageBuf<'_>) {
+    pub(super) fn build(&self, page: &mut PageBuf<'_>) {
         let flags = PageFlags::new(self.tier, self.kind);
         page.set_flags(flags);
         page.set_epoch(0);

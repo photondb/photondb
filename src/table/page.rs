@@ -15,8 +15,8 @@ pub(super) struct PageView<'a> {
 
 pub(super) struct MergingPageIter<'a, K, V>
 where
-    K: DecodeFrom + Ord,
-    V: DecodeFrom,
+    K: SortedPageKey,
+    V: SortedPageValue,
 {
     iter: MergingIter<SortedPageIter<'a, K, V>>,
     limit: Option<&'a [u8]>,
@@ -24,8 +24,8 @@ where
 
 impl<'a, K, V> MergingPageIter<'a, K, V>
 where
-    K: DecodeFrom + Ord,
-    V: DecodeFrom,
+    K: SortedPageKey,
+    V: SortedPageValue,
 {
     pub(super) fn new(
         iter: MergingIter<SortedPageIter<'a, K, V>>,
