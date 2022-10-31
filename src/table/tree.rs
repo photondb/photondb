@@ -340,7 +340,7 @@ impl<'a, E: Env> Session<'a, E> {
         }
 
         let page = SortedPageRef::<K, V>::from(view.page);
-        if let Some((split_key, right_iter)) = page.split() {
+        if let Some((split_key, right_iter)) = page.into_split_iter() {
             let mut txn = self.guard.begin();
             // Build and insert the right page.
             let right_id = {
@@ -351,7 +351,7 @@ impl<'a, E: Env> Session<'a, E> {
                 txn.insert_page(new_addr)
             };
             // Build a delta page with the right index.
-            let iter = ItemIter::new((split_key, Index::new(right_id, 0)));
+            let iter = ItemIter::new((split_key.as_raw(), Index::new(right_id, 0)));
             let builder = SortedPageBuilder::new(view.page.tier(), PageKind::Split).with_iter(iter);
             let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
             builder.build(&mut new_page);
