@@ -347,12 +347,12 @@ mod tests {
         Arc::new(Version::new(size, 1, HashMap::default(), HashSet::new()))
     }
 
-    #[test]
-    fn page_txn_update_page() {
+    #[photonio::test]
+    async fn page_txn_update_page() {
         let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(env, &base, "test_page_txn_update_page"))
+            Arc::new(PageFiles::new(env, &base, "test_page_txn_update_page").await)
         };
 
         let version = new_version(512);
@@ -365,16 +365,12 @@ mod tests {
         assert!(page_txn.update_page(id, addr, new).is_ok());
     }
 
-    #[test]
-    fn page_txn_failed_update_page() {
+    #[photonio::test]
+    async fn page_txn_failed_update_page() {
         let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(
-                env,
-                &base,
-                "test_page_txn_failed_update_page",
-            ))
+            Arc::new(PageFiles::new(env, &base, "test_page_txn_failed_update_page").await)
         };
 
         let version = new_version(1 << 10);
@@ -394,16 +390,12 @@ mod tests {
         assert!(page_txn.update_page(id, 1, addr).is_err());
     }
 
-    #[test]
-    fn page_txn_increment_page_addr_update() {
+    #[photonio::test]
+    async fn page_txn_increment_page_addr_update() {
         let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(
-                env,
-                &base,
-                "test_page_increment_page_addr_update",
-            ))
+            Arc::new(PageFiles::new(env, &base, "test_page_increment_page_addr_update").await)
         };
 
         let version = new_version(512);
@@ -413,12 +405,12 @@ mod tests {
         assert!(matches!(page_txn.update_page(1, 3, 2), Err(None)));
     }
 
-    #[test]
-    fn page_txn_replace_page() {
+    #[photonio::test]
+    async fn page_txn_replace_page() {
         let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(env, &base, "test_page_txn_replace_page"))
+            Arc::new(PageFiles::new(env, &base, "test_page_txn_replace_page").await)
         };
 
         let version = new_version(1 << 10);
@@ -431,12 +423,12 @@ mod tests {
         assert!(page_txn.replace_page(id, addr, new, &[1, 2, 3]).is_ok());
     }
 
-    #[test]
-    fn page_txn_seal_write_buffer() {
+    #[photonio::test]
+    async fn page_txn_seal_write_buffer() {
         let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(env, &base, "test_page_seal_write_buffer"))
+            Arc::new(PageFiles::new(env, &base, "test_page_seal_write_buffer").await)
         };
 
         let version = new_version(512);
@@ -446,12 +438,12 @@ mod tests {
         page_txn.seal_write_buffer();
     }
 
-    #[test]
-    fn page_txn_insert_page() {
+    #[photonio::test]
+    async fn page_txn_insert_page() {
         let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(env, &base, "test_page_insert_page"))
+            Arc::new(PageFiles::new(env, &base, "test_page_insert_page").await)
         };
 
         let version = new_version(512);

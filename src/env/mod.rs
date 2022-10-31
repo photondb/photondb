@@ -9,21 +9,13 @@ pub use stdenv::Std;
 mod photon;
 pub use photon::Photon;
 
-///  Options to configure how the file is written.
-// TODO: remove this after make manifest always open new file when restarting.
-#[derive(Default)]
-pub struct WriteOptions {
-    /// Sets the option for the append mode.
-    /// See also [`std::fs::OpenOptions::append`].
-    pub append: bool,
-}
-
 /// Provides an environment to interact with a specific platform.
 #[async_trait]
 pub trait Env: Clone + Send + Sync + 'static {
     type PositionalReader: PositionalReader;
     type SequentialWriter: SequentialWriter;
     type JoinHandle<T: Send>: Future<Output = T> + Send;
+    type Directory: Directory + Send + Sync + 'static;
 
     /// Opens a file for positional reads.
     async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
@@ -31,11 +23,7 @@ pub trait Env: Clone + Send + Sync + 'static {
         P: AsRef<Path> + Send;
 
     /// Opens a file for sequential writes.
-    async fn open_sequential_writer<P>(
-        &self,
-        path: P,
-        opt: WriteOptions,
-    ) -> Result<Self::SequentialWriter>
+    async fn open_sequential_writer<P>(&self, path: P) -> Result<Self::SequentialWriter>
     where
         P: AsRef<Path> + Send;
 
@@ -74,6 +62,9 @@ pub trait Env: Clone + Send + Sync + 'static {
     /// directory, etc.
     /// See alos [`std::fs::metadata`].
     async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Metadata>;
+
+    // Open the directory.
+    async fn open_dir<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::Directory>;
 }
 
 #[async_trait]
@@ -87,10 +78,6 @@ pub trait PositionalReader: Send + Sync + 'static {
     ///
     /// Returns the number of bytes read.
     fn read_at<'a>(&'a self, buf: &'a mut [u8], pos: u64) -> Self::ReadAt<'a>;
-
-    /// Synchronizes all modified data (include metadata) this file to disk.
-    /// For reader, it's normally used to sync on folder.
-    async fn sync_all(&mut self) -> Result<()>;
 
     /// Enable direct_io for the reader.
     /// return error if direct_io unsupported.
@@ -149,8 +136,6 @@ pub trait SequentialWriter: Send + Sync + 'static {
     /// Returns Ok when success.
     async fn sync_data(&mut self) -> Result<()>;
 
-    ///  Synchronizes all modified data (include metadata) this file to disk.
-    ///
     /// Returns Ok when success.
     async fn sync_all(&mut self) -> Result<()>;
 
@@ -230,4 +215,10 @@ pub(in crate::env) fn direct_io_ify(_: i32) -> Result<()> {
         std::io::ErrorKind::Unsupported,
         "enable direct io fail",
     ))
+}
+
+#[async_trait]
+pub trait Directory {
+    // Sync_all directory.
+    async fn sync_all(&self) -> Result<()>;
 }

@@ -16,7 +16,7 @@ pub(crate) mod facade {
 
     use super::{file_builder::DEFAULT_BLOCK_SIZE, file_reader::MetaReader, *};
     use crate::{
-        env::{Env, PositionalReader, SequentialWriter, WriteOptions},
+        env::{Env, PositionalReader, SequentialWriter},
         page_store::Result,
     };
 
@@ -25,6 +25,7 @@ pub(crate) mod facade {
     pub(crate) struct PageFiles<E: Env> {
         env: E,
         base: PathBuf,
+        base_dir: E::Directory,
 
         file_prefix: String,
         use_direct: bool,
@@ -33,30 +34,31 @@ pub(crate) mod facade {
     impl<E: Env> PageFiles<E> {
         /// Create page file facade.
         /// It should be a singleton in the page_store.
-        pub(crate) fn new(env: E, base: impl Into<PathBuf>, file_prefile: &str) -> Self {
+        pub(crate) async fn new(env: E, base: impl Into<PathBuf>, file_prefile: &str) -> Self {
+            let base = base.into();
+            let base_dir = env.open_dir(&base).await.expect("open base dir fail");
             Self {
                 env,
-                base: base.into(),
+                base,
+                base_dir,
                 file_prefix: file_prefile.into(),
                 use_direct: true,
             }
         }
 
         /// Create file_builder to write a new page_file.
-        pub(crate) async fn new_file_builder(
-            &self,
-            file_id: u32,
-        ) -> Result<FileBuilder<E::SequentialWriter>> {
+        pub(crate) async fn new_file_builder(&self, file_id: u32) -> Result<FileBuilder<E>> {
             // TODO: switch to env in suitable time.
             let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
             let writer = self
                 .env
-                .open_sequential_writer(path.to_owned(), WriteOptions::default())
+                .open_sequential_writer(path.to_owned())
                 .await
                 .expect("open reader for file_id: {file_id} fail");
             let use_direct = self.use_direct && writer.direct_io_ify().is_ok();
             Ok(FileBuilder::new(
                 file_id,
+                &self.base_dir,
                 writer,
                 use_direct,
                 DEFAULT_BLOCK_SIZE,
@@ -135,7 +137,7 @@ pub(crate) mod facade {
         fn test_file_builder() {
             let env = crate::env::Photon;
             let base = std::env::temp_dir();
-            let files = PageFiles::new(env, &base, "test_builder");
+            let files = PageFiles::new(env, &base, "test_builder").await;
             let mut builder = files.new_file_builder(11233).await.unwrap();
             builder.add_delete_pages(&[1, 2]);
             builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
@@ -147,7 +149,7 @@ pub(crate) mod facade {
             let env = crate::env::Photon;
             let files = {
                 let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_dread")
+                PageFiles::new(env, &base, "test_dread").await
             };
             let file_id = 2;
             let info = {
@@ -208,7 +210,7 @@ pub(crate) mod facade {
             let env = crate::env::Photon;
             let files = {
                 let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_simple_rw")
+                PageFiles::new(env, &base, "test_simple_rw").await
             };
 
             let file_id = 2;
@@ -268,7 +270,7 @@ pub(crate) mod facade {
             let env = crate::env::Photon;
             let files = {
                 let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_recovery")
+                PageFiles::new(env, &base, "test_recovery").await
             };
 
             let info_builder = files.new_info_builder();

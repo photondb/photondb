@@ -8,10 +8,7 @@ use std::{
 };
 
 use futures::FutureExt;
-use photonio::{
-    fs::{File, OpenOptions},
-    task,
-};
+use photonio::{fs::File, task};
 
 use super::*;
 
@@ -24,40 +21,20 @@ impl Env for Photon {
     type PositionalReader = PositionalReader;
     type SequentialWriter = SequentialWriter;
     type JoinHandle<T: Send> = JoinHandle<T>;
+    type Directory = Directory;
 
     async fn open_positional_reader<P>(&self, path: P) -> Result<Self::PositionalReader>
     where
         P: AsRef<Path> + Send,
     {
-        let path = path.as_ref();
-        let r = OpenOptions::new().read(true).open(path).await?;
-        Ok(PositionalReader(r))
+        Ok(PositionalReader(File::open(path).await?))
     }
 
-    async fn open_sequential_writer<P>(
-        &self,
-        path: P,
-        opt: WriteOptions,
-    ) -> Result<Self::SequentialWriter>
+    async fn open_sequential_writer<P>(&self, path: P) -> Result<Self::SequentialWriter>
     where
         P: AsRef<Path> + Send,
     {
-        let w = if opt.append {
-            OpenOptions::new()
-                .write(true)
-                .create(true)
-                .append(true)
-                .open(path)
-                .await
-        } else {
-            OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(path)
-                .await
-        }?;
-        Ok(SequentialWriter(w))
+        Ok(SequentialWriter(File::create(path).await?))
     }
 
     fn spawn_background<F>(&self, f: F) -> JoinHandle<F::Output>
@@ -109,6 +86,17 @@ impl Env for Photon {
         };
         Ok(metadata)
     }
+
+    async fn open_dir<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::Directory> {
+        let file = File::open(path).await?;
+        if !file.metadata().await?.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                "not a dir",
+            ));
+        }
+        Ok(Directory(file))
+    }
 }
 
 pub struct SequentialWriter(File);
@@ -121,6 +109,7 @@ impl super::SequentialWriter for SequentialWriter {
         self.0.write(buf)
     }
 
+    // TODO: sync range(sync start->current => sync last_offset->current)
     async fn sync_data(&mut self) -> Result<()> {
         self.0.sync_data().await
     }
@@ -148,10 +137,6 @@ impl super::PositionalReader for PositionalReader {
         self.0.read_at(buf, pos)
     }
 
-    async fn sync_all(&mut self) -> Result<()> {
-        self.0.sync_all().await
-    }
-
     fn direct_io_ify(&self) -> Result<()> {
         super::direct_io_ify(self.0.as_raw_fd())
     }
@@ -171,5 +156,14 @@ impl<T> Future for JoinHandle<T> {
             Poll::Ready(Err(e)) => panic!("JoinHandle error: {:?}", e),
             Poll::Pending => Poll::Pending,
         }
+    }
+}
+
+pub struct Directory(File);
+
+#[async_trait]
+impl super::Directory for Directory {
+    async fn sync_all(&self) -> Result<()> {
+        self.0.sync_all().await
     }
 }
