@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// An atomic counter with relaxed memory ordering.
 #[derive(Debug)]
 pub(crate) struct Counter(AtomicU64);
 
