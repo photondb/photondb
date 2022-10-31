@@ -400,7 +400,7 @@ mod tests {
 
         let mut iter = SortedPageIter::new(page);
         for _ in 0..2 {
-            for (a, b) in (&mut iter).zip(data.clone()) {
+            for (a, b) in (&mut iter).zip(data) {
                 assert_eq!(a, b);
             }
             iter.rewind();
