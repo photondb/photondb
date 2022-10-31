@@ -35,6 +35,7 @@ pub(crate) struct Range<'a> {
 }
 
 impl<'a> Range<'a> {
+    /// Returns a range that covers all keys.
     pub(crate) const fn full() -> Self {
         Self {
             start: [].as_slice(),
@@ -49,14 +50,36 @@ pub(crate) enum Value<'a> {
     Delete,
 }
 
+/// An index to a child page.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Index {
+    /// The page id of the child.
     pub(crate) id: u64,
+    /// The page epoch of the child.
     pub(crate) epoch: u64,
 }
 
 impl Index {
     pub(crate) const fn new(id: u64, epoch: u64) -> Self {
         Self { id, epoch }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_ord() {
+        let a = Key::new(b"foo", 1);
+        let b = Key::new(b"foo", 2);
+        let c = Key::new(b"bar", 1);
+        let d = Key::new(b"bar", 2);
+        assert!(a > b);
+        assert!(a > c);
+        assert!(a > d);
+        assert!(b > c);
+        assert!(b > d);
+        assert!(c > d);
     }
 }
