@@ -11,10 +11,25 @@ mod types;
 pub(crate) use facade::PageFiles;
 pub(crate) use types::{FileInfo, FileMeta};
 
-pub(crate) mod facade {
-    use std::path::PathBuf;
+pub(crate) mod constant {
+    /// Default alignment requirement for the SSD.
+    // TODO: query logical sector size
+    // like: https://github.com/DataDog/glommio/issues/7 or https://github.com/facebook/rocksdb/pull/1875
+    pub(crate) const DEFAULT_BLOCK_SIZE: usize = 4096;
 
-    use super::{file_builder::DEFAULT_BLOCK_SIZE, file_reader::MetaReader, *};
+    pub(crate) const IO_BUFFER_SIZE: usize = 4096 * 4;
+
+    pub(crate) const MAX_OPEN_READER_FD_NUM: u64 = 1000;
+}
+
+pub(crate) mod facade {
+    use std::{path::PathBuf, sync::Arc};
+
+    use super::{
+        constant::{DEFAULT_BLOCK_SIZE, MAX_OPEN_READER_FD_NUM},
+        file_reader::{self, MetaReader, ReaderCache},
+        *,
+    };
     use crate::{
         env::{Env, PositionalReader, SequentialWriter},
         page_store::Result,
@@ -29,6 +44,8 @@ pub(crate) mod facade {
 
         file_prefix: String,
         use_direct: bool,
+
+        reader_cache: file_reader::ReaderCache<E>,
     }
 
     impl<E: Env> PageFiles<E> {
@@ -37,12 +54,14 @@ pub(crate) mod facade {
         pub(crate) async fn new(env: E, base: impl Into<PathBuf>, file_prefile: &str) -> Self {
             let base = base.into();
             let base_dir = env.open_dir(&base).await.expect("open base dir fail");
+            let reader_cache = ReaderCache::new(MAX_OPEN_READER_FD_NUM);
             Self {
                 env,
                 base,
                 base_dir,
                 file_prefix: file_prefile.into(),
                 use_direct: true,
+                reader_cache,
             }
         }
 
@@ -72,16 +91,23 @@ pub(crate) mod facade {
             &self,
             file_id: u32,
             block_size: usize,
-        ) -> Result<PageFileReader<E::PositionalReader>> {
-            let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
+        ) -> Result<Arc<PageFileReader<E::PositionalReader>>> {
+            let r = self
+                .reader_cache
+                .get_with(file_id, async move {
+                    let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
 
-            let file = self
-                .env
-                .open_positional_reader(path)
-                .await
-                .expect("open reader for file_id: {file_id} fail");
-            let use_direct = self.use_direct && file.direct_io_ify().is_ok();
-            Ok(PageFileReader::from(file, use_direct, block_size))
+                    let file = self
+                        .env
+                        .open_positional_reader(path)
+                        .await
+                        .expect("open reader for file_id: {file_id} fail");
+                    let use_direct = self.use_direct && file.direct_io_ify().is_ok();
+
+                    Arc::new(PageFileReader::from(file, use_direct, block_size))
+                })
+                .await;
+            Ok(r)
         }
 
         // Create info_builder to help recovery & mantains version's file_info.
@@ -113,6 +139,7 @@ pub(crate) mod facade {
             for file_id in files {
                 // FIXME: handle error.
                 self.remove_file(file_id).await?;
+                self.reader_cache.invalidate(&file_id).await;
             }
             Ok(())
         }
