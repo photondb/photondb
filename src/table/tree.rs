@@ -1,81 +1,17 @@
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
-
-use super::{page::*, stats::*, Options};
+use super::{page::*, Tree};
 use crate::{
     env::Env,
     page::*,
-    page_store::{Error, Guard, Result, RewritePage},
+    page_store::{Error, Guard, Result},
 };
-
-pub(super) struct Tree {
-    options: Options,
-    stats: AtomicStats,
-    safe_lsn: AtomicU64,
-}
-
-impl Tree {
-    pub(super) fn new(options: Options) -> Self {
-        Self {
-            options,
-            stats: AtomicStats::default(),
-            safe_lsn: AtomicU64::new(0),
-        }
-    }
-
-    pub(super) fn begin<'a, E: Env>(&'a self, guard: &'a Guard<'_, E>) -> TreeTxn<'a, E> {
-        TreeTxn::new(self, guard)
-    }
-
-    pub(super) fn stats(&self) -> Stats {
-        self.stats.snapshot()
-    }
-
-    pub(super) fn safe_lsn(&self) -> u64 {
-        self.safe_lsn.load(Ordering::Acquire)
-    }
-
-    pub(super) fn set_safe_lsn(&self, lsn: u64) {
-        loop {
-            let safe_lsn = self.safe_lsn.load(Ordering::Acquire);
-            // Make sure that the safe LSN is increasing.
-            if safe_lsn >= lsn {
-                return;
-            }
-            if self
-                .safe_lsn
-                .compare_exchange(safe_lsn, lsn, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                return;
-            }
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl<E: Env> RewritePage<E> for Arc<Tree> {
-    async fn rewrite(&self, id: u64, guard: &Guard<'_, E>) -> Result<(), Error> {
-        loop {
-            let txn = self.begin(guard);
-            match txn.rewrite_page(id).await {
-                Ok(_) => return Ok(()),
-                Err(Error::Again) => continue,
-                Err(e) => return Err(e),
-            }
-        }
-    }
-}
 
 pub(super) struct TreeTxn<'a, E: Env> {
     tree: &'a Tree,
-    guard: &'a Guard<'a, E>,
+    guard: Guard<'a, E>,
 }
 
 impl<'a, E: Env> TreeTxn<'a, E> {
-    pub(super) fn new(tree: &'a Tree, guard: &'a Guard<'a, E>) -> Self {
+    pub(super) fn new(tree: &'a Tree, guard: Guard<'a, E>) -> Self {
         Self { tree, guard }
     }
 
@@ -101,38 +37,12 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
     /// Gets the value corresponding to the key.
     pub(super) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
-        match self.get_impl(key).await {
-            Ok(v) => {
-                self.tree.stats.success.get.inc();
-                Ok(v)
-            }
-            Err(e) => {
-                self.tree.stats.failure.get.inc();
-                Err(e)
-            }
-        }
-    }
-
-    async fn get_impl(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
         let (view, _) = self.find_leaf(&key).await?;
         self.find_value(&key, &view).await
     }
 
     /// Writes the key-value pair to the tree.
     pub(super) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
-        match self.write_impl(key, value).await {
-            Ok(_) => {
-                self.tree.stats.success.write.inc();
-                Ok(())
-            }
-            Err(e) => {
-                self.tree.stats.failure.write.inc();
-                Err(e)
-            }
-        }
-    }
-
-    async fn write_impl(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
         let (mut view, parent) = self.find_leaf(&key).await?;
         // Build a delta page with the given key-value pair.
         let iter = ItemIter::new((key, value));
@@ -495,7 +405,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     /// Rewrites the page to reclaim its space.
-    async fn rewrite_page(&self, id: u64) -> Result<()> {
+    pub(super) async fn rewrite_page(&self, id: u64) -> Result<()> {
         let view = self.page_view(id, None).await?;
         self.consolidate_page(view).await?;
         Ok(())

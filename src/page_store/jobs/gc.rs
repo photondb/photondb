@@ -1,9 +1,8 @@
 use std::{
     collections::{BTreeMap, HashSet},
+    future::Future,
     sync::Arc,
 };
-
-use async_trait::async_trait;
 
 use crate::{
     env::Env,
@@ -13,17 +12,24 @@ use crate::{
     util::shutdown::{with_shutdown, Shutdown},
 };
 
-/// An abstraction describes how to move pages to the end of page files.
-#[async_trait]
-pub(crate) trait RewritePage<E: Env>: Send + Sync {
-    /// Rewrite the corresponding page to the end of page files.
-    async fn rewrite(&self, page_id: u64, guard: &Guard<'_, E>) -> Result<()>;
+/// Rewrites pages to reclaim disk space.
+pub(crate) trait RewritePage<E: Env>: Send + Sync + 'static {
+    type Rewrite<'a>: Future<Output = Result<()>> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Rewrites the corresponding page to reclaim the space it occupied.
+    fn rewrite<'a>(&'a self, page_id: u64, guard: Guard<'a, E>) -> Self::Rewrite<'a>;
 }
 
-pub(crate) struct GcCtx<E: Env> {
+pub(crate) struct GcCtx<E, R>
+where
+    E: Env,
+    R: RewritePage<E>,
+{
     shutdown: Shutdown,
 
-    rewriter: Box<dyn RewritePage<E>>,
+    rewriter: R,
     strategy_builder: Box<dyn StrategyBuilder>,
 
     page_table: PageTable,
@@ -32,10 +38,14 @@ pub(crate) struct GcCtx<E: Env> {
     cleaned_files: HashSet<u32>,
 }
 
-impl<E: Env> GcCtx<E> {
+impl<E, R> GcCtx<E, R>
+where
+    E: Env,
+    R: RewritePage<E>,
+{
     pub(crate) fn new(
         shutdown: Shutdown,
-        rewriter: Box<dyn RewritePage<E>>,
+        rewriter: R,
         strategy_builder: Box<dyn StrategyBuilder>,
         page_table: PageTable,
         page_files: Arc<PageFiles<E>>,
@@ -99,6 +109,17 @@ impl<E: Env> GcCtx<E> {
         Ok(())
     }
 
+    async fn rewrite_page(&self, version: Arc<Version>, page_id: u64) -> Result<()> {
+        loop {
+            let guard = Guard::new(version.clone(), &self.page_table, &self.page_files);
+            match self.rewriter.rewrite(page_id, guard).await {
+                Ok(_) => return Ok(()),
+                Err(Error::Again) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     async fn rewrite_active_pages(
         &self,
         file: &FileInfo,
@@ -106,7 +127,6 @@ impl<E: Env> GcCtx<E> {
         page_table: &BTreeMap<u64, u64>,
     ) -> Result<()> {
         let version = Arc::new(version.clone());
-        let guard = Guard::new(version.clone(), &self.page_table, &self.page_files);
         let mut rewrite_pages = HashSet::new();
         for page_addr in file.iter() {
             let page_id = page_table
@@ -117,7 +137,7 @@ impl<E: Env> GcCtx<E> {
                 continue;
             }
             rewrite_pages.insert(page_id);
-            self.rewriter.rewrite(page_id, &guard).await?;
+            self.rewrite_page(version.clone(), page_id).await?;
         }
         Ok(())
     }
