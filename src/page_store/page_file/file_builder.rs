@@ -1,12 +1,13 @@
 use std::{
     alloc::Layout,
     collections::{BTreeMap, BTreeSet},
+    marker::PhantomData,
     sync::Arc,
 };
 
 use super::{types::split_page_addr, FileInfo, FileMeta};
 use crate::{
-    env::{Directory, SequentialWriter, SequentialWriterExt},
+    env::{Directory, Env, SequentialWriter, SequentialWriterExt},
     page_store::{Error, Result},
 };
 
@@ -28,14 +29,10 @@ const IO_BUFFER_SIZE: usize = 4096 * 4;
 ///
 /// `page_addr`'s high 32 bit always be `file-id`(`PageAddr = {file id} {write
 /// buffer index}`), so it only store lower 32 bit.
-pub(crate) struct FileBuilder<'a, W, D>
-where
-    W: SequentialWriter,
-    D: Directory + Send + Sync + 'static,
-{
+pub(crate) struct FileBuilder<'a, E: Env> {
     file_id: u32,
 
-    writer: BufferedWriter<'a, W, D>,
+    writer: BufferedWriter<'a, E>,
 
     index: IndexBlockBuilder,
     meta: MetaBlockBuilder,
@@ -44,16 +41,12 @@ where
     block_size: usize,
 }
 
-impl<'a, W, D> FileBuilder<'a, W, D>
-where
-    W: SequentialWriter,
-    D: Directory + Send + Sync + 'static,
-{
+impl<'a, E: Env> FileBuilder<'a, E> {
     /// Create new file builder for given writer.
     pub(crate) fn new(
         file_id: u32,
-        base_dir: &'a D,
-        file: W,
+        base_dir: &'a E::Directory,
+        file: E::SequentialWriter,
         use_direct: bool,
         block_size: usize,
     ) -> Self {
@@ -100,11 +93,7 @@ where
     }
 }
 
-impl<'a, W, D> FileBuilder<'a, W, D>
-where
-    W: SequentialWriter,
-    D: Directory + Send + Sync + 'static,
-{
+impl<'a, E: Env> FileBuilder<'a, E> {
     async fn finish_meta_block(&mut self) -> Result<()> {
         {
             let page_tables = self.meta.finish_page_table_block();
@@ -456,13 +445,9 @@ impl IndexBlock {
     }
 }
 
-struct BufferedWriter<'a, W, D>
-where
-    W: SequentialWriter,
-    D: Directory + Send + Sync + 'static,
-{
-    file: W,
-    base_dir: &'a D,
+struct BufferedWriter<'a, E: Env> {
+    file: E::SequentialWriter,
+    base_dir: &'a E::Directory,
 
     use_direct: bool,
 
@@ -472,19 +457,16 @@ where
     align_size: usize,
     buffer: AlignBuffer,
     buf_pos: usize,
+    _mark: PhantomData<E>,
 }
 
-impl<'a, W, D> BufferedWriter<'a, W, D>
-where
-    W: SequentialWriter,
-    D: Directory + Send + Sync + 'static,
-{
+impl<'a, E: Env> BufferedWriter<'a, E> {
     fn new(
-        file: W,
+        file: E::SequentialWriter,
         io_batch_size: usize,
         use_direct: bool,
         align_size: usize,
-        base_dir: &'a D,
+        base_dir: &'a E::Directory,
     ) -> Self {
         let buffer = AlignBuffer::new(io_batch_size, align_size);
         Self {
@@ -496,6 +478,7 @@ where
             align_size,
             buffer,
             buf_pos: 0,
+            _mark: PhantomData,
         }
     }
 
@@ -649,7 +632,8 @@ mod tests {
                 .open_sequential_writer(path1.to_owned())
                 .await
                 .expect("open file_id: {file_id}'s file fail");
-            let mut bw1 = BufferedWriter::new(file1, 4096 + 1, use_direct, 512, &base);
+            let mut bw1 =
+                BufferedWriter::<crate::env::Photon>::new(file1, 4096 + 1, use_direct, 512, &base);
             bw1.write(&[1].repeat(10)).await.unwrap(); // only fill buffer
             bw1.write(&[2].repeat(4096 * 2 + 1)).await.unwrap(); // trigger flush
             bw1.write(&[3].repeat(4096 * 2 + 1)).await.unwrap(); // trigger flush

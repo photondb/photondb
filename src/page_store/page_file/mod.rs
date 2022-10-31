@@ -47,10 +47,7 @@ pub(crate) mod facade {
         }
 
         /// Create file_builder to write a new page_file.
-        pub(crate) async fn new_file_builder(
-            &self,
-            file_id: u32,
-        ) -> Result<FileBuilder<E::SequentialWriter, E::Directory>> {
+        pub(crate) async fn new_file_builder(&self, file_id: u32) -> Result<FileBuilder<E>> {
             // TODO: switch to env in suitable time.
             let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
             let writer = self
