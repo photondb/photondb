@@ -1,7 +1,7 @@
 use std::{mem, slice};
 
-/// Encodes an object.
-pub(crate) trait EncodeTo {
+/// Allows an object to be encoded and decoded.
+pub(crate) trait Codec {
     /// Returns the exact size to encode the object.
     fn encode_size(&self) -> usize;
 
@@ -11,10 +11,7 @@ pub(crate) trait EncodeTo {
     ///
     /// The encoder must have enough space to encode the object.
     unsafe fn encode_to(&self, encoder: &mut Encoder);
-}
 
-/// Decodes an object.
-pub(crate) trait DecodeFrom {
     /// Decodes an object from the decoder.
     ///
     /// # Safety
@@ -25,8 +22,8 @@ pub(crate) trait DecodeFrom {
 
 // An unsafe, little-endian encoder.
 pub(crate) struct Encoder {
-    buf: *mut u8,
     len: usize,
+    start: *mut u8,
     cursor: *mut u8,
 }
 
@@ -44,8 +41,8 @@ macro_rules! put_int {
 impl Encoder {
     pub(super) fn new(buf: &mut [u8]) -> Self {
         Self {
-            buf: buf.as_mut_ptr(),
             len: buf.len(),
+            start: buf.as_mut_ptr(),
             cursor: buf.as_mut_ptr(),
         }
     }
@@ -55,7 +52,7 @@ impl Encoder {
     }
 
     pub(super) unsafe fn offset(&self) -> usize {
-        self.cursor.offset_from(self.buf) as _
+        self.cursor.offset_from(self.start) as _
     }
 
     pub(super) unsafe fn remaining(&self) -> usize {
@@ -83,8 +80,8 @@ impl Encoder {
 
 // An unsafe, little-endian decoder.
 pub(crate) struct Decoder {
-    buf: *const u8,
     len: usize,
+    start: *const u8,
     cursor: *const u8,
 }
 
@@ -105,8 +102,8 @@ macro_rules! get_int {
 impl Decoder {
     pub(super) fn new(buf: &[u8]) -> Self {
         Self {
-            buf: buf.as_ptr(),
             len: buf.len(),
+            start: buf.as_ptr(),
             cursor: buf.as_ptr(),
         }
     }
@@ -116,7 +113,7 @@ impl Decoder {
     }
 
     pub(super) unsafe fn offset(&self) -> usize {
-        self.cursor.offset_from(self.buf) as _
+        self.cursor.offset_from(self.start) as _
     }
 
     pub(super) unsafe fn remaining(&self) -> usize {

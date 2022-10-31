@@ -27,9 +27,9 @@ pub(crate) struct PagePtr {
 }
 
 impl PagePtr {
-    unsafe fn new(ptr: NonNull<u8>, len: usize) -> Self {
-        debug_assert!(ptr.as_ptr().is_aligned_to(8));
-        debug_assert!(len >= PAGE_HEADER_LEN);
+    fn new(ptr: NonNull<u8>, len: usize) -> Self {
+        assert!(ptr.as_ptr().is_aligned_to(8));
+        assert!(len >= PAGE_HEADER_LEN);
         Self { ptr, len }
     }
 
