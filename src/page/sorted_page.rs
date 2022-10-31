@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, marker::PhantomData, mem, ops::Deref, slice};
+use std::{borrow::Borrow, cmp::Ordering, marker::PhantomData, mem, ops::Deref, slice};
 
 use super::{
     codec::*, data::*, PageBuf, PageBuilder, PageKind, PageRef, PageTier, RewindableIterator,
@@ -93,6 +93,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct SortedPageRef<'a, K, V> {
     page: PageRef<'a>,
     content: &'a [u8],
@@ -142,7 +143,11 @@ where
         }
     }
 
-    pub(crate) fn rank(&self, target: &K) -> Result<usize, usize> {
+    pub(crate) fn rank<Q: ?Sized>(&self, target: &Q) -> Result<usize, usize>
+    where
+        K: Borrow<Q>,
+        Q: Ord,
+    {
         let mut left = 0;
         let mut right = self.len();
         while left < right {
@@ -152,7 +157,7 @@ where
                 let mut dec = Decoder::new(item);
                 K::decode_from(&mut dec)
             };
-            match key.cmp(target) {
+            match key.borrow().cmp(target) {
                 Ordering::Less => left = mid + 1,
                 Ordering::Greater => right = mid,
                 Ordering::Equal => return Ok(mid),
@@ -161,8 +166,19 @@ where
         Err(left)
     }
 
-    pub(crate) fn split(&self) -> Option<(K, SortedPageIter<'a, K, V>)> {
-        todo!()
+    pub(crate) fn into_split_iter(self) -> Option<(K, SortedPageIter<'a, K, V>)> {
+        if let Some((mid, _)) = self.get(self.len() / 2) {
+            let sep = mid.as_split_separator();
+            let index = match self.rank(&sep) {
+                Ok(i) => i,
+                Err(i) => i,
+            };
+            if index > 0 {
+                let iter = SortedPageIter::new(self, index);
+                return Some((sep, iter));
+            }
+        }
+        None
     }
 
     fn item(&self, index: usize) -> Option<&[u8]> {
@@ -200,12 +216,17 @@ where
 
 pub(crate) struct SortedPageIter<'a, K, V> {
     page: SortedPageRef<'a, K, V>,
+    init: usize,
     next: usize,
 }
 
 impl<'a, K, V> SortedPageIter<'a, K, V> {
-    pub(crate) fn new(page: SortedPageRef<'a, K, V>) -> Self {
-        Self { page, next: 0 }
+    pub(crate) fn new(page: SortedPageRef<'a, K, V>, init: usize) -> Self {
+        Self {
+            page,
+            init,
+            next: init,
+        }
     }
 }
 
@@ -216,7 +237,7 @@ where
     T: Into<SortedPageRef<'a, K, V>>,
 {
     fn from(page: T) -> Self {
-        Self::new(page.into())
+        Self::new(page.into(), 0)
     }
 }
 
@@ -256,14 +277,14 @@ where
     V: SortedPageValue,
 {
     fn rewind(&mut self) {
-        self.next = 0;
+        self.next = self.init;
     }
 }
 
 pub(crate) trait SortedPageKey: EncodeTo + DecodeFrom + Clone + Ord {
-    fn as_raw_key(&self) -> &[u8];
+    fn as_raw(&self) -> &[u8];
 
-    fn to_split_key(self) -> Self;
+    fn as_split_separator(&self) -> Self;
 }
 
 pub(crate) trait SortedPageValue: EncodeTo + DecodeFrom {}
@@ -289,11 +310,11 @@ impl DecodeFrom for &[u8] {
 }
 
 impl SortedPageKey for &[u8] {
-    fn as_raw_key(&self) -> &[u8] {
+    fn as_raw(&self) -> &[u8] {
         self
     }
 
-    fn to_split_key(self) -> Self {
+    fn as_split_separator(&self) -> Self {
         self
     }
 }
@@ -317,14 +338,14 @@ impl DecodeFrom for Key<'_> {
     }
 }
 
-impl<'a> SortedPageKey for Key<'a> {
-    fn as_raw_key(&self) -> &'a [u8] {
+impl SortedPageKey for Key<'_> {
+    fn as_raw(&self) -> &[u8] {
         self.raw
     }
 
-    fn to_split_key(mut self) -> Self {
-        self.lsn = u64::MAX;
-        self
+    fn as_split_separator(&self) -> Self {
+        // Avoid splitting on the same raw key.
+        Key::new(self.raw, u64::MAX)
     }
 }
 
@@ -385,7 +406,10 @@ impl DecodeFrom for Index {
 mod tests {
     use std::alloc::{alloc, Layout};
 
-    use super::{super::SliceIter, *};
+    use super::{
+        super::{ItemIter, SliceIter},
+        *,
+    };
 
     fn alloc_page(size: usize) -> Box<[u8]> {
         let layout = Layout::from_size_align(size, 8).unwrap();
@@ -396,38 +420,88 @@ mod tests {
         }
     }
 
-    #[test]
-    fn sorted_page() {
-        let data = [[1], [3], [5]];
-        let input = data
-            .iter()
-            .map(|v| (v.as_slice(), v.as_slice()))
-            .collect::<Vec<_>>();
-        let iter = SliceIter::new(&input);
+    fn build_page<I, K, V>(iter: I) -> Box<[u8]>
+    where
+        I: RewindableIterator<Item = (K, V)>,
+        K: SortedPageKey,
+        V: SortedPageValue,
+    {
         let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
         let mut buf = alloc_page(builder.size());
         let mut page = PageBuf::new(buf.as_mut());
         builder.build(&mut page);
+        buf
+    }
 
-        let page: SortedPageRef<&[u8], &[u8]> = SortedPageRef::new(page.into());
+    #[test]
+    fn sorted_page() {
+        let data = [[1], [3], [5]]
+            .iter()
+            .map(|v| (v.as_slice(), v.as_slice()))
+            .collect::<Vec<_>>();
+        let buf = build_page(SliceIter::new(&data));
+        let page: SortedPageRef<&[u8], &[u8]> = buf.as_ref().into();
+        assert_eq!(page.tier(), PageTier::Leaf);
+        assert_eq!(page.kind(), PageKind::Data);
+
         assert_eq!(page.len(), data.len());
-        assert_eq!(page.get(0), Some(input[0]));
-        assert_eq!(page.get(1), Some(input[1]));
-        assert_eq!(page.get(2), Some(input[2]));
+        assert_eq!(page.get(0), Some(data[0]));
+        assert_eq!(page.get(1), Some(data[1]));
+        assert_eq!(page.get(2), Some(data[2]));
         assert_eq!(page.get(3), None);
-        assert_eq!(page.rank(&[0].as_slice()), Err(0));
-        assert_eq!(page.rank(&[1].as_slice()), Ok(0));
-        assert_eq!(page.rank(&[2].as_slice()), Err(1));
-        assert_eq!(page.rank(&[3].as_slice()), Ok(1));
-        assert_eq!(page.rank(&[4].as_slice()), Err(2));
-        assert_eq!(page.rank(&[5].as_slice()), Ok(2));
 
-        let mut iter = SortedPageIter::new(page);
+        assert_eq!(page.rank([0].as_slice()), Err(0));
+        assert_eq!(page.rank([1].as_slice()), Ok(0));
+        assert_eq!(page.rank([2].as_slice()), Err(1));
+        assert_eq!(page.rank([3].as_slice()), Ok(1));
+        assert_eq!(page.rank([4].as_slice()), Err(2));
+        assert_eq!(page.rank([5].as_slice()), Ok(2));
+
+        let mut iter = SortedPageIter::from(page);
         for _ in 0..2 {
-            for (a, b) in (&mut iter).zip(input.clone()) {
+            for (a, b) in (&mut iter).zip(data.clone()) {
                 assert_eq!(a, b);
             }
             iter.rewind();
         }
+    }
+
+    #[test]
+    fn sorted_page_split() {
+        // The middle key is ([3], 2), but it should split at ([3], 3).
+        let data = [([1], 2), ([1], 1), ([3], 3), ([3], 2), ([3], 1), ([3], 0)]
+            .iter()
+            .map(|(raw, lsn)| (Key::new(raw.as_slice(), *lsn), raw.as_slice()))
+            .collect::<Vec<_>>();
+        let buf = build_page(SliceIter::new(&data));
+        let page: SortedPageRef<Key, &[u8]> = buf.as_ref().into();
+        let (split_key, mut split_iter) = page.into_split_iter().unwrap();
+        assert_eq!(split_key, Key::new([3].as_slice(), u64::MAX));
+        let split_data = [([3], 3), ([3], 2), ([3], 1), ([3], 0)]
+            .iter()
+            .map(|(raw, lsn)| (Key::new(raw.as_slice(), *lsn), raw.as_slice()))
+            .collect::<Vec<_>>();
+        for _ in 0..2 {
+            for (a, b) in (&mut split_iter).zip(split_data.clone()) {
+                assert_eq!(a, b);
+            }
+            split_iter.rewind();
+        }
+    }
+
+    #[test]
+    fn sorted_page_split_none() {
+        let iter = ItemIter::new(([1].as_slice(), [1].as_slice()));
+        let buf = build_page(iter);
+        let page: SortedPageRef<&[u8], &[u8]> = buf.as_ref().into();
+        assert!(page.into_split_iter().is_none());
+
+        let data = [([1], 2), ([1], 1), ([3], 3)]
+            .iter()
+            .map(|(raw, lsn)| (Key::new(raw.as_slice(), *lsn), raw.as_slice()))
+            .collect::<Vec<_>>();
+        let buf = build_page(SliceIter::new(&data));
+        let page: SortedPageRef<Key, &[u8]> = buf.as_ref().into();
+        assert!(page.into_split_iter().is_none());
     }
 }

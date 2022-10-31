@@ -196,6 +196,12 @@ impl<'a> DerefMut for PageBuf<'a> {
     }
 }
 
+impl<'a> From<&'a mut [u8]> for PageBuf<'a> {
+    fn from(buf: &'a mut [u8]) -> Self {
+        PageBuf::new(buf)
+    }
+}
+
 impl<'a> From<PagePtr> for PageBuf<'a> {
     fn from(ptr: PagePtr) -> Self {
         PageBuf {
@@ -232,6 +238,12 @@ impl<'a> Deref for PageRef<'a> {
 
     fn deref(&self) -> &Self::Target {
         &self.ptr
+    }
+}
+
+impl<'a> From<&'a [u8]> for PageRef<'a> {
+    fn from(buf: &'a [u8]) -> Self {
+        PageRef::new(buf)
     }
 }
 
