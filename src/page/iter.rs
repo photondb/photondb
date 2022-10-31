@@ -28,6 +28,10 @@ impl<T: Clone> ItemIter<T> {
         Self::with_option(Some(item))
     }
 
+    pub(crate) fn none() -> Self {
+        Self::with_option(None)
+    }
+
     pub(crate) fn with_option(item: Option<T>) -> Self {
         Self {
             next: item.clone(),
@@ -314,6 +318,12 @@ mod tests {
         let mut iter = ItemIter::new(1);
         for _ in 0..2 {
             assert_eq!(iter.next(), Some(1));
+            assert_eq!(iter.next(), None);
+            iter.rewind();
+        }
+
+        let mut iter: ItemIter<()> = ItemIter::none();
+        for _ in 0..2 {
             assert_eq!(iter.next(), None);
             iter.rewind();
         }

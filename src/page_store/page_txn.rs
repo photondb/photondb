@@ -55,6 +55,15 @@ impl<'a, E: Env> Guard<'a, E> {
         }
     }
 
+    /// Returns the address of the corresponding page.
+    ///
+    /// Returns 0 if the page is not found.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the page id is larger than [`MAX_ID`].
+    ///
+    /// [`MAX_ID`]: super::MAX_ID
     #[inline]
     pub(crate) fn page_addr(&self, id: u64) -> u64 {
         self.page_table.get(id)

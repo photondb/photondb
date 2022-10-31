@@ -81,7 +81,7 @@ impl<'a, E: Env> Session<'a, E> {
         }
 
         // Insert an empty page as the root.
-        let iter: ItemIter<(Key, Value)> = ItemIter::with_option(None);
+        let iter: ItemIter<(Key, Value)> = ItemIter::none();
         let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
         let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
