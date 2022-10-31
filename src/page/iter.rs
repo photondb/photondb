@@ -373,7 +373,7 @@ mod tests {
         let mut iter = builder.build();
 
         for _ in 0..2 {
-            for item in output.clone() {
+            for item in output {
                 assert_eq!(iter.next(), Some(item));
             }
             assert_eq!(iter.next(), None);
