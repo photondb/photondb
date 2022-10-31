@@ -288,16 +288,19 @@ where
     I: Iterator<Item = (K, V)>,
     K: Ord,
 {
+    /// Creates a [`MergingIterBuilder`] with the given capacity.
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             iters: Vec::with_capacity(capacity),
         }
     }
 
+    /// Returns the number of iterators in the builder.
     pub(crate) fn len(&self) -> usize {
         self.iters.len()
     }
 
+    /// Adds an iterator to the builder.
     pub(crate) fn add(&mut self, iter: I) {
         let rank = self.iters.len();
         self.iters.push(Reverse(OrderedIter::new(iter, rank)));
@@ -364,13 +367,13 @@ mod tests {
         ];
 
         let mut builder = MergingIterBuilder::default();
-        for data in input.iter() {
-            builder.add(SliceIter::new(data));
+        for slice in input.iter() {
+            builder.add(SliceIter::new(slice));
         }
         let mut iter = builder.build();
 
         for _ in 0..2 {
-            for item in output.iter().copied() {
+            for item in output {
                 assert_eq!(iter.next(), Some(item));
             }
             assert_eq!(iter.next(), None);

@@ -13,7 +13,7 @@ pub(crate) struct SortedPageBuilder<I> {
     content_size: usize,
 }
 
-impl<'a, I, K, V> SortedPageBuilder<I>
+impl<I, K, V> SortedPageBuilder<I>
 where
     I: RewindableIterator<Item = (K, V)>,
     K: SortedPageKey,
@@ -38,6 +38,9 @@ where
             self.content_size += k.encode_size() + v.encode_size();
         }
         self.content_size += self.num_items * mem::size_of::<u32>();
+        // We use `u32` to store item offsets, so the content size must not exceed
+        // `u32::MAX`.
+        assert!(self.content_size <= u32::MAX as usize);
         self.iter = Some(iter);
         self
     }
@@ -48,7 +51,7 @@ where
     }
 
     /// Builds the page with the given information.
-    pub(crate) fn build(mut self, page: &'a mut PageBuf<'_>) {
+    pub(crate) fn build(mut self, page: &mut PageBuf<'_>) {
         self.base.build(page);
         let content = page.content_mut();
         assert_eq!(content.len(), self.content_size);
@@ -93,6 +96,7 @@ where
     }
 }
 
+/// An immutable reference to a sorted page.
 #[derive(Clone)]
 pub(crate) struct SortedPageRef<'a, K, V> {
     page: PageRef<'a>,
@@ -110,13 +114,13 @@ where
         let content = page.content();
         let offsets = unsafe {
             let ptr = content.as_ptr() as *const u32;
-            let size = if content.is_empty() {
+            let len = if content.is_empty() {
                 0
             } else {
-                u32::from_le(ptr.read()) as usize
+                let size = u32::from_le(ptr.read());
+                size as usize / mem::size_of::<u32>()
             };
-            let num_offsets = size / mem::size_of::<u32>();
-            slice::from_raw_parts(ptr, num_offsets)
+            slice::from_raw_parts(ptr, len)
         };
         Self {
             page,
@@ -126,10 +130,12 @@ where
         }
     }
 
+    /// Returns the number of items in the page.
     pub(crate) fn len(&self) -> usize {
         self.offsets.len()
     }
 
+    /// Returns the item at the given index.
     pub(crate) fn get(&self, index: usize) -> Option<(K, V)> {
         if let Some(item) = self.item(index) {
             let mut dec = Decoder::new(item);
@@ -143,6 +149,13 @@ where
         }
     }
 
+    /// Returns the rank of the target in the page.
+    ///
+    /// If the value is found then [`Result::Ok`] is returned, containing the
+    /// index of the matching item. If there are multiple matches, then any
+    /// one of the matches could be returned. If the value is not found then
+    /// [`Result::Err`] is returned, containing the index where a matching item
+    /// could be inserted while maintaining sorted order.
     pub(crate) fn rank<Q: ?Sized>(&self, target: &Q) -> Result<usize, usize>
     where
         K: Borrow<Q>,
@@ -166,6 +179,11 @@ where
         Err(left)
     }
 
+    /// Finds a separator to split the page into two halves.
+    ///
+    /// If a split separator is found then [`Result::Ok`] is returned,
+    /// containing the separator and an iterator over the items at and after
+    /// the separator.
     pub(crate) fn into_split_iter(self) -> Option<(K, SortedPageIter<'a, K, V>)> {
         if let Some((mid, _)) = self.get(self.len() / 2) {
             let sep = mid.as_split_separator();
@@ -214,6 +232,7 @@ where
     }
 }
 
+/// An iterator over the items in a sorted page.
 pub(crate) struct SortedPageIter<'a, K, V> {
     page: SortedPageRef<'a, K, V>,
     init: usize,
@@ -221,6 +240,8 @@ pub(crate) struct SortedPageIter<'a, K, V> {
 }
 
 impl<'a, K, V> SortedPageIter<'a, K, V> {
+    /// Creates a [`SortedPageIter`] over items in the given page, starting from
+    /// the initial index.
     pub(crate) fn new(page: SortedPageRef<'a, K, V>, init: usize) -> Self {
         Self {
             page,
@@ -281,17 +302,21 @@ where
     }
 }
 
-pub(crate) trait SortedPageKey: EncodeTo + DecodeFrom + Clone + Ord {
+/// Required methods for keys in a sorted page.
+pub(crate) trait SortedPageKey: Codec + Clone + Ord {
+    /// Returns the raw part of the key.
     fn as_raw(&self) -> &[u8];
 
+    /// Returns a key that can be used as a split separator.
     fn as_split_separator(&self) -> Self;
 }
 
-pub(crate) trait SortedPageValue: EncodeTo + DecodeFrom {}
+/// Required methods for values in a sorted page.
+pub(crate) trait SortedPageValue: Codec + Clone {}
 
-impl<T> SortedPageValue for T where T: EncodeTo + DecodeFrom {}
+impl<T> SortedPageValue for T where T: Codec + Clone {}
 
-impl EncodeTo for &[u8] {
+impl Codec for &[u8] {
     fn encode_size(&self) -> usize {
         mem::size_of::<u32>() + self.len()
     }
@@ -300,9 +325,7 @@ impl EncodeTo for &[u8] {
         enc.put_u32(self.len() as u32);
         enc.put_slice(self);
     }
-}
 
-impl DecodeFrom for &[u8] {
     unsafe fn decode_from(dec: &mut Decoder) -> Self {
         let len = dec.get_u32() as usize;
         dec.get_slice(len)
@@ -319,7 +342,7 @@ impl SortedPageKey for &[u8] {
     }
 }
 
-impl EncodeTo for Key<'_> {
+impl Codec for Key<'_> {
     fn encode_size(&self) -> usize {
         self.raw.encode_size() + mem::size_of::<u64>()
     }
@@ -328,11 +351,9 @@ impl EncodeTo for Key<'_> {
         self.raw.encode_to(enc);
         enc.put_u64(self.lsn);
     }
-}
 
-impl DecodeFrom for Key<'_> {
     unsafe fn decode_from(dec: &mut Decoder) -> Self {
-        let raw = DecodeFrom::decode_from(dec);
+        let raw = Codec::decode_from(dec);
         let lsn = dec.get_u64();
         Self::new(raw, lsn)
     }
@@ -353,7 +374,7 @@ impl SortedPageKey for Key<'_> {
 const VALUE_KIND_PUT: u8 = 0;
 const VALUE_KIND_DELETE: u8 = 1;
 
-impl EncodeTo for Value<'_> {
+impl Codec for Value<'_> {
     fn encode_size(&self) -> usize {
         1 + match self {
             Self::Put(v) => v.len(),
@@ -370,9 +391,7 @@ impl EncodeTo for Value<'_> {
             Value::Delete => enc.put_u8(VALUE_KIND_DELETE),
         }
     }
-}
 
-impl DecodeFrom for Value<'_> {
     unsafe fn decode_from(dec: &mut Decoder) -> Self {
         let kind = dec.get_u8();
         match kind {
@@ -383,7 +402,7 @@ impl DecodeFrom for Value<'_> {
     }
 }
 
-impl EncodeTo for Index {
+impl Codec for Index {
     fn encode_size(&self) -> usize {
         mem::size_of::<u64>() * 2
     }
@@ -392,9 +411,7 @@ impl EncodeTo for Index {
         enc.put_u64(self.id);
         enc.put_u64(self.epoch);
     }
-}
 
-impl DecodeFrom for Index {
     unsafe fn decode_from(dec: &mut Decoder) -> Self {
         let id = dec.get_u64();
         let epoch = dec.get_u64();
@@ -420,27 +437,38 @@ mod tests {
         }
     }
 
-    fn build_page<I, K, V>(iter: I) -> Box<[u8]>
-    where
-        I: RewindableIterator<Item = (K, V)>,
-        K: SortedPageKey,
-        V: SortedPageValue,
-    {
-        let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
-        let mut buf = alloc_page(builder.size());
-        let mut page = PageBuf::new(buf.as_mut());
-        builder.build(&mut page);
-        buf
+    struct Builder {
+        buf: Option<Box<[u8]>>,
+    }
+
+    impl Builder {
+        fn new() -> Self {
+            Self { buf: None }
+        }
+
+        fn build<I, K, V>(&mut self, iter: I) -> SortedPageRef<'_, K, V>
+        where
+            I: RewindableIterator<Item = (K, V)>,
+            K: SortedPageKey,
+            V: SortedPageValue,
+        {
+            let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
+            let mut buf = alloc_page(builder.size());
+            let mut page = PageBuf::new(buf.as_mut());
+            builder.build(&mut page);
+            self.buf = Some(buf);
+            self.buf.as_ref().unwrap().as_ref().into()
+        }
     }
 
     #[test]
     fn sorted_page() {
+        let mut builder = Builder::new();
         let data = [[1], [3], [5]]
             .iter()
             .map(|v| (v.as_slice(), v.as_slice()))
             .collect::<Vec<_>>();
-        let buf = build_page(SliceIter::new(&data));
-        let page: SortedPageRef<&[u8], &[u8]> = buf.as_ref().into();
+        let page = builder.build(SliceIter::new(&data));
         assert_eq!(page.tier(), PageTier::Leaf);
         assert_eq!(page.kind(), PageKind::Data);
 
@@ -468,13 +496,13 @@ mod tests {
 
     #[test]
     fn sorted_page_split() {
+        let mut builder = Builder::new();
         // The middle key is ([3], 2), but it should split at ([3], 3).
         let data = [([1], 2), ([1], 1), ([3], 3), ([3], 2), ([3], 1), ([3], 0)]
             .iter()
             .map(|(raw, lsn)| (Key::new(raw.as_slice(), *lsn), raw.as_slice()))
             .collect::<Vec<_>>();
-        let buf = build_page(SliceIter::new(&data));
-        let page: SortedPageRef<Key, &[u8]> = buf.as_ref().into();
+        let page = builder.build(SliceIter::new(&data));
         let (split_key, mut split_iter) = page.into_split_iter().unwrap();
         assert_eq!(split_key, Key::new([3].as_slice(), u64::MAX));
         let split_data = [([3], 3), ([3], 2), ([3], 1), ([3], 0)]
@@ -491,17 +519,19 @@ mod tests {
 
     #[test]
     fn sorted_page_split_none() {
-        let iter = ItemIter::new(([1].as_slice(), [1].as_slice()));
-        let buf = build_page(iter);
-        let page: SortedPageRef<&[u8], &[u8]> = buf.as_ref().into();
-        assert!(page.into_split_iter().is_none());
-
-        let data = [([1], 2), ([1], 1), ([3], 3)]
-            .iter()
-            .map(|(raw, lsn)| (Key::new(raw.as_slice(), *lsn), raw.as_slice()))
-            .collect::<Vec<_>>();
-        let buf = build_page(SliceIter::new(&data));
-        let page: SortedPageRef<Key, &[u8]> = buf.as_ref().into();
-        assert!(page.into_split_iter().is_none());
+        let mut builder = Builder::new();
+        {
+            let iter = ItemIter::new(([1].as_slice(), [1].as_slice()));
+            let page = builder.build(iter);
+            assert!(page.into_split_iter().is_none());
+        }
+        {
+            let data = [([1], 2), ([1], 1), ([3], 3)]
+                .iter()
+                .map(|(raw, lsn)| (Key::new(raw.as_slice(), *lsn), raw.as_slice()))
+                .collect::<Vec<_>>();
+            let page = builder.build(SliceIter::new(&data));
+            assert!(page.into_split_iter().is_none());
+        }
     }
 }

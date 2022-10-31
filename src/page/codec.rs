@@ -1,7 +1,7 @@
 use std::{mem, slice};
 
-/// Encodes an object.
-pub(crate) trait EncodeTo {
+/// Allows an object to be encoded and decoded.
+pub(crate) trait Codec {
     /// Returns the exact size to encode the object.
     fn encode_size(&self) -> usize;
 
@@ -11,10 +11,7 @@ pub(crate) trait EncodeTo {
     ///
     /// The encoder must have enough space to encode the object.
     unsafe fn encode_to(&self, encoder: &mut Encoder);
-}
 
-/// Decodes an object.
-pub(crate) trait DecodeFrom {
     /// Decodes an object from the decoder.
     ///
     /// # Safety
@@ -36,7 +33,7 @@ macro_rules! put_int {
             let v = v.to_le();
             let ptr = &v as *const $t as *const u8;
             let len = mem::size_of::<$t>();
-            self.copy_from(ptr, len);
+            self.take(len).copy_from_nonoverlapping(ptr, len);
         }
     };
 }
@@ -62,14 +59,11 @@ impl Encoder {
         self.len() - self.offset()
     }
 
-    unsafe fn advance(&mut self, n: usize) {
+    unsafe fn take(&mut self, n: usize) -> *mut u8 {
+        debug_assert!(n <= self.remaining());
+        let ptr = self.cursor;
         self.cursor = self.cursor.add(n);
-    }
-
-    unsafe fn copy_from(&mut self, ptr: *const u8, len: usize) {
-        debug_assert!(len <= self.remaining());
-        self.cursor.copy_from_nonoverlapping(ptr, len);
-        self.advance(len);
+        ptr
     }
 
     put_int!(put_u8, u8);
@@ -77,7 +71,8 @@ impl Encoder {
     put_int!(put_u64, u64);
 
     pub(super) unsafe fn put_slice(&mut self, v: &[u8]) {
-        self.copy_from(v.as_ptr(), v.len());
+        let cursor = self.take(v.len());
+        cursor.copy_from_nonoverlapping(v.as_ptr(), v.len());
     }
 }
 
@@ -94,9 +89,7 @@ macro_rules! get_int {
             let mut v: $t = 0;
             let ptr = &mut v as *mut $t as *mut u8;
             let len = mem::size_of::<$t>();
-            debug_assert!(len <= self.remaining());
-            self.cursor.copy_to_nonoverlapping(ptr, len);
-            self.advance(len);
+            self.take(len).copy_to_nonoverlapping(ptr, len);
             <$t>::from_le(v)
         }
     };
@@ -123,8 +116,11 @@ impl Decoder {
         self.len() - self.offset()
     }
 
-    unsafe fn advance(&mut self, len: usize) {
+    unsafe fn take(&mut self, len: usize) -> *const u8 {
+        debug_assert!(len <= self.remaining());
+        let ptr = self.cursor;
         self.cursor = self.cursor.add(len);
+        ptr
     }
 
     get_int!(get_u8, u8);
@@ -132,9 +128,7 @@ impl Decoder {
     get_int!(get_u64, u64);
 
     pub(super) unsafe fn get_slice<'a>(&mut self, len: usize) -> &'a [u8] {
-        debug_assert!(len <= self.remaining());
-        let buf = slice::from_raw_parts(self.cursor, len);
-        self.advance(len);
-        buf
+        let cursor = self.take(len);
+        slice::from_raw_parts(cursor, len)
     }
 }
