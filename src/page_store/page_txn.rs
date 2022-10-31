@@ -57,14 +57,7 @@ impl<'a, E: Env> Guard<'a, E> {
 
     #[inline]
     pub(crate) fn page_addr(&self, id: u64) -> u64 {
-        let page_addr = self.page_table.get(id);
-        if page_addr == 0 {
-            // All pages are accessed gradually starting from `MIN_ID`. If a page addr is
-            // the default value, there must be some concurrency problems or other potential
-            // errors.
-            panic!("No such page exists");
-        }
-        page_addr
+        self.page_table.get(id)
     }
 
     pub(crate) async fn read_page(&self, addr: u64) -> Result<PageRef> {
@@ -217,6 +210,16 @@ impl<'a, E: Env> PageTxn<'a, E> {
         Ok(())
     }
 
+    /// Commits the transaction.
+    pub(crate) fn commit(mut self) {
+        if !self.records.is_empty() {
+            self.drop_writer_guard();
+            self.records.clear();
+        }
+
+        self.page_ids.clear();
+    }
+
     fn seal_write_buffer(&mut self) {
         let release_state = {
             let buffer_set = self.guard.version.buffer_set.current();
@@ -299,15 +302,6 @@ impl<'a, E: Env> PageTxn<'a, E> {
         if matches!(release_state, ReleaseState::Flush) {
             self.guard.version.buffer_set.notify_flush_job();
         }
-    }
-
-    fn commit(mut self) {
-        if !self.records.is_empty() {
-            self.drop_writer_guard();
-            self.records.clear();
-        }
-
-        self.page_ids.clear();
     }
 }
 

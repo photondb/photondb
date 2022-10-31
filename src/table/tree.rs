@@ -22,6 +22,11 @@ impl<E: Env> Tree<E> {
         }
     }
 
+    pub(super) async fn init(&self, guard: Guard<'_, E>) -> Result<()> {
+        let session = self.begin(&guard);
+        session.init().await
+    }
+
     pub(super) fn begin<'a>(&'a self, guard: &'a Guard<'_, E>) -> Session<'a, E> {
         Session { tree: self, guard }
     }
@@ -69,6 +74,25 @@ pub(super) struct Session<'a, E: Env> {
 }
 
 impl<'a, E: Env> Session<'a, E> {
+    async fn init(&self) -> Result<()> {
+        let addr = self.guard.page_addr(ROOT_ID);
+        if addr != 0 {
+            return Ok(());
+        }
+
+        // Insert an empty page as the root.
+        let iter: ItemIter<(Key, Value)> = ItemIter::with_option(None);
+        let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
+        let mut txn = self.guard.begin();
+        let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+        builder.build(&mut new_page);
+        let root_id = txn.insert_page(new_addr);
+        assert_eq!(root_id, ROOT_ID);
+        txn.commit();
+
+        Ok(())
+    }
+
     /// Gets the value corresponding to the key.
     pub(super) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
         let (view, _) = self.find_leaf(&key).await?;

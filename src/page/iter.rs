@@ -25,9 +25,13 @@ pub(crate) struct ItemIter<T> {
 
 impl<T: Clone> ItemIter<T> {
     pub(crate) fn new(item: T) -> Self {
+        Self::with_option(Some(item))
+    }
+
+    pub(crate) fn with_option(item: Option<T>) -> Self {
         Self {
-            next: Some(item.clone()),
-            item: Some(item),
+            next: item.clone(),
+            item,
         }
     }
 }
@@ -71,6 +75,8 @@ impl<'a, T: Clone> Iterator for SliceIter<'a, T> {
     }
 }
 
+/// This assumes that the slice is sorted.
+#[cfg(test)]
 impl<'a, T: Clone + Ord> SeekableIterator<T> for SliceIter<'a, T> {
     fn seek(&mut self, target: &T) {
         self.next = match self.data.binary_search(target) {
