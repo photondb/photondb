@@ -1,5 +1,5 @@
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     future::Future,
     io::Result,
     os::fd::AsRawFd,
@@ -27,21 +27,14 @@ impl Env for Std {
     where
         P: AsRef<Path> + Send,
     {
-        let file = OpenOptions::new().read(true).open(path.as_ref())?;
-        Ok(PositionalReader(file))
+        Ok(PositionalReader(File::open(path)?))
     }
 
     async fn open_sequential_writer<P>(&self, path: P) -> Result<Self::SequentialWriter>
     where
         P: AsRef<Path> + Send,
     {
-        Ok(SequentialWriter(
-            OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(path.as_ref())?,
-        ))
+        Ok(SequentialWriter(File::create(path)?))
     }
 
     fn spawn_background<F>(&self, f: F) -> JoinHandle<F::Output>

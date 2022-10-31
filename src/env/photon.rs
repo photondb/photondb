@@ -8,10 +8,7 @@ use std::{
 };
 
 use futures::FutureExt;
-use photonio::{
-    fs::{File, OpenOptions},
-    task,
-};
+use photonio::{fs::File, task};
 
 use super::*;
 
@@ -29,23 +26,14 @@ impl Env for Photon {
     where
         P: AsRef<Path> + Send,
     {
-        let path = path.as_ref();
-        let r = OpenOptions::new().read(true).open(path).await?;
-        Ok(PositionalReader(r))
+        Ok(PositionalReader(File::open(path).await?))
     }
 
     async fn open_sequential_writer<P>(&self, path: P) -> Result<Self::SequentialWriter>
     where
         P: AsRef<Path> + Send,
     {
-        Ok(SequentialWriter(
-            OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .open(path)
-                .await?,
-        ))
+        Ok(SequentialWriter(File::create(path).await?))
     }
 
     fn spawn_background<F>(&self, f: F) -> JoinHandle<F::Output>
