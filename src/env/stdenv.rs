@@ -31,28 +31,17 @@ impl Env for Std {
         Ok(PositionalReader(file))
     }
 
-    async fn open_sequential_writer<P>(
-        &self,
-        path: P,
-        opt: WriteOptions,
-    ) -> Result<Self::SequentialWriter>
+    async fn open_sequential_writer<P>(&self, path: P) -> Result<Self::SequentialWriter>
     where
         P: AsRef<Path> + Send,
     {
-        let file = if opt.append {
-            OpenOptions::new()
-                .write(true)
-                .create(true)
-                .append(true)
-                .open(path.as_ref())?
-        } else {
+        Ok(SequentialWriter(
             OpenOptions::new()
                 .write(true)
                 .create(true)
                 .truncate(true)
-                .open(path.as_ref())?
-        };
-        Ok(SequentialWriter(file))
+                .open(path.as_ref())?,
+        ))
     }
 
     fn spawn_background<F>(&self, f: F) -> JoinHandle<F::Output>

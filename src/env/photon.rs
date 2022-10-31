@@ -34,30 +34,18 @@ impl Env for Photon {
         Ok(PositionalReader(r))
     }
 
-    async fn open_sequential_writer<P>(
-        &self,
-        path: P,
-        opt: WriteOptions,
-    ) -> Result<Self::SequentialWriter>
+    async fn open_sequential_writer<P>(&self, path: P) -> Result<Self::SequentialWriter>
     where
         P: AsRef<Path> + Send,
     {
-        let w = if opt.append {
-            OpenOptions::new()
-                .write(true)
-                .create(true)
-                .append(true)
-                .open(path)
-                .await
-        } else {
+        Ok(SequentialWriter(
             OpenOptions::new()
                 .write(true)
                 .create(true)
                 .truncate(true)
                 .open(path)
-                .await
-        }?;
-        Ok(SequentialWriter(w))
+                .await?,
+        ))
     }
 
     fn spawn_background<F>(&self, f: F) -> JoinHandle<F::Output>

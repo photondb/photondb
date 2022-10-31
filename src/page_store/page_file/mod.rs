@@ -16,7 +16,7 @@ pub(crate) mod facade {
 
     use super::{file_builder::DEFAULT_BLOCK_SIZE, file_reader::MetaReader, *};
     use crate::{
-        env::{Env, PositionalReader, SequentialWriter, WriteOptions},
+        env::{Env, PositionalReader, SequentialWriter},
         page_store::Result,
     };
 
@@ -51,7 +51,7 @@ pub(crate) mod facade {
             let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
             let writer = self
                 .env
-                .open_sequential_writer(path.to_owned(), WriteOptions::default())
+                .open_sequential_writer(path.to_owned())
                 .await
                 .expect("open reader for file_id: {file_id} fail");
             let use_direct = self.use_direct && writer.direct_io_ify().is_ok();

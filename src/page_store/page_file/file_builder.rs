@@ -601,7 +601,7 @@ mod tests {
     #[cfg(unix)]
     #[photonio::test]
     async fn test_buffered_writer() {
-        use crate::env::{PositionalReaderExt, WriteOptions};
+        use crate::env::PositionalReaderExt;
 
         let env = crate::env::Photon;
 
@@ -609,7 +609,7 @@ mod tests {
         let path1 = std::env::temp_dir().join("buf_test1");
         {
             let file1 = env
-                .open_sequential_writer(path1.to_owned(), WriteOptions::default())
+                .open_sequential_writer(path1.to_owned())
                 .await
                 .expect("open file_id: {file_id}'s file fail");
             let mut bw1 = BufferedWriter::new(file1, 4096 + 1, use_direct, 512);

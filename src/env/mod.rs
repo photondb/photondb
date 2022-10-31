@@ -9,15 +9,6 @@ pub use stdenv::Std;
 mod photon;
 pub use photon::Photon;
 
-///  Options to configure how the file is written.
-// TODO: remove this after make manifest always open new file when restarting.
-#[derive(Default)]
-pub struct WriteOptions {
-    /// Sets the option for the append mode.
-    /// See also [`std::fs::OpenOptions::append`].
-    pub append: bool,
-}
-
 /// Provides an environment to interact with a specific platform.
 #[async_trait]
 pub trait Env: Clone + Send + Sync + 'static {
@@ -31,11 +22,7 @@ pub trait Env: Clone + Send + Sync + 'static {
         P: AsRef<Path> + Send;
 
     /// Opens a file for sequential writes.
-    async fn open_sequential_writer<P>(
-        &self,
-        path: P,
-        opt: WriteOptions,
-    ) -> Result<Self::SequentialWriter>
+    async fn open_sequential_writer<P>(&self, path: P) -> Result<Self::SequentialWriter>
     where
         P: AsRef<Path> + Send;
 
