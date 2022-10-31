@@ -136,6 +136,9 @@ pub trait SequentialWriter: Send + Sync + 'static {
     /// Returns Ok when success.
     async fn sync_data(&mut self) -> Result<()>;
 
+    /// Returns Ok when success.
+    async fn sync_all(&mut self) -> Result<()>;
+
     /// Truncate the writtern file to a specified length.
     async fn truncate(&self, len: u64) -> Result<()>;
 

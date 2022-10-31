@@ -134,6 +134,11 @@ impl<E: Env> Manifest<E> {
         } as u64;
 
         if rolled_path.is_some() {
+            current
+                .current_writer
+                .sync_all()
+                .await
+                .expect("sync new manifest file fail");
             self.set_current(file_num).await?;
             // TODO: notify cleaner previous manifest + size, so it can be delete when need.
             self.current_file_num = Some(file_num);
@@ -214,6 +219,10 @@ impl<E: Env> Manifest<E> {
                     .write_all(&file_num.to_le_bytes())
                     .await
                     .expect("write file_num to tmp fail");
+                tmp_file
+                    .sync_all()
+                    .await
+                    .expect("sync tmp current file fail");
             }
 
             match self

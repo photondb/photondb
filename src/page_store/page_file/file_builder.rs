@@ -528,7 +528,8 @@ impl<'a, E: Env> BufferedWriter<'a, E> {
                 .expect("set set file len fail");
         }
         // panic when sync fail, https://wiki.postgresql.org/wiki/Fsync_Errors
-        self.base_dir.sync_all().await.expect("sync file fail");
+        self.file.sync_all().await.expect("sync file fail");
+        self.base_dir.sync_all().await.expect("sync base dir fail");
         Ok(())
     }
 }

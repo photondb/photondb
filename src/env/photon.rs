@@ -109,9 +109,13 @@ impl super::SequentialWriter for SequentialWriter {
         self.0.write(buf)
     }
 
+    // TODO: sync range(sync start->current => sync last_offset->current)
     async fn sync_data(&mut self) -> Result<()> {
-        // TODO: sync range(sync start->current => sync last_offset->current)
         self.0.sync_data().await
+    }
+
+    async fn sync_all(&mut self) -> Result<()> {
+        self.0.sync_all().await
     }
 
     async fn truncate(&self, len: u64) -> Result<()> {

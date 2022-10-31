@@ -130,6 +130,10 @@ impl super::SequentialWriter for SequentialWriter {
         async move { self.0.sync_data() }.await
     }
 
+    async fn sync_all(&mut self) -> Result<()> {
+        async move { self.0.sync_all() }.await
+    }
+
     async fn truncate(&self, len: u64) -> Result<()> {
         async move { self.0.set_len(len) }.await
     }
