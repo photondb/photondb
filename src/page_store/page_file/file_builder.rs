@@ -5,13 +5,11 @@ use std::{
     sync::Arc,
 };
 
-use super::{types::split_page_addr, FileInfo, FileMeta};
+use super::{constant::*, types::split_page_addr, FileInfo, FileMeta};
 use crate::{
     env::{Directory, Env, SequentialWriter, SequentialWriterExt},
     page_store::{Error, Result},
 };
-
-const IO_BUFFER_SIZE: usize = 4096 * 4;
 
 /// Builder for a page file.
 ///
@@ -533,11 +531,6 @@ impl<'a, E: Env> BufferedWriter<'a, E> {
         Ok(())
     }
 }
-
-/// Default alignment requirement for the SSD.
-// TODO: query logical sector size
-// like: https://github.com/DataDog/glommio/issues/7 or https://github.com/facebook/rocksdb/pull/1875
-pub(crate) const DEFAULT_BLOCK_SIZE: usize = 4096;
 
 pub(crate) struct AlignBuffer {
     data: std::ptr::NonNull<u8>,

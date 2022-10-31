@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use super::{
-    file_builder::DEFAULT_BLOCK_SIZE, file_reader::MetaReader, types::split_page_addr, FileInfo,
+    constant::DEFAULT_BLOCK_SIZE, file_reader::MetaReader, types::split_page_addr, FileInfo,
     PageFileReader,
 };
 use crate::{

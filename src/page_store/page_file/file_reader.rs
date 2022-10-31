@@ -1,8 +1,11 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
+
+use futures::Future;
+use moka::future::Cache;
 
 use super::{file_builder::*, types::FileMeta};
 use crate::{
-    env::{PositionalReader, PositionalReaderExt},
+    env::{Env, PositionalReader, PositionalReaderExt},
     page_store::{Error, Result},
 };
 
@@ -168,5 +171,35 @@ impl<R: PositionalReader> MetaReader<R> {
             .expect("read meta page index fail");
 
         IndexBlock::decode(&data_idx_bytes, &meta_idx_bytes)
+    }
+}
+
+pub(super) struct ReaderCache<E: Env> {
+    cache: moka::future::Cache<u32 /* file_id */, Arc<PageFileReader<E::PositionalReader>>>,
+    _marker: PhantomData<E>,
+}
+
+impl<E: Env> ReaderCache<E> {
+    pub(super) fn new(max_size: u64) -> Self {
+        let cache = Cache::builder()
+            .initial_capacity(max_size as usize)
+            .max_capacity(max_size)
+            .build();
+        Self {
+            cache,
+            _marker: PhantomData,
+        }
+    }
+
+    pub(super) async fn get_with(
+        &self,
+        file_id: u32,
+        init: impl Future<Output = Arc<PageFileReader<E::PositionalReader>>>,
+    ) -> Arc<PageFileReader<E::PositionalReader>> {
+        self.cache.get_with(file_id, init).await
+    }
+
+    pub(super) async fn invalidate(&self, file_id: &u32) {
+        self.cache.invalidate(file_id).await
     }
 }
