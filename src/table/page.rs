@@ -20,7 +20,7 @@ where
     V: SortedPageValue,
 {
     iter: MergingIter<SortedPageIter<'a, K, V>>,
-    limit: Option<&'a [u8]>,
+    range_limit: Option<&'a [u8]>,
 }
 
 impl<'a, K, V> MergingPageIter<'a, K, V>
@@ -30,26 +30,51 @@ where
 {
     pub(super) fn new(
         iter: MergingIter<SortedPageIter<'a, K, V>>,
-        limit: Option<&'a [u8]>,
+        range_limit: Option<&'a [u8]>,
     ) -> Self {
-        Self { iter, limit }
+        Self { iter, range_limit }
+    }
+}
+
+impl<'a, K, V> Iterator for MergingPageIter<'a, K, V>
+where
+    K: SortedPageKey,
+    V: SortedPageValue,
+{
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let Some((k, v)) = self.iter.next() else {
+            return None;
+        };
+        if let Some(limit) = self.range_limit {
+            if k.as_raw() >= limit {
+                return None;
+            }
+        }
+        Some((k, v))
+    }
+}
+
+impl<'a, K, V> RewindableIterator for MergingPageIter<'a, K, V>
+where
+    K: SortedPageKey,
+    V: SortedPageValue,
+{
+    fn rewind(&mut self) {
+        self.iter.rewind();
     }
 }
 
 /// An iterator that merges multiple leaf pages for consolidation.
 pub(super) struct MergingLeafPageIter<'a> {
-    iter: MergingIter<SortedPageIter<'a, Key<'a>, Value<'a>>>,
+    iter: MergingPageIter<'a, Key<'a>, Value<'a>>,
     last: Option<&'a [u8]>,
-    limit: Option<&'a [u8]>,
 }
 
 impl<'a> MergingLeafPageIter<'a> {
     pub(super) fn new(iter: MergingPageIter<'a, Key<'a>, Value<'a>>) -> Self {
-        Self {
-            iter: iter.iter,
-            last: None,
-            limit: iter.limit,
-        }
+        Self { iter, last: None }
     }
 }
 
@@ -65,11 +90,6 @@ impl<'a> Iterator for MergingLeafPageIter<'a> {
                 }
             }
             self.last = Some(k.raw);
-            if let Some(limit) = self.limit {
-                if k.raw >= limit {
-                    return None;
-                }
-            }
             return Some((k, v));
         }
         None
@@ -84,18 +104,13 @@ impl<'a> RewindableIterator for MergingLeafPageIter<'a> {
 
 /// An iterator that merges multiple inner pages for consolidation.
 pub(super) struct MergingInnerPageIter<'a> {
-    iter: MergingIter<SortedPageIter<'a, &'a [u8], Index>>,
+    iter: MergingPageIter<'a, &'a [u8], Index>,
     last: Option<&'a [u8]>,
-    limit: Option<&'a [u8]>,
 }
 
 impl<'a> MergingInnerPageIter<'a> {
     pub(super) fn new(iter: MergingPageIter<'a, &'a [u8], Index>) -> Self {
-        Self {
-            iter: iter.iter,
-            last: None,
-            limit: iter.limit,
-        }
+        Self { iter, last: None }
     }
 }
 
@@ -115,11 +130,6 @@ impl<'a> Iterator for MergingInnerPageIter<'a> {
                 }
             }
             self.last = Some(start);
-            if let Some(limit) = self.limit {
-                if start >= limit {
-                    return None;
-                }
-            }
             return Some((start, index));
         }
         None

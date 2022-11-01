@@ -421,54 +421,18 @@ impl Codec for Index {
 
 #[cfg(test)]
 mod tests {
-    use std::alloc::{alloc, Layout};
-
-    use super::{
-        super::{ItemIter, SliceIter},
-        *,
-    };
-
-    fn alloc_page(size: usize) -> Box<[u8]> {
-        let layout = Layout::from_size_align(size, 8).unwrap();
-        unsafe {
-            let ptr = alloc(layout);
-            let buf = slice::from_raw_parts_mut(ptr, layout.size());
-            Box::from_raw(buf)
-        }
-    }
-
-    struct Builder {
-        buf: Option<Box<[u8]>>,
-    }
-
-    impl Builder {
-        fn new() -> Self {
-            Self { buf: None }
-        }
-
-        fn build<I, K, V>(&mut self, iter: I) -> SortedPageRef<'_, K, V>
-        where
-            I: RewindableIterator<Item = (K, V)>,
-            K: SortedPageKey,
-            V: SortedPageValue,
-        {
-            let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
-            let mut buf = alloc_page(builder.size());
-            let mut page = PageBuf::new(buf.as_mut());
-            builder.build(&mut page);
-            self.buf = Some(buf);
-            self.buf.as_ref().unwrap().as_ref().into()
-        }
-    }
+    use super::*;
+    use crate::page::tests::*;
 
     #[test]
     fn sorted_page() {
-        let mut builder = Builder::new();
         let data = [[1], [3], [5]]
             .iter()
             .map(|v| (v.as_slice(), v.as_slice()))
             .collect::<Vec<_>>();
-        let page = builder.build(SliceIter::new(&data));
+        let owned_page = OwnedSortedPage::from_slice(&data);
+
+        let page = owned_page.as_ref();
         assert_eq!(page.tier(), PageTier::Leaf);
         assert_eq!(page.kind(), PageKind::Data);
 
@@ -496,13 +460,14 @@ mod tests {
 
     #[test]
     fn sorted_page_split() {
-        let mut builder = Builder::new();
         // The middle key is ([3], 2), but it should split at ([3], 3).
         let data = [([1], 2), ([1], 1), ([3], 3), ([3], 2), ([3], 1), ([3], 0)]
             .iter()
             .map(|(raw, lsn)| (Key::new(raw.as_slice(), *lsn), raw.as_slice()))
             .collect::<Vec<_>>();
-        let page = builder.build(SliceIter::new(&data));
+        let owned_page = OwnedSortedPage::from_slice(&data);
+
+        let page = owned_page.as_ref();
         let (split_key, mut split_iter) = page.into_split_iter().unwrap();
         assert_eq!(split_key, Key::new([3].as_slice(), u64::MAX));
         let split_data = [([3], 3), ([3], 2), ([3], 1), ([3], 0)]
@@ -519,19 +484,18 @@ mod tests {
 
     #[test]
     fn sorted_page_split_none() {
-        let mut builder = Builder::new();
         {
-            let iter = ItemIter::new(([1].as_slice(), [1].as_slice()));
-            let page = builder.build(iter);
-            assert!(page.into_split_iter().is_none());
+            let item = ([1].as_slice(), [1].as_slice());
+            let owned_page = OwnedSortedPage::from_item(item);
+            assert!(owned_page.as_ref().into_split_iter().is_none());
         }
         {
             let data = [([1], 2), ([1], 1), ([3], 3)]
                 .iter()
                 .map(|(raw, lsn)| (Key::new(raw.as_slice(), *lsn), raw.as_slice()))
                 .collect::<Vec<_>>();
-            let page = builder.build(SliceIter::new(&data));
-            assert!(page.into_split_iter().is_none());
+            let owned_page = OwnedSortedPage::from_slice(&data);
+            assert!(owned_page.as_ref().into_split_iter().is_none());
         }
     }
 }
