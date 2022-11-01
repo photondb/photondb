@@ -97,7 +97,7 @@ impl<'a, T: Clone> RewindableIterator for SliceIter<'a, T> {
 }
 
 /// A wrapper to order an [`Iterator`] by its next item and rank.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct OrderedIter<I>
 where
     I: Iterator,
@@ -238,6 +238,18 @@ where
     }
 }
 
+impl<I> Clone for MergingIter<I>
+where
+    I: Iterator,
+    OrderedIter<I>: Iterator<Item = I::Item> + Ord + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            heap: self.heap.clone(),
+        }
+    }
+}
+
 impl<I> Iterator for MergingIter<I>
 where
     I: Iterator,
@@ -275,7 +287,6 @@ where
 }
 
 /// Builds a [`MergingIter`] from multiple iterators.
-#[derive(Default)]
 pub(crate) struct MergingIterBuilder<I>
 where
     I: Iterator,
@@ -288,7 +299,13 @@ where
     I: Iterator<Item = (K, V)>,
     K: Ord,
 {
-    /// Creates a [`MergingIterBuilder`] with the given capacity.
+    /// Creates a new [`MergingIterBuilder`].
+    #[cfg(test)]
+    pub(crate) fn new() -> Self {
+        Self { iters: Vec::new() }
+    }
+
+    /// Creates a new [`MergingIterBuilder`] with the given capacity.
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             iters: Vec::with_capacity(capacity),
@@ -366,7 +383,7 @@ mod tests {
             (8, "c"),
         ];
 
-        let mut builder = MergingIterBuilder::default();
+        let mut builder = MergingIterBuilder::new();
         for slice in input.iter() {
             builder.add(SliceIter::new(slice));
         }

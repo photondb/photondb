@@ -233,6 +233,7 @@ where
 }
 
 /// An iterator over the items in a sorted page.
+#[derive(Clone)]
 pub(crate) struct SortedPageIter<'a, K, V> {
     page: SortedPageRef<'a, K, V>,
     init: usize,
