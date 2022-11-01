@@ -1,8 +1,8 @@
 use std::{borrow::Borrow, cmp::Ordering, marker::PhantomData, mem, ops::Deref, slice};
 
 use super::{
-    codec::*, data::*, PageBuf, PageBuilder, PageKind, PageRef, PageTier, RewindableIterator,
-    SeekableIterator,
+    codec::*, data::*, ItemIter, PageBuf, PageBuilder, PageKind, PageRef, PageTier,
+    RewindableIterator, SeekableIterator, SliceIter,
 };
 
 /// Builds a sorted page from an iterator.
@@ -64,6 +64,26 @@ where
                 }
             }
         }
+    }
+}
+
+impl<K, V> SortedPageBuilder<ItemIter<(K, V)>>
+where
+    K: SortedPageKey,
+    V: SortedPageValue,
+{
+    pub(crate) fn with_item(self, item: (K, V)) -> Self {
+        self.with_iter(ItemIter::new(item))
+    }
+}
+
+impl<'a, K, V> SortedPageBuilder<SliceIter<'a, (K, V)>>
+where
+    K: SortedPageKey,
+    V: SortedPageValue,
+{
+    pub(crate) fn with_slice(self, slice: &'a [(K, V)]) -> Self {
+        self.with_iter(SliceIter::new(slice))
     }
 }
 
@@ -427,10 +447,7 @@ mod tests {
 
     #[test]
     fn sorted_page() {
-        let data = [[1], [3], [5]]
-            .iter()
-            .map(|v| (v.as_slice(), v.as_slice()))
-            .collect::<Vec<_>>();
+        let data = raw_slice(&[[1], [3], [5]]);
         let owned_page = OwnedSortedPage::from_slice(&data);
 
         let page = owned_page.as_ref();
@@ -462,19 +479,13 @@ mod tests {
     #[test]
     fn sorted_page_split() {
         // The middle key is ([3], 2), but it should split at ([3], 3).
-        let data = [([1], 2), ([1], 1), ([3], 3), ([3], 2), ([3], 1), ([3], 0)]
-            .iter()
-            .map(|(raw, lsn)| (Key::new(raw.as_slice(), *lsn), raw.as_slice()))
-            .collect::<Vec<_>>();
+        let data = key_slice(&[([1], 2), ([1], 1), ([3], 3), ([3], 2), ([3], 1), ([3], 0)]);
+        let split_data = key_slice(&[([3], 3), ([3], 2), ([3], 1), ([3], 0)]);
         let owned_page = OwnedSortedPage::from_slice(&data);
 
         let page = owned_page.as_ref();
         let (split_key, mut split_iter) = page.into_split_iter().unwrap();
-        assert_eq!(split_key, Key::new([3].as_slice(), u64::MAX));
-        let split_data = [([3], 3), ([3], 2), ([3], 1), ([3], 0)]
-            .iter()
-            .map(|(raw, lsn)| (Key::new(raw.as_slice(), *lsn), raw.as_slice()))
-            .collect::<Vec<_>>();
+        assert_eq!(split_key, Key::new(&[3], u64::MAX));
         for _ in 0..2 {
             for (a, b) in (&mut split_iter).zip(split_data.clone()) {
                 assert_eq!(a, b);
@@ -486,15 +497,12 @@ mod tests {
     #[test]
     fn sorted_page_split_none() {
         {
-            let item = ([1].as_slice(), [1].as_slice());
-            let owned_page = OwnedSortedPage::from_item(item);
+            let data = raw_slice(&[[1]]);
+            let owned_page = OwnedSortedPage::from_slice(&data);
             assert!(owned_page.as_ref().into_split_iter().is_none());
         }
         {
-            let data = [([1], 2), ([1], 1), ([3], 3)]
-                .iter()
-                .map(|(raw, lsn)| (Key::new(raw.as_slice(), *lsn), raw.as_slice()))
-                .collect::<Vec<_>>();
+            let data = key_slice(&[([1], 2), ([1], 1), ([3], 3)]);
             let owned_page = OwnedSortedPage::from_slice(&data);
             assert!(owned_page.as_ref().into_split_iter().is_none());
         }

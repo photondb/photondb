@@ -39,6 +39,16 @@ pub(crate) mod tests {
         }
     }
 
+    pub(crate) fn raw_slice(s: &[[u8; 1]]) -> Vec<(&[u8], &[u8])> {
+        s.iter().map(|v| (v.as_slice(), v.as_slice())).collect()
+    }
+
+    pub(crate) fn key_slice(s: &[([u8; 1], u64)]) -> Vec<(Key<'_>, &[u8])> {
+        s.iter()
+            .map(|(raw, lsn)| (Key::new(raw.as_slice(), *lsn), raw.as_slice()))
+            .collect()
+    }
+
     pub(crate) struct OwnedSortedPage<K, V> {
         buf: Box<[u8]>,
         _marker: PhantomData<(K, V)>,
@@ -65,10 +75,6 @@ pub(crate) mod tests {
             let mut page = PageBuf::new(buf.as_mut());
             builder.build(&mut page);
             Self::new(buf)
-        }
-
-        pub(crate) fn from_item(item: (K, V)) -> Self {
-            Self::from_iter(ItemIter::new(item))
         }
 
         pub(crate) fn from_slice(data: &[(K, V)]) -> Self {

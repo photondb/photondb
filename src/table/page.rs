@@ -147,26 +147,32 @@ mod tests {
     use super::*;
     use crate::page::tests::*;
 
+    fn build_merging_iter<'a, K, V>(
+        iter: SortedPageIter<'a, K, V>,
+        range_limit: Option<&'a [u8]>,
+    ) -> MergingPageIter<'a, K, V>
+    where
+        K: SortedPageKey,
+        V: SortedPageValue,
+    {
+        let mut builder = MergingIterBuilder::new();
+        builder.add(iter);
+        let iter = builder.build();
+        MergingPageIter::new(iter, range_limit)
+    }
+
     #[test]
     fn merging_page_iter() {
-        let data = [[1], [3], [5]]
-            .iter()
-            .map(|v| (v.as_slice(), v.as_slice()))
-            .collect::<Vec<_>>();
+        let data = raw_slice(&[[1], [3], [5]]);
         let owned_page = OwnedSortedPage::from_slice(&data);
-
-        let mut builder = MergingIterBuilder::new();
-        builder.add(owned_page.as_iter());
-        let merging_iter = builder.build();
-
         {
-            let mut iter = MergingPageIter::new(merging_iter.clone(), None);
+            let mut iter = build_merging_iter(owned_page.as_iter(), None);
             for (a, b) in (&mut iter).zip(data.clone()) {
                 assert_eq!(a, b);
             }
         }
         {
-            let mut iter = MergingPageIter::new(merging_iter.clone(), Some([3].as_slice()));
+            let mut iter = build_merging_iter(owned_page.as_iter(), Some([3].as_slice()));
             assert_eq!(iter.next(), Some(data[0]));
             assert_eq!(iter.next(), None);
         }
@@ -180,12 +186,9 @@ mod tests {
             (Key::new(&[3], 1), Value::Delete),
         ];
         let owned_page = OwnedSortedPage::from_slice(&data);
+        let merging_iter = build_merging_iter(owned_page.as_iter(), None);
 
-        let mut builder = MergingIterBuilder::new();
-        builder.add(owned_page.as_iter());
-        let iter = builder.build();
-        let iter = MergingPageIter::new(iter, None);
-        let mut iter = MergingLeafPageIter::new(iter);
+        let mut iter = MergingLeafPageIter::new(merging_iter);
         for _ in 0..2 {
             assert_eq!(iter.next(), Some(data[0]));
             assert_eq!(iter.next(), Some(data[1]));
@@ -204,12 +207,9 @@ mod tests {
             ([5].as_slice(), Index::new(5, 5)),
         ];
         let owned_page = OwnedSortedPage::from_slice(&data);
+        let merging_iter = build_merging_iter(owned_page.as_iter(), None);
 
-        let mut builder = MergingIterBuilder::new();
-        builder.add(owned_page.as_iter());
-        let iter = builder.build();
-        let iter = MergingPageIter::new(iter, None);
-        let mut iter = MergingInnerPageIter::new(iter);
+        let mut iter = MergingInnerPageIter::new(merging_iter);
         for _ in 0..2 {
             assert_eq!(iter.next(), Some(data[0]));
             assert_eq!(iter.next(), Some(data[1]));
