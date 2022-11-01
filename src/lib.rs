@@ -23,4 +23,5 @@ pub use table::{Options as TableOptions, Table};
 
 mod page;
 mod page_store;
+mod tree;
 mod util;

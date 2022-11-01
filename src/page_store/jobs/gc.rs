@@ -109,17 +109,6 @@ where
         Ok(())
     }
 
-    async fn rewrite_page(&self, version: Arc<Version>, page_id: u64) -> Result<()> {
-        loop {
-            let guard = Guard::new(version.clone(), &self.page_table, &self.page_files);
-            match self.rewriter.rewrite(page_id, guard).await {
-                Ok(_) => return Ok(()),
-                Err(Error::Again) => continue,
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
     async fn rewrite_active_pages(
         &self,
         file: &FileInfo,
@@ -137,7 +126,8 @@ where
                 continue;
             }
             rewrite_pages.insert(page_id);
-            self.rewrite_page(version.clone(), page_id).await?;
+            let guard = Guard::new(version.clone(), &self.page_table, &self.page_files);
+            self.rewriter.rewrite(page_id, guard).await?;
         }
         Ok(())
     }
