@@ -10,18 +10,40 @@
     pointer_is_aligned
 )]
 
-pub mod env;
-
 mod error;
 pub use error::{Error, Result};
 
-mod store;
-pub use store::{Options as StoreOptions, Store};
+pub mod env;
 
-mod table;
-pub use table::{Options as TableOptions, Table};
+pub mod raw;
+pub use raw::{StoreOptions, TableOptions};
+
+mod photon;
+pub use photon::{Store, Table};
 
 mod page;
 mod page_store;
 mod tree;
 mod util;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[photonio::test]
+    async fn crud() {
+        let path = std::env::temp_dir();
+        let table = Table::open(path, TableOptions::default()).await.unwrap();
+        let key = &[1];
+        let lsn = 2;
+        let value = &[3];
+        table.put(key, lsn, value).await.unwrap();
+        table
+            .get(key, lsn, |v| {
+                assert_eq!(v, Some(value.as_slice()));
+            })
+            .await
+            .unwrap();
+        table.close().await;
+    }
+}

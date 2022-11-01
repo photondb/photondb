@@ -1,10 +1,7 @@
 use std::path::Path;
 
-use crate::{
-    env::Env,
-    table::{Options as TableOptions, Table},
-    Result,
-};
+use super::{Table, TableOptions};
+use crate::{env::Env, Result};
 
 #[non_exhaustive]
 #[derive(Clone, Debug)]

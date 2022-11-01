@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use photondb::{
     env::{Env, Photon},
-    Table,
+    raw::Table,
 };
 
 use super::*;
