@@ -21,7 +21,7 @@ pub(crate) type ValuePageRef<'a> = SortedPageRef<'a, Key<'a>, Value<'a>>;
 pub(crate) type IndexPageRef<'a> = SortedPageRef<'a, &'a [u8], Index>;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::{
         alloc::{alloc, Layout},
         marker::PhantomData,
@@ -76,6 +76,10 @@ mod tests {
         }
 
         pub(crate) fn as_ref(&self) -> SortedPageRef<'_, K, V> {
+            self.buf.as_ref().into()
+        }
+
+        pub(crate) fn as_iter(&self) -> SortedPageIter<'_, K, V> {
             self.buf.as_ref().into()
         }
     }
