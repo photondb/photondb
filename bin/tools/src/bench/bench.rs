@@ -38,7 +38,7 @@ struct PhotonBench<E: Env> {
 
 impl<E: Env> PhotonBench<E> {
     async fn prepare(config: Args, env: E) -> Self {
-        let options = photondb::TableOptions::default();
+        let options = photondb::Options::default();
         let path = config
             .path
             .as_ref()
