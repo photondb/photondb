@@ -51,13 +51,16 @@ where
     }
 
     /// Builds the page with the given information.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the page is not large enough to hold the content.
     pub(crate) fn build(mut self, page: &mut PageBuf<'_>) {
+        assert!(page.size() >= self.size());
         self.base.build(page);
-        let content = page.content_mut();
-        assert_eq!(content.len(), self.content_size);
-        if let Some(mut iter) = self.iter.take() {
+        if let Some(iter) = self.iter.as_mut() {
             unsafe {
-                let mut buf = SortedPageBuf::new(content, self.num_items);
+                let mut buf = SortedPageBuf::new(page.content_mut(), self.num_items);
                 iter.rewind();
                 for (k, v) in iter {
                     buf.add(k, v);
@@ -72,6 +75,8 @@ where
     K: SortedPageKey,
     V: SortedPageValue,
 {
+    /// Creates a [`SortedPageBuilder`] that will build a page with the given
+    /// item.
     pub(crate) fn with_item(self, item: (K, V)) -> Self {
         self.with_iter(ItemIter::new(item))
     }
@@ -82,6 +87,8 @@ where
     K: SortedPageKey,
     V: SortedPageValue,
 {
+    /// Creates a [`SortedPageBuilder`] that will build a page with the given
+    /// slice.
     pub(crate) fn with_slice(self, slice: &'a [(K, V)]) -> Self {
         self.with_iter(SliceIter::new(slice))
     }

@@ -69,12 +69,19 @@ where
 /// An iterator that merges multiple leaf pages for consolidation.
 pub(super) struct MergingLeafPageIter<'a> {
     iter: MergingPageIter<'a, Key<'a>, Value<'a>>,
-    last: Option<&'a [u8]>,
+    safe_lsn: u64,
+    last_raw: Option<&'a [u8]>,
+    skip_same_raw: bool,
 }
 
 impl<'a> MergingLeafPageIter<'a> {
-    pub(super) fn new(iter: MergingPageIter<'a, Key<'a>, Value<'a>>) -> Self {
-        Self { iter, last: None }
+    pub(super) fn new(iter: MergingPageIter<'a, Key<'a>, Value<'a>>, safe_lsn: u64) -> Self {
+        Self {
+            iter,
+            safe_lsn,
+            last_raw: None,
+            skip_same_raw: false,
+        }
     }
 }
 
@@ -82,15 +89,36 @@ impl<'a> Iterator for MergingLeafPageIter<'a> {
     type Item = (Key<'a>, Value<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        // TODO: We should keep all versions visible at and after the safe LSN.
         for (k, v) in &mut self.iter {
-            if let Some(last) = self.last {
+            if let Some(last) = self.last_raw {
                 if k.raw == last {
-                    continue;
+                    // Skip versions of the same raw.
+                    if self.skip_same_raw {
+                        continue;
+                    }
+                    // Output versions that are visible to the safe LSN.
+                    if k.lsn > self.safe_lsn {
+                        return Some((k, v));
+                    }
+                    // This is the oldest version visible to the safe LSN.
+                    self.skip_same_raw = true;
+                    match v {
+                        Value::Put(_) => return Some((k, v)),
+                        Value::Delete => continue,
+                    }
                 }
             }
-            self.last = Some(k.raw);
-            return Some((k, v));
+            // This is the latest version of this raw.
+            self.last_raw = Some(k.raw);
+            self.skip_same_raw = k.lsn <= self.safe_lsn;
+            match v {
+                // If the latest version is a delete and all older versions are not visible to the
+                // safe LSN, we can skip all of them.
+                Value::Delete if k.lsn <= self.safe_lsn => {
+                    continue;
+                }
+                _ => return Some((k, v)),
+            }
         }
         None
     }
@@ -105,12 +133,15 @@ impl<'a> RewindableIterator for MergingLeafPageIter<'a> {
 /// An iterator that merges multiple inner pages for consolidation.
 pub(super) struct MergingInnerPageIter<'a> {
     iter: MergingPageIter<'a, &'a [u8], Index>,
-    last: Option<&'a [u8]>,
+    last_raw: Option<&'a [u8]>,
 }
 
 impl<'a> MergingInnerPageIter<'a> {
     pub(super) fn new(iter: MergingPageIter<'a, &'a [u8], Index>) -> Self {
-        Self { iter, last: None }
+        Self {
+            iter,
+            last_raw: None,
+        }
     }
 }
 
@@ -124,12 +155,12 @@ impl<'a> Iterator for MergingInnerPageIter<'a> {
                 continue;
             }
             // Skip overwritten indexes
-            if let Some(last) = self.last {
+            if let Some(last) = self.last_raw {
                 if start == last {
                     continue;
                 }
             }
-            self.last = Some(start);
+            self.last_raw = Some(start);
             return Some((start, index));
         }
         None
@@ -180,20 +211,38 @@ mod tests {
 
     #[test]
     fn merging_leaf_page_iter() {
-        let data = [
+        let data = vec![
+            (Key::new(&[1], 3), Value::Put(&[1])),
+            (Key::new(&[1], 2), Value::Put(&[1])),
             (Key::new(&[1], 1), Value::Put(&[1])),
             (Key::new(&[3], 3), Value::Put(&[3])),
             (Key::new(&[3], 1), Value::Delete),
+            (Key::new(&[5], 2), Value::Delete),
         ];
         let owned_page = OwnedSortedPage::from_slice(&data);
-        let merging_iter = build_merging_iter(owned_page.as_iter(), None);
 
-        let mut iter = MergingLeafPageIter::new(merging_iter);
-        for _ in 0..2 {
-            assert_eq!(iter.next(), Some(data[0]));
-            assert_eq!(iter.next(), Some(data[1]));
-            assert_eq!(iter.next(), None);
-            iter.rewind();
+        let lsn_expect = [
+            (0, data.clone()),
+            (
+                1,
+                vec![
+                    data[0].clone(),
+                    data[1].clone(),
+                    data[2].clone(),
+                    data[3].clone(),
+                    data[5].clone(),
+                ],
+            ),
+            (2, vec![data[0].clone(), data[1].clone(), data[3].clone()]),
+            (3, vec![data[0].clone(), data[3].clone()]),
+            (4, vec![data[0].clone(), data[3].clone()]),
+        ];
+        for (lsn, expect) in lsn_expect {
+            let merging_iter = build_merging_iter(owned_page.as_iter(), None);
+            let mut iter = MergingLeafPageIter::new(merging_iter, lsn);
+            for (a, b) in (&mut iter).zip(expect) {
+                assert_eq!(a, b);
+            }
         }
     }
 

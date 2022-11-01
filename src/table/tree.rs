@@ -414,7 +414,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     async fn consolidate_page<'g>(&'g self, view: PageView<'g>) -> Result<PageView<'g>> {
         match view.page.tier() {
             PageTier::Leaf => {
-                self.consolidate_page_impl(view, MergingLeafPageIter::new)
+                let safe_lsn = self.tree.safe_lsn();
+                self.consolidate_page_impl(view, |iter| MergingLeafPageIter::new(iter, safe_lsn))
                     .await
             }
             PageTier::Inner => {
