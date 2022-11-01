@@ -2,6 +2,8 @@
 
 mod stress;
 
+mod bench;
+
 use clap::{Parser, Subcommand};
 pub(crate) use photondb::Result;
 
@@ -15,12 +17,15 @@ struct Args {
 #[derive(Subcommand, Debug)]
 enum Commands {
     Stress(stress::Args),
+    Bench(bench::Args),
 }
 
-fn main() -> Result<()> {
+#[photonio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
     match args.cmd {
         Commands::Stress(args) => stress::run(args)?,
+        Commands::Bench(args) => bench::run(args).await.unwrap(),
     }
     Ok(())
 }
