@@ -40,6 +40,11 @@ impl<E: Env> Table<E> {
         Ok(Self { tree, store })
     }
 
+    /// Closes the table.
+    pub async fn close(self) {
+        self.store.close().await;
+    }
+
     /// Gets the value corresponding to the key and applies the function to it.
     pub async fn get<F, R>(&self, key: &[u8], lsn: u64, f: F) -> Result<R>
     where
@@ -166,5 +171,29 @@ impl<E: Env> RewritePage<E> for Arc<Tree> {
             let txn = self.begin(guard);
             txn.rewrite_page(id).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::*;
+
+    #[photonio::test]
+    async fn crud() {
+        let env = env::Photon;
+        let path = std::env::temp_dir();
+        let table = Table::open(env, path, Options::default()).await.unwrap();
+        let key = &[1];
+        let lsn = 2;
+        let value = &[3];
+        table.put(key, lsn, value).await.unwrap();
+        table
+            .get(key, lsn, |v| {
+                assert_eq!(v, Some(value.as_slice()));
+            })
+            .await
+            .unwrap();
+        table.close().await;
     }
 }
