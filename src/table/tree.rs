@@ -351,7 +351,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Build a delta page with the child on the left and the new split page on
         // the right.
         let delta = if let Some(range_end) = range.end {
-            debug_assert!(split_key < range_end);
+            assert!(split_key < range_end);
             vec![
                 (left_key, left_index),
                 (split_key, split_index),

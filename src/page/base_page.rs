@@ -368,18 +368,8 @@ impl PageBuilder {
 
 #[cfg(test)]
 mod tests {
-    use std::alloc::{alloc, Layout};
-
     use super::*;
-
-    fn alloc_page(size: usize) -> Box<[u8]> {
-        let layout = Layout::from_size_align(size, 8).unwrap();
-        unsafe {
-            let ptr = alloc(layout);
-            let buf = slice::from_raw_parts_mut(ptr, layout.size());
-            Box::from_raw(buf)
-        }
-    }
+    use crate::page::tests::*;
 
     #[test]
     fn page() {
