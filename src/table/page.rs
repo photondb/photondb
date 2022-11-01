@@ -223,19 +223,10 @@ mod tests {
 
         let lsn_expect = [
             (0, data.clone()),
-            (
-                1,
-                vec![
-                    data[0].clone(),
-                    data[1].clone(),
-                    data[2].clone(),
-                    data[3].clone(),
-                    data[5].clone(),
-                ],
-            ),
-            (2, vec![data[0].clone(), data[1].clone(), data[3].clone()]),
-            (3, vec![data[0].clone(), data[3].clone()]),
-            (4, vec![data[0].clone(), data[3].clone()]),
+            (1, vec![data[0], data[1], data[2], data[3], data[5]]),
+            (2, vec![data[0], data[1], data[3]]),
+            (3, vec![data[0], data[3]]),
+            (4, vec![data[0], data[3]]),
         ];
         for (lsn, expect) in lsn_expect {
             let merging_iter = build_merging_iter(owned_page.as_iter(), None);
