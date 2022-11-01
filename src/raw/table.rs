@@ -75,27 +75,3 @@ impl<E: Env> Table<E> {
         self.tree.set_safe_lsn(lsn);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::*;
-
-    #[photonio::test]
-    async fn crud() {
-        let env = env::Photon;
-        let path = std::env::temp_dir();
-        let table = Table::open(env, path, Options::default()).await.unwrap();
-        let key = &[1];
-        let lsn = 2;
-        let value = &[3];
-        table.put(key, lsn, value).await.unwrap();
-        table
-            .get(key, lsn, |v| {
-                assert_eq!(v, Some(value.as_slice()));
-            })
-            .await
-            .unwrap();
-        table.close().await;
-    }
-}
