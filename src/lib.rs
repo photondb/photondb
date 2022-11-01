@@ -16,10 +16,10 @@ mod error;
 pub use error::{Error, Result};
 
 mod store;
-pub use store::Store;
+pub use store::{Options as StoreOptions, Store};
 
 mod table;
-pub use table::Table;
+pub use table::{Options as TableOptions, Table};
 
 mod page;
 mod page_store;
