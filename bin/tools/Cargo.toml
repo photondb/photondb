@@ -1,5 +1,5 @@
 [package]
-name = "photon-tools"
+name = "photondb-tools"
 version = "0.0.1"
 edition = "2021"
 license = "MIT"
