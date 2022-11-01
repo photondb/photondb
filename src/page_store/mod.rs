@@ -122,6 +122,14 @@ impl<E: Env> PageStore<E> {
         Guard::new(self.current_version(), &self.table, &self.page_files)
     }
 
+    pub(crate) async fn close(mut self) {
+        self.shutdown.terminate();
+        let jobs = mem::take(&mut self.jobs);
+        for job in jobs {
+            job.await;
+        }
+    }
+
     #[inline]
     fn current_version(&self) -> Arc<Version> {
         Version::from_local().unwrap_or_else(|| {
@@ -175,11 +183,5 @@ impl<E: Env> PageStore<E> {
 impl<E: Env> Drop for PageStore<E> {
     fn drop(&mut self) {
         self.shutdown.terminate();
-        let jobs = mem::take(&mut self.jobs);
-        futures::executor::block_on(async {
-            for job in jobs {
-                job.await;
-            }
-        });
     }
 }
