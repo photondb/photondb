@@ -1,11 +1,10 @@
 use std::{path::Path, sync::Arc};
 
-pub use crate::tree::{Options, ReadOptions, Stats, WriteOptions};
 use crate::{
     env::Env,
     page::{Key, Value},
     page_store::PageStore,
-    tree::{Tree, TreeTxn},
+    tree::*,
     Result,
 };
 

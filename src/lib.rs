@@ -14,26 +14,29 @@ mod error;
 pub use error::{Error, Result};
 
 pub mod env;
-
 pub mod raw;
-pub use raw::{StoreOptions, TableOptions};
+pub mod std;
 
 mod photon;
 pub use photon::{Store, Table};
 
+mod tree;
+pub use tree::{Options, ReadOptions, Stats, WriteOptions};
+
 mod page;
 mod page_store;
-mod tree;
 mod util;
 
 #[cfg(test)]
 mod tests {
+    use ::std::env::temp_dir;
+
     use super::*;
 
     #[photonio::test]
     async fn crud() {
-        let path = std::env::temp_dir();
-        let table = Table::open(path, TableOptions::default()).await.unwrap();
+        let path = temp_dir();
+        let table = Table::open(path, Options::default()).await.unwrap();
         let key = &[1];
         let lsn = 2;
         let value = &[3];
@@ -45,5 +48,21 @@ mod tests {
             .await
             .unwrap();
         table.close().await;
+    }
+
+    #[test]
+    fn std_crud() {
+        let path = temp_dir();
+        let table = std::Table::open(path, Options::default()).unwrap();
+        let key = &[1];
+        let lsn = 2;
+        let value = &[3];
+        table.put(key, lsn, value).unwrap();
+        table
+            .get(key, lsn, |v| {
+                assert_eq!(v, Some(value.as_slice()));
+            })
+            .unwrap();
+        table.close();
     }
 }

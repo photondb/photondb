@@ -1,5 +1,5 @@
-mod store;
-pub use store::{Options as StoreOptions, Store};
+pub mod store;
+pub use store::Store;
 
-mod table;
-pub use table::{Options as TableOptions, Table};
+pub mod table;
+pub use table::Table;
