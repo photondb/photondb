@@ -1,9 +1,80 @@
-use super::{page::*, Tree};
-use crate::{
-    env::Env,
-    page::*,
-    page_store::{Error, Guard, Result},
+use std::{
+    future::Future,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
+
+use crate::{env::Env, page::*, page_store::*};
+
+mod page;
+use page::*;
+
+mod stats;
+use stats::AtomicStats;
+pub use stats::Stats;
+
+mod options;
+pub use options::{Options, ReadOptions, WriteOptions};
+
+pub(crate) struct Tree {
+    options: Options,
+    stats: AtomicStats,
+    safe_lsn: AtomicU64,
+}
+
+impl Tree {
+    pub(crate) fn new(options: Options) -> Self {
+        Self {
+            options,
+            stats: AtomicStats::default(),
+            safe_lsn: AtomicU64::new(0),
+        }
+    }
+
+    pub(crate) fn begin<'a, E: Env>(&'a self, guard: Guard<'a, E>) -> TreeTxn<'a, E> {
+        TreeTxn::new(self, guard)
+    }
+
+    pub(crate) fn stats(&self) -> Stats {
+        self.stats.snapshot()
+    }
+
+    pub(crate) fn safe_lsn(&self) -> u64 {
+        self.safe_lsn.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_safe_lsn(&self, lsn: u64) {
+        loop {
+            let safe_lsn = self.safe_lsn.load(Ordering::Acquire);
+            // Make sure that the safe LSN is increasing.
+            if safe_lsn >= lsn {
+                return;
+            }
+            if self
+                .safe_lsn
+                .compare_exchange(safe_lsn, lsn, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return;
+            }
+        }
+    }
+}
+
+impl<E: Env> RewritePage<E> for Arc<Tree> {
+    type Rewrite<'a> = impl Future<Output = Result<(), Error>> + Send + 'a
+        where
+            Self: 'a;
+
+    fn rewrite<'a>(&'a self, id: u64, guard: Guard<'a, E>) -> Self::Rewrite<'a> {
+        async move {
+            let txn = self.begin(guard);
+            txn.rewrite_page(id).await
+        }
+    }
+}
 
 pub(super) struct TreeTxn<'a, E: Env> {
     tree: &'a Tree,
@@ -11,18 +82,18 @@ pub(super) struct TreeTxn<'a, E: Env> {
 }
 
 impl<'a, E: Env> TreeTxn<'a, E> {
-    pub(super) fn new(tree: &'a Tree, guard: Guard<'a, E>) -> Self {
+    fn new(tree: &'a Tree, guard: Guard<'a, E>) -> Self {
         Self { tree, guard }
     }
 
     /// Initializes the tree if it is not initialized yet.
-    pub(super) async fn init(&self) -> Result<()> {
+    pub(crate) async fn init(&self) -> Result<()> {
         let addr = self.guard.page_addr(ROOT_ID);
         if addr != 0 {
             return Ok(());
         }
 
-        // Insert an empty page as the root.
+        // Insert an empty data page as the root.
         let iter: ItemIter<(Key, Value)> = None.into();
         let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
         let mut txn = self.guard.begin();
@@ -36,13 +107,51 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     /// Gets the value corresponding to the key.
-    pub(super) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
+    pub(crate) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
+        loop {
+            match self.try_get(key).await {
+                Ok(value) => {
+                    self.tree.stats.success.get.inc();
+                    return Ok(value);
+                }
+                Err(Error::Again) => {
+                    self.tree.stats.restart.get.inc();
+                    continue;
+                }
+                Err(e) => {
+                    self.tree.stats.failure.get.inc();
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    async fn try_get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
         let (view, _) = self.find_leaf(&key).await?;
         self.find_value(&key, &view).await
     }
 
     /// Writes the key-value pair to the tree.
-    pub(super) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
+    pub(crate) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
+        loop {
+            match self.try_write(key, value).await {
+                Ok(_) => {
+                    self.tree.stats.success.write.inc();
+                    return Ok(());
+                }
+                Err(Error::Again) => {
+                    self.tree.stats.restart.write.inc();
+                    continue;
+                }
+                Err(e) => {
+                    self.tree.stats.failure.write.inc();
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    async fn try_write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
         let (mut view, parent) = self.find_leaf(&key).await?;
         // Build a delta page with the given key-value pair.
         let delta = (key, value);
@@ -85,11 +194,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     /// Returns a view to the page.
-    pub(super) async fn page_view<'g>(
-        &'g self,
-        id: u64,
-        range: Option<Range<'g>>,
-    ) -> Result<PageView<'g>> {
+    async fn page_view<'g>(&'g self, id: u64, range: Option<Range<'g>>) -> Result<PageView<'g>> {
         let addr = self.guard.page_addr(id);
         let page = self.guard.read_page(addr).await?;
         Ok(PageView {
@@ -103,10 +208,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     /// Finds the leaf page that may contain the key.
     ///
     /// Returns the leaf page and its parent.
-    pub(super) async fn find_leaf(
-        &self,
-        key: &Key<'_>,
-    ) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
+    async fn find_leaf(&self, key: &Key<'_>) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
         // The index, range, and parent of the current page, starting from the root.
         let mut index = ROOT_INDEX;
         let mut range = ROOT_RANGE;
@@ -153,12 +255,9 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
     }
 
-    #[allow(dead_code)]
     /// Creates an iterator over the key-value pairs in the page.
-    pub(super) async fn iter_page<'g, K, V>(
-        &'g self,
-        view: &PageView<'g>,
-    ) -> Result<MergingPageIter<'g, K, V>>
+    #[allow(dead_code)]
+    async fn iter_page<'g, K, V>(&'g self, view: &PageView<'g>) -> Result<MergingPageIter<'g, K, V>>
     where
         K: SortedPageKey,
         V: SortedPageValue,
@@ -404,7 +503,17 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     /// Rewrites the page to reclaim its space.
-    pub(super) async fn rewrite_page(&self, id: u64) -> Result<()> {
+    async fn rewrite_page(&self, id: u64) -> Result<()> {
+        loop {
+            match self.try_rewrite_page(id).await {
+                Ok(()) => return Ok(()),
+                Err(Error::Again) => continue,
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    async fn try_rewrite_page(&self, id: u64) -> Result<()> {
         let view = self.page_view(id, None).await?;
         self.consolidate_page(view).await?;
         Ok(())

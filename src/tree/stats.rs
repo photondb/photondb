@@ -4,12 +4,14 @@ use crate::util::atomic::Counter;
 #[derive(Clone, Debug, Default)]
 pub struct Stats {
     pub success: TxnStats,
+    pub restart: TxnStats,
     pub failure: TxnStats,
 }
 
 #[derive(Default)]
 pub(super) struct AtomicStats {
     pub(super) success: AtomicTxnStats,
+    pub(super) restart: AtomicTxnStats,
     pub(super) failure: AtomicTxnStats,
 }
 
@@ -17,6 +19,7 @@ impl AtomicStats {
     pub(super) fn snapshot(&self) -> Stats {
         Stats {
             success: self.success.snapshot(),
+            restart: self.restart.snapshot(),
             failure: self.failure.snapshot(),
         }
     }
