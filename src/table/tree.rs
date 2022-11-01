@@ -23,7 +23,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
 
         // Insert an empty page as the root.
-        let iter: ItemIter<(Key, Value)> = ItemIter::none();
+        let iter: ItemIter<(Key, Value)> = None.into();
         let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
         let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
@@ -45,8 +45,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     pub(super) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
         let (mut view, parent) = self.find_leaf(&key).await?;
         // Build a delta page with the given key-value pair.
-        let iter = ItemIter::new((key, value));
-        let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
+        let delta = (key, value);
+        let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_item(delta);
         let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
         builder.build(&mut new_page);
@@ -293,8 +293,9 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                 txn.insert_page(new_addr)
             };
             // Build a delta page with the right index.
-            let iter = ItemIter::new((split_key.as_raw(), Index::new(right_id, 0)));
-            let builder = SortedPageBuilder::new(view.page.tier(), PageKind::Split).with_iter(iter);
+            let delta = (split_key.as_raw(), Index::new(right_id, 0));
+            let builder =
+                SortedPageBuilder::new(view.page.tier(), PageKind::Split).with_item(delta);
             let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
             builder.build(&mut new_page);
             // Update the left page with the delta.
@@ -361,8 +362,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         } else {
             vec![(left_key, left_index), (split_key, split_index)]
         };
-        let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data)
-            .with_iter(SliceIter::new(&delta));
+        let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data).with_slice(&delta);
         let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
         builder.build(&mut new_page);
@@ -395,8 +395,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Build a new root with the original root on the left and the new split page on
         // the right.
         let delta = [(left_key, left_index), (split_key, split_index)];
-        let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data)
-            .with_iter(SliceIter::new(&delta));
+        let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data).with_slice(&delta);
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
         builder.build(&mut new_page);
         // Update the original root with the new root.

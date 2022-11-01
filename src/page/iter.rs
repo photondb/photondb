@@ -25,14 +25,12 @@ pub(crate) struct ItemIter<T> {
 
 impl<T: Clone> ItemIter<T> {
     pub(crate) fn new(item: T) -> Self {
-        Self::with_option(Some(item))
+        Some(item).into()
     }
+}
 
-    pub(crate) fn none() -> Self {
-        Self::with_option(None)
-    }
-
-    pub(crate) fn with_option(item: Option<T>) -> Self {
+impl<T: Clone> From<Option<T>> for ItemIter<T> {
+    fn from(item: Option<T>) -> Self {
         Self {
             next: item.clone(),
             item,
@@ -238,18 +236,6 @@ where
     }
 }
 
-impl<I> Clone for MergingIter<I>
-where
-    I: Iterator,
-    OrderedIter<I>: Iterator<Item = I::Item> + Ord + Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            heap: self.heap.clone(),
-        }
-    }
-}
-
 impl<I> Iterator for MergingIter<I>
 where
     I: Iterator,
@@ -344,7 +330,7 @@ mod tests {
             iter.rewind();
         }
 
-        let mut iter: ItemIter<()> = ItemIter::none();
+        let mut iter: ItemIter<()> = None.into();
         for _ in 0..2 {
             assert_eq!(iter.next(), None);
             iter.rewind();
