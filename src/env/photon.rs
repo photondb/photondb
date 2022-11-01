@@ -71,7 +71,7 @@ impl Env for Photon {
     }
 
     /// Returns an iterator over the entries within a directory.
-    /// See alos [`std::fs::read_dir`].
+    /// See also [`std::fs::read_dir`].
     fn read_dir<P: AsRef<Path>>(&self, path: P) -> Result<std::fs::ReadDir> {
         std::fs::read_dir(path)
     }

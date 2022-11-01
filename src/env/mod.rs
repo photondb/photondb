@@ -54,16 +54,16 @@ pub trait Env: Clone + Send + Sync + 'static {
     async fn remove_dir_all<P: AsRef<Path> + Send>(&self, path: P) -> Result<()>;
 
     /// Returns an iterator over the entries within a directory.
-    /// See alos [`std::fs::read_dir`].
+    /// See also [`std::fs::read_dir`].
     /// TODO: async iterator impl?
     fn read_dir<P: AsRef<Path>>(&self, path: P) -> Result<std::fs::ReadDir>;
 
     /// Given a path, query the file system to get information about a file,
     /// directory, etc.
-    /// See alos [`std::fs::metadata`].
+    /// See also [`std::fs::metadata`].
     async fn metadata<P: AsRef<Path> + Send>(&self, path: P) -> Result<Metadata>;
 
-    // Open the directory.
+    /// Open the directory.
     async fn open_dir<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::Directory>;
 }
 

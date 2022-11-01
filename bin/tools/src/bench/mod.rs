@@ -10,8 +10,8 @@ mod bench;
 #[derive(Parser, Debug, Clone)]
 #[clap(about = "Start bench testing")]
 pub(crate) struct Args {
-    // Path of db data folder.
-    // default Env::tempdir.
+    /// Path of db data folder.
+    /// default Env::tempdir.
     #[arg(short, long)]
     path: Option<String>,
 
@@ -41,7 +41,7 @@ pub(crate) struct Args {
     #[arg(short, long, default_value_t = StoreType::Photon)]
     store_type: StoreType,
 
-    ///If true, do not destroy the existing database.  If you set this flag and
+    /// If true, do not destroy the existing database.  If you set this flag and
     /// also specify a benchmark that wants a fresh database, that benchmark
     /// will fail. default: false,
     #[arg(long, default_value_t = false)]
