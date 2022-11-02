@@ -1,3 +1,8 @@
+//! Asynchronous PhotonDB APIs based on the raw APIs with the [`Photon`]
+//! environment.
+//!
+//! [`Photon`]: crate::env::Photon
+
 use std::{ops::Deref, path::Path};
 
 use crate::{env::Photon, raw, Options, Result};

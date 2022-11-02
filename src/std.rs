@@ -1,3 +1,14 @@
+//! Synchronous PhotonDB APIs based on the raw APIs with the [`Std`]
+//! environment.
+//!
+//! The [`Std`] environment use synchronous I/O from [`std`], so all the futures
+//! it returns will block until completion. As a result, we can provide
+//! synchronous APIs by manually polling the futures returned by the raw APIs.
+//! The overhead introduced by the async abstraction in the raw APIs should be
+//! negligible.
+//!
+//! [`Std`]: crate::env::Std
+
 use std::{
     future::Future,
     ops::Deref,
@@ -48,6 +59,7 @@ impl Deref for Table {
 
 fn poll<F: Future>(mut future: F) -> F::Output {
     let cx = &mut Context::from_waker(noop_waker_ref());
+    // Safety: the future will block until completion, so it will never be moved.
     let fut = unsafe { Pin::new_unchecked(&mut future) };
     match fut.poll(cx) {
         Poll::Ready(output) => output,
