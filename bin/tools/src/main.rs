@@ -22,6 +22,8 @@ enum Commands {
 
 #[photonio::main]
 async fn main() -> Result<()> {
+    env_logger::init();
+
     let args = Args::parse();
     match args.cmd {
         Commands::Stress(args) => stress::run(args)?,
