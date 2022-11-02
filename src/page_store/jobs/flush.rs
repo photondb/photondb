@@ -101,19 +101,15 @@ impl<E: Env> FlushCtx<E> {
     async fn build_page_file(&self, write_buffer: &WriteBuffer) -> Result<(Vec<u64>, FileInfo)> {
         assert!(write_buffer.is_flushable());
         let file_id = write_buffer.file_id();
-        let mut deleted_pages = Vec::default();
+        let (dealloc_pages, skip_pages) = collect_dealloc_pages(write_buffer);
         let mut builder = self.page_files.new_file_builder(file_id).await?;
         for (page_addr, header, record_ref) in write_buffer.iter() {
             match record_ref {
-                RecordRef::DeallocPages(pages) => {
-                    deleted_pages.extend(
-                        pages
-                            .as_slice()
-                            .iter()
-                            .filter(|&&v| (v >> 32) as u32 != file_id),
-                    );
-                }
+                RecordRef::DeallocPages(_) => {}
                 RecordRef::Page(page) => {
+                    if header.is_tombstone() || skip_pages.contains(&page_addr) {
+                        continue;
+                    }
                     let content = page.data();
                     builder
                         .add_page(header.page_id(), page_addr, content)
@@ -121,9 +117,9 @@ impl<E: Env> FlushCtx<E> {
                 }
             }
         }
-        builder.add_delete_pages(&deleted_pages);
+        builder.add_delete_pages(&dealloc_pages);
         let file_info = builder.finish().await?;
-        Ok((deleted_pages, file_info))
+        Ok((dealloc_pages, file_info))
     }
 
     async fn save_version_edit(
@@ -177,6 +173,29 @@ impl<E: Env> FlushCtx<E> {
     }
 }
 
+fn collect_dealloc_pages(write_buffer: &WriteBuffer) -> (Vec<u64>, HashSet<u64>) {
+    let file_id = write_buffer.file_id();
+    let mut dealloc_pages = Vec::new();
+    let mut skip_pages = HashSet::new();
+    for (_, _, record_ref) in write_buffer.iter() {
+        if let RecordRef::DeallocPages(pages) = record_ref {
+            dealloc_pages.extend(
+                pages
+                    .as_slice()
+                    .iter()
+                    .filter(|&&v| (v >> 32) as u32 != file_id),
+            );
+            skip_pages.extend(
+                pages
+                    .as_slice()
+                    .iter()
+                    .filter(|&&v| (v >> 32) as u32 == file_id),
+            );
+        }
+    }
+    (dealloc_pages, skip_pages)
+}
+
 fn version_snapshot(version: &Version) -> VersionEdit {
     let new_files: Vec<NewFile> = version.files().values().map(Into::into).collect::<Vec<_>>();
 
@@ -228,8 +247,24 @@ mod tests {
             let (addr, _, _) = wb.alloc_page(1, 123, false).unwrap();
             wb.dealloc_pages(&[addr], false).unwrap();
             wb.seal(false).unwrap();
+            let (deleted_pages, file_info) = ctx.build_page_file(&wb).await.unwrap();
+            assert!(deleted_pages.is_empty());
+            assert!(!file_info.is_page_active(addr));
         }
-        let (deleted_pages, _) = ctx.build_page_file(&wb).await.unwrap();
-        assert!(deleted_pages.is_empty());
+    }
+
+    #[photonio::test]
+    async fn flush_write_buffer_local_pages_aborted_skip() {
+        let base = std::env::temp_dir().join("flush_ignore_local_pages");
+        let ctx = new_flush_ctx(&base).await;
+        let wb = WriteBuffer::with_capacity(1, 1 << 16);
+        unsafe {
+            let (addr, header, _) = wb.alloc_page(1, 123, false).unwrap();
+            header.set_tombstone();
+            wb.seal(false).unwrap();
+            let (deleted_pages, file_info) = ctx.build_page_file(&wb).await.unwrap();
+            assert!(deleted_pages.is_empty());
+            assert!(!file_info.is_page_active(addr));
+        }
     }
 }
