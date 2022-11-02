@@ -8,6 +8,7 @@ use crate::{
     Result,
 };
 
+/// A latch-free, log-structured table with sorted key-value entries.
 pub struct Table<E: Env> {
     tree: Arc<Tree>,
     store: PageStore<E>,
@@ -28,11 +29,18 @@ impl<E: Env> Table<E> {
         self.store.close().await;
     }
 
+    /// Begins a tree transaction.
     fn begin(&self) -> TreeTxn<'_, E> {
         self.tree.begin(self.store.guard())
     }
 
-    /// Gets the value corresponding to the key and applies the function to it.
+    /// Gets the value corresponding to the key and applies a function to it.
+    ///
+    /// On success, if the value is found, the function is called with
+    /// [`Option::Some`] and the value; if the value is not found, the
+    /// function is called with [`Option::None`]. Then [`Result::Ok`] is
+    /// returned with the output of the function.
+    /// On failure, returns [`Result::Err`] without applying the function.
     pub async fn get<F, R>(&self, key: &[u8], lsn: u64, f: F) -> Result<R>
     where
         F: FnOnce(Option<&[u8]>) -> R,
@@ -43,6 +51,7 @@ impl<E: Env> Table<E> {
         Ok(f(value))
     }
 
+    /// Puts a key-value entry to the table.
     pub async fn put(&self, key: &[u8], lsn: u64, value: &[u8]) -> Result<()> {
         let key = Key::new(key, lsn);
         let value = Value::Put(value);
@@ -51,6 +60,7 @@ impl<E: Env> Table<E> {
         Ok(())
     }
 
+    /// Deletes the entry corresponding to the key from the table.
     pub async fn delete(&self, key: &[u8], lsn: u64) -> Result<()> {
         let key = Key::new(key, lsn);
         let value = Value::Delete;
@@ -64,12 +74,19 @@ impl<E: Env> Table<E> {
         self.tree.stats()
     }
 
-    /// Returns the minimal LSN that the table allows to read with.
+    /// Returns the minimal LSN that the table can safely read with.
+    ///
+    /// The table guarantees that entries visible to the returned LSN are
+    /// retained for reads.
     pub fn safe_lsn(&self) -> u64 {
         self.tree.safe_lsn()
     }
 
-    /// Updates the minimal LSN that the table allows to read with.
+    /// Updates the minimal LSN that the table can safely read with.
+    ///
+    /// The safe LSN must be increasing, so updating it with a smaller value has
+    /// no effect. When the safe LSN is advanced, the table will gradually drop
+    /// entries that are not visible to the LSN anymore.
     pub fn set_safe_lsn(&self, lsn: u64) {
         self.tree.set_safe_lsn(lsn);
     }
