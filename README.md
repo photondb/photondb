@@ -1,6 +1,22 @@
 # PhotonDB
 
-A storage engine for modern hardware, built from scratch in Rust.
+[![crates][crates-badge]][crates-url]
+[![docs][docs-badge]][docs-url]
+
+[crates-badge]: https://img.shields.io/crates/v/photondb?style=flat-square
+[crates-url]: https://crates.io/crates/photondb
+[docs-badge]: https://img.shields.io/docsrs/photondb?style=flat-square
+[docs-url]: https://docs.rs/photondb/latest/photondb
+
+A high-performance storage engine for modern hardware and platforms.
+
+PhotonDB is designed from scratch to leverage the power of modern multi-core chips, storage devices, operating systems, and programming languages.
+
+Features:
+
+- Latch-free data structures, scale to many cores.
+- Log-structured persistent stores, optimized for flash storage.
+- Asynchronous APIs and efficient file IO, powered by io_uring on Linux.
 
 ## Design
 

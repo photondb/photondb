@@ -64,7 +64,7 @@ impl<E: Env> FlushCtx<E> {
                     self.refresh_version();
                 }
                 Err(err) => {
-                    todo!("flush write buffer: {err}");
+                    todo!("flush write buffer: {err:?}");
                 }
             }
         }
@@ -106,8 +106,12 @@ impl<E: Env> FlushCtx<E> {
         for (page_addr, header, record_ref) in write_buffer.iter() {
             match record_ref {
                 RecordRef::DeallocPages(pages) => {
-                    builder.add_delete_pages(pages.as_slice());
-                    deleted_pages.extend_from_slice(pages.as_slice());
+                    deleted_pages.extend(
+                        pages
+                            .as_slice()
+                            .iter()
+                            .filter(|&&v| (v >> 32) as u32 != file_id),
+                    );
                 }
                 RecordRef::Page(page) => {
                     let content = page.data();
@@ -117,6 +121,7 @@ impl<E: Env> FlushCtx<E> {
                 }
             }
         }
+        builder.add_delete_pages(&deleted_pages);
         let file_info = builder.finish().await?;
         Ok((deleted_pages, file_info))
     }
@@ -152,7 +157,9 @@ impl<E: Env> FlushCtx<E> {
         let mut files = version.files().clone();
         for page_addr in deleted_pages {
             let file_id = (page_addr >> 32) as u32;
-            let file_info = files.get_mut(&file_id).expect("File is missing");
+            let Some(file_info) = files.get_mut(&file_id) else {
+                panic!("file {file_id} is missing");
+            };
             file_info.deactivate_page(new_file_id, page_addr);
         }
         files
@@ -179,5 +186,50 @@ fn version_snapshot(version: &Version) -> VersionEdit {
     VersionEdit {
         new_files,
         deleted_files,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::{HashMap, HashSet},
+        path::Path,
+        sync::Arc,
+    };
+
+    use super::FlushCtx;
+    use crate::{
+        env::Photon,
+        page_store::{version::Version, Manifest, PageFiles, WriteBuffer},
+        util::shutdown::ShutdownNotifier,
+    };
+
+    async fn new_flush_ctx(base: &Path) -> FlushCtx<Photon> {
+        std::fs::create_dir_all(base).unwrap();
+        let notifier = ShutdownNotifier::default();
+        let shutdown = notifier.subscribe();
+        let version = Version::new(1 << 16, 1, HashMap::default(), HashSet::new());
+        FlushCtx {
+            shutdown,
+            global_version: Arc::new(std::sync::Mutex::new(version)),
+            page_files: Arc::new(PageFiles::new(Photon, base, "prefix").await),
+            manifest: Arc::new(futures::lock::Mutex::new(
+                Manifest::open(Photon, base).await.unwrap(),
+            )),
+        }
+    }
+
+    #[photonio::test]
+    async fn flush_write_buffer_local_pages_ignore() {
+        let base = std::env::temp_dir().join("flush_ignore_local_pages");
+        let ctx = new_flush_ctx(&base).await;
+        let wb = WriteBuffer::with_capacity(1, 1 << 16);
+        unsafe {
+            let (addr, _, _) = wb.alloc_page(1, 123, false).unwrap();
+            wb.dealloc_pages(&[addr], false).unwrap();
+            wb.seal(false).unwrap();
+        }
+        let (deleted_pages, _) = ctx.build_page_file(&wb).await.unwrap();
+        assert!(deleted_pages.is_empty());
     }
 }

@@ -1,4 +1,13 @@
-//! A storage engine for modern hardware.
+//! A high-performance storage engine for modern hardware and platforms.
+//!
+//! PhotonDB is designed from scratch to leverage the power of modern multi-core
+//! chips, storage devices, operating systems, and programming languages.
+//!
+//! Features:
+//!
+//! - Latch-free data structures, scale to many cores.
+//! - Log-structured persistent stores, optimized for flash storage.
+//! - Asynchronous APIs and efficient file IO, powered by io_uring on Linux.
 //!
 //! This crate provides three sets of APIs:
 //!
