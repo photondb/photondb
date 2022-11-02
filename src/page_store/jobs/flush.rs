@@ -205,6 +205,7 @@ mod tests {
     };
 
     async fn new_flush_ctx(base: &Path) -> FlushCtx<Photon> {
+        std::fs::create_dir_all(base).unwrap();
         let notifier = ShutdownNotifier::default();
         let shutdown = notifier.subscribe();
         let version = Version::new(1 << 16, 1, HashMap::default(), HashSet::new());
