@@ -35,7 +35,6 @@ pub(crate) struct FileBuilder<'a, E: Env> {
     index: IndexBlockBuilder,
     meta: MetaBlockBuilder,
 
-    last_add_page_id: u64,
     block_size: usize,
 }
 
@@ -54,7 +53,6 @@ impl<'a, E: Env> FileBuilder<'a, E> {
             writer,
             index: Default::default(),
             meta: Default::default(),
-            last_add_page_id: 0,
             block_size,
         }
     }
@@ -66,11 +64,6 @@ impl<'a, E: Env> FileBuilder<'a, E> {
         page_addr: u64,
         page_content: &[u8],
     ) -> Result<()> {
-        if self.last_add_page_id >= page_id {
-            return Err(Error::InvalidArgument);
-        }
-        self.last_add_page_id = page_id;
-
         let file_offset = self.writer.write(page_content).await?;
         self.index.add_data_block(page_addr, file_offset);
         self.meta.add_page(page_id, page_addr);
