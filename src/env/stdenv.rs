@@ -12,7 +12,7 @@ use futures::executor::block_on;
 
 use super::*;
 
-/// An implementation of [`Env`] based on [`std`] with synchronous I/O.
+/// An implementation of [`Env`] based on [`std`].
 #[derive(Clone)]
 pub struct Std;
 

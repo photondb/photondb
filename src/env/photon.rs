@@ -12,7 +12,9 @@ use photonio::{fs::File, task};
 
 use super::*;
 
-/// An implementation of [`Env`] based on PhotonIO.
+/// An implementation of [`Env`] based on [PhotonIO].
+///
+/// [PhotonIO]: https://crates.io/crates/photonio
 #[derive(Clone)]
 pub struct Photon;
 
