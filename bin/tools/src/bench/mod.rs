@@ -28,11 +28,15 @@ pub(crate) struct Args {
     #[arg(short, long, default_value_t = 1000000)]
     num: u64,
 
+    /// Number of key/value write op should be taken.
+    #[arg(short, long, default_value_t = 0)]
+    writes: u64,
+
     /// Number of concurrent threads to run.
     #[arg(short, long, default_value_t = 1)]
     threads: u64,
 
-    /// The operations to be bench(separate with comma).
+    /// The operations to be bench(separate with space).
     /// example: `fillseq,readseq[W1]` will fillseq then readseq with 1 warmup.
     #[arg(short, long)]
     benchmarks: Vec<String>,
@@ -46,6 +50,20 @@ pub(crate) struct Args {
     /// will fail. default: false,
     #[arg(long, default_value_t = false)]
     use_existing_db: bool,
+
+    /// Stats are reported every N operations when this is greater than 0.
+    #[arg(long, default_value_t = 0)]
+    stats_interval: u64,
+
+    /// Stats's report interval should not great then every N sec when this is
+    /// greater than 0.
+    #[arg(long, default_value_t = 0)]
+    stats_interval_sec: u64,
+
+    /// Base seed for random.
+    /// derived from the current time when it's 0.
+    #[arg(long, default_value_t = 0)]
+    seed_base: u64,
 }
 
 #[derive(Debug, Copy, Clone)]
