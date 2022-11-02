@@ -66,7 +66,7 @@ where
     }
 }
 
-/// An iterator that merges multiple leaf pages for consolidation.
+/// An iterator that merges multiple leaf delta pages for consolidation.
 pub(super) struct MergingLeafPageIter<'a> {
     iter: MergingPageIter<'a, Key<'a>, Value<'a>>,
     safe_lsn: u64,
@@ -130,7 +130,7 @@ impl<'a> RewindableIterator for MergingLeafPageIter<'a> {
     }
 }
 
-/// An iterator that merges multiple inner pages for consolidation.
+/// An iterator that merges multiple inner delta pages for consolidation.
 pub(super) struct MergingInnerPageIter<'a> {
     iter: MergingPageIter<'a, &'a [u8], Index>,
     last_raw: Option<&'a [u8]>,

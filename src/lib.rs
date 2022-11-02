@@ -25,9 +25,7 @@
 //! [`Photon`]: crate::photon
 //! [PhotonIO]: https://crates.io/crates/photonio
 
-// TODO: enable these warnings once the codebase is clean.
-// #![warn(missing_docs, unreachable_pub)]
-
+#![warn(missing_docs, unreachable_pub)]
 #![feature(
     io_error_more,
     type_alias_impl_trait,

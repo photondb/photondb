@@ -6,12 +6,12 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-pub struct ShutdownNotifier {
+pub(crate) struct ShutdownNotifier {
     core: Arc<Mutex<Core>>,
 }
 
 #[derive(Clone)]
-pub struct Shutdown {
+pub(crate) struct Shutdown {
     core: Arc<Mutex<Core>>,
 }
 
@@ -47,15 +47,15 @@ impl Future for Shutdown {
 }
 
 impl ShutdownNotifier {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         ShutdownNotifier::default()
     }
 
-    pub fn subscribe(&self) -> Shutdown {
+    pub(crate) fn subscribe(&self) -> Shutdown {
         Shutdown::new(self.core.clone())
     }
 
-    pub fn terminate(&self) {
+    pub(crate) fn terminate(&self) {
         let mut core = self.core.lock().unwrap();
         core.closed = true;
         for (_, waker) in std::mem::take(&mut core.wakers) {
