@@ -396,13 +396,8 @@ pub(crate) mod facade {
             }
 
             {
-                let known_files = &[file_id]
-                    .iter()
-                    .cloned()
-                    .map(Into::into)
-                    .collect::<Vec<_>>();
                 let recovery_mock_version = info_builder
-                    .recovery_base_file_infos(known_files)
+                    .recovery_base_file_infos(&[file_id.into()])
                     .await
                     .unwrap();
                 let file1 = recovery_mock_version.get(&1).unwrap();
