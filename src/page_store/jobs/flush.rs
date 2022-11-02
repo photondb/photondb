@@ -72,7 +72,7 @@ impl<E: Env> FlushCtx<E> {
 
     async fn flush(&self, version: &Version, write_buffer: &WriteBuffer) -> Result<()> {
         let file_id = write_buffer.file_id();
-        let (deleted_pages, file_info) = self.build_page_file(write_buffer).await.unwrap();
+        let (deleted_pages, file_info) = self.build_page_file(write_buffer).await?;
         let files = self.apply_deleted_pages(version, file_id, deleted_pages);
 
         let mut files = files;
@@ -83,8 +83,7 @@ impl<E: Env> FlushCtx<E> {
         files.insert(file_id, file_info);
 
         self.save_version_edit(version, file_id, &deleted_files)
-            .await
-            .unwrap();
+            .await?;
 
         let delta = DeltaVersion {
             files,
@@ -103,7 +102,7 @@ impl<E: Env> FlushCtx<E> {
         assert!(write_buffer.is_flushable());
         let file_id = write_buffer.file_id();
         let mut deleted_pages = Vec::default();
-        let mut builder = self.page_files.new_file_builder(file_id).await.unwrap();
+        let mut builder = self.page_files.new_file_builder(file_id).await?;
         for (page_addr, header, record_ref) in write_buffer.iter() {
             match record_ref {
                 RecordRef::DeallocPages(pages) => {
@@ -118,13 +117,12 @@ impl<E: Env> FlushCtx<E> {
                     let content = page.data();
                     builder
                         .add_page(header.page_id(), page_addr, content)
-                        .await
-                        .unwrap();
+                        .await?;
                 }
             }
         }
         builder.add_delete_pages(&deleted_pages);
-        let file_info = builder.finish().await.unwrap();
+        let file_info = builder.finish().await?;
         Ok((deleted_pages, file_info))
     }
 
