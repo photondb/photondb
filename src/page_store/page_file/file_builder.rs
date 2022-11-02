@@ -136,7 +136,7 @@ impl<'a, E: Env> FileBuilder<'a, E> {
 
         let active_pages = {
             let mut active_pages = roaring::RoaringBitmap::new();
-            for page_addr in self.meta.page_table.0.values() {
+            for page_addr in meta.data_offsets().keys() {
                 let (_, index) = split_page_addr(*page_addr);
                 active_pages.insert(index);
             }
