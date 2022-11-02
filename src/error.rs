@@ -2,6 +2,7 @@ use thiserror::Error;
 
 use crate::page_store::Error as PageError;
 
+/// A list of possible errors returned by public APIs.
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("Corrupted")]

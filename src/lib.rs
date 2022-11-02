@@ -17,6 +17,9 @@
 //! - [`Photon`]: a set of asynchronous APIs based on the raw APIs that must run
 //!   with the [PhotonIO] runtime.
 //!
+//! The [`Photon`] APIs are the default APIs that are re-exported to the
+//! top-level module.
+//!
 //! [`Raw`]: crate::raw
 //! [`Std`]: crate::std
 //! [`Photon`]: crate::photon
@@ -40,7 +43,7 @@ pub mod raw;
 pub mod std;
 
 pub mod photon;
-pub use photon::{Store, Table};
+pub use photon::Table;
 
 mod tree;
 pub use tree::{Options, ReadOptions, Stats, WriteOptions};
