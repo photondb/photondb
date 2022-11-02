@@ -69,13 +69,9 @@ impl<E: Env> FileInfoBuilder<E> {
         let meta = meta_reader.file_metadata();
 
         let active_pages = {
-            let page_table = meta_reader
-                .read_page_table()
-                .await
-                .expect("read page table error");
             let mut active_pages = roaring::RoaringBitmap::new();
-            for (_page_id, page_addr) in page_table {
-                let (_, index) = split_page_addr(page_addr);
+            for page_addr in meta.data_offsets().keys() {
+                let (_, index) = split_page_addr(*page_addr);
                 active_pages.insert(index);
             }
             active_pages
