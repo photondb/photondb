@@ -3,8 +3,11 @@ use crate::util::atomic::Counter;
 /// Statistics of a table.
 #[derive(Clone, Debug, Default)]
 pub struct Stats {
+    /// Statistics of transactions that have succeed.
     pub success: TxnStats,
+    /// Statistics of transactions that need restart.
     pub restart: TxnStats,
+    /// Statistics of transactions that have failed.
     pub failure: TxnStats,
 }
 

@@ -17,6 +17,7 @@ pub struct Options {
     /// Default: 4
     pub page_chain_length: usize,
 
+    /// Options for the underlying page store.
     pub page_store: PageStoreOptions,
 }
 

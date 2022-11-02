@@ -1,3 +1,5 @@
+//! Environments for PhotonDB to interact with different runtimes and platforms.
+
 use std::{future::Future, io::Result, path::Path};
 
 pub use async_trait::async_trait;
@@ -12,9 +14,13 @@ pub use photon::Photon;
 /// Provides an environment to interact with a specific platform.
 #[async_trait]
 pub trait Env: Clone + Send + Sync + 'static {
+    /// Positional readers returned by the environment.
     type PositionalReader: PositionalReader;
+    /// Sequential writers returned by the environment.
     type SequentialWriter: SequentialWriter;
+    /// Handles to await tasks spawned by the environment.
     type JoinHandle<T: Send>: Future<Output = T> + Send;
+    /// Directories returned by the environment.
     type Directory: Directory + Send + Sync + 'static;
 
     /// Opens a file for positional reads.
@@ -67,6 +73,7 @@ pub trait Env: Clone + Send + Sync + 'static {
     async fn open_dir<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::Directory>;
 }
 
+/// A reader that allows positional reads.
 #[async_trait]
 pub trait PositionalReader: Send + Sync + 'static {
     /// A future that resolves to the result of [`Self::read_at`].
@@ -84,6 +91,7 @@ pub trait PositionalReader: Send + Sync + 'static {
     fn direct_io_ify(&self) -> Result<()>;
 }
 
+/// Extension methods for [`PositionalReader`].
 pub trait PositionalReaderExt {
     /// A future that resolves to the result of [`Self::read_exact_at`].
     type ReadExactAt<'a>: Future<Output = Result<()>> + 'a
@@ -118,6 +126,7 @@ where
     }
 }
 
+/// A writer that allows sequential writes.
 #[async_trait]
 pub trait SequentialWriter: Send + Sync + 'static {
     /// A future that resolves to the result of [`Self::write`].
@@ -158,6 +167,7 @@ pub trait SequentialWriterExt {
     fn write_all<'a>(&'a mut self, buf: &'a [u8]) -> Self::WriteAll<'a>;
 }
 
+/// Extension methods for [`SequentialWriter`].
 impl<T> SequentialWriterExt for T
 where
     T: SequentialWriter,
@@ -217,8 +227,9 @@ pub(in crate::env) fn direct_io_ify(_: i32) -> Result<()> {
     ))
 }
 
+/// A handle to an opened directory.
 #[async_trait]
 pub trait Directory {
-    // Sync_all directory.
+    /// Sync_all directory.
     async fn sync_all(&self) -> Result<()>;
 }

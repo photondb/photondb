@@ -1,7 +1,7 @@
 //! Raw PhotonDB APIs that can can run with different environments.
 
-pub mod store;
+mod store;
 pub use store::Store;
 
-pub mod table;
+mod table;
 pub use table::Table;
