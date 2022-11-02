@@ -674,8 +674,9 @@ impl<'a> Iterator for RecordIterator<'a> {
             let record_header = unsafe { self.write_buffer.record(record_offset) };
 
             self.offset += record_header.record_size();
+            let page_offset = record_offset + core::mem::size_of::<RecordHeader>() as u32;
             if let Some(record_ref) = record_header.record_ref() {
-                let page_addr = ((self.write_buffer.file_id as u64) << 32) | (record_offset as u64);
+                let page_addr = ((self.write_buffer.file_id as u64) << 32) | (page_offset as u64);
                 return Some((page_addr, record_header, record_ref));
             }
         }
@@ -879,6 +880,22 @@ mod tests {
             }
         }
         assert!(active_pages.is_empty());
+    }
+
+    #[test]
+    fn write_buffer_iterate_with_correct_offset() {
+        let mut page_addrs = Vec::new();
+
+        let buf = WriteBuffer::with_capacity(1, 1 << 16);
+        for i in 4..12 {
+            let (addr, _, _) = unsafe { buf.alloc_page(0, 1 << i, false).unwrap() };
+            page_addrs.push(addr);
+        }
+
+        unsafe { buf.seal(false).unwrap() };
+
+        let new_page_addrs = buf.iter().map(|(addr, _, _)| addr).collect::<Vec<_>>();
+        assert_eq!(page_addrs, new_page_addrs);
     }
 
     #[test]
