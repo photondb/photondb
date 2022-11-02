@@ -374,6 +374,37 @@ pub(crate) mod facade {
             }
         }
 
+        #[photonio::test]
+        fn test_get_child_page() {
+            let env = crate::env::Photon;
+            let files = {
+                let base = std::env::temp_dir();
+                PageFiles::new(env, &base, "test_get_child_page").await
+            };
+            let info_builder = files.new_info_builder();
+
+            let file_id = 1;
+            let page_addr1 = page_addr(file_id, 0);
+            let page_addr2 = page_addr(file_id, 1);
+
+            {
+                let mut b = files.new_file_builder(file_id).await.unwrap();
+                b.add_page(1, page_addr1, &[1].repeat(10)).await.unwrap();
+                b.add_page(1, page_addr2, &[2].repeat(10)).await.unwrap();
+                let file_info = b.finish().await.unwrap();
+                assert!(file_info.get_page_handle(page_addr1).is_some())
+            }
+
+            {
+                let recovery_mock_version = info_builder
+                    .recovery_base_file_infos(&[file_id.into()])
+                    .await
+                    .unwrap();
+                let file1 = recovery_mock_version.get(&1).unwrap();
+                assert!(file1.get_page_handle(page_addr1).is_some())
+            }
+        }
+
         fn page_addr(file_id: u32, index: u32) -> u64 {
             ((file_id as u64) << 32) | (index as u64)
         }

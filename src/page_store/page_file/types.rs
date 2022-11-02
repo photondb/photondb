@@ -143,15 +143,15 @@ impl FileMeta {
     pub(crate) fn new(
         file_id: u32,
         file_size: usize,
-        indexes: Vec<u64>,
-        offsets: BTreeMap<u64, u64>,
+        meta_indexes: Vec<u64>,
+        data_offsets: BTreeMap<u64, u64>,
         block_size: usize,
     ) -> Self {
         Self {
             file_id,
             file_size,
-            meta_indexes: indexes,
-            data_offsets: offsets,
+            meta_indexes,
+            data_offsets,
             block_size,
         }
     }
@@ -194,6 +194,11 @@ impl FileMeta {
     #[inline]
     pub(crate) fn block_size(&self) -> usize {
         self.block_size
+    }
+
+    #[inline]
+    pub(crate) fn data_offsets(&self) -> &BTreeMap<u64, u64> {
+        &self.data_offsets
     }
 
     pub(crate) fn get_page_table_meta_page(
