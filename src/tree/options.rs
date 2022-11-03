@@ -2,7 +2,7 @@ use crate::page_store::Options as PageStoreOptions;
 
 /// Options to configure a table.
 #[non_exhaustive]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Options {
     /// Approximate size of user data packed per page before it is split.
     ///
@@ -33,7 +33,7 @@ impl Default for Options {
 
 /// Options to configure the behavior of reads.
 #[non_exhaustive]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ReadOptions {
     /// The maximum visible LSN for this read.
     ///
@@ -59,5 +59,5 @@ impl Default for ReadOptions {
 
 /// Options to configure the behavior of writes.
 #[non_exhaustive]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WriteOptions {}

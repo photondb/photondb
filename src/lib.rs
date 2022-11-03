@@ -70,7 +70,7 @@ mod tests {
             })
             .await
             .unwrap();
-        table.close().await;
+        table.close().await.unwrap();
     }
 
     #[test]
@@ -86,6 +86,6 @@ mod tests {
                 assert_eq!(v, Some(value.as_slice()));
             })
             .unwrap();
-        table.close();
+        table.close().unwrap();
     }
 }

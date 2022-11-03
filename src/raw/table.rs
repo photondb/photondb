@@ -9,9 +9,10 @@ use crate::{
 };
 
 /// A latch-free, log-structured table with sorted key-value entries.
+#[derive(Clone, Debug)]
 pub struct Table<E: Env> {
     tree: Arc<Tree>,
-    store: PageStore<E>,
+    store: Arc<PageStore<E>>,
 }
 
 impl<E: Env> Table<E> {
@@ -21,12 +22,27 @@ impl<E: Env> Table<E> {
         let store = PageStore::open(env, path, options.page_store, tree.clone()).await?;
         let txn = tree.begin(store.guard());
         txn.init().await?;
-        Ok(Self { tree, store })
+        Ok(Self {
+            tree,
+            store: Arc::new(store),
+        })
     }
 
-    /// Closes the table.
-    pub async fn close(self) {
-        self.store.close().await;
+    /// Closes the table if this is the only reference to it.
+    ///
+    /// If this is not the only reference, returns [`Result::Err`] with this
+    /// reference.
+    pub async fn close(self) -> Result<(), Self> {
+        match Arc::try_unwrap(self.store) {
+            Ok(store) => {
+                store.close().await;
+                Ok(())
+            }
+            Err(store) => Err(Self {
+                tree: self.tree,
+                store,
+            }),
+        }
     }
 
     /// Begins a tree transaction.
@@ -35,11 +51,11 @@ impl<E: Env> Table<E> {
     }
 
     /// Gets the value corresponding to the key and applies a function to it.
-    ///
-    /// On success, if the value is found, the function is called with
-    /// [`Option::Some`] and the value; if the value is not found, the
-    /// function is called with [`Option::None`]. Then [`Result::Ok`] is
-    /// returned with the output of the function.
+    //
+    /// On success, if the value is found, applies the function to
+    /// [`Option::Some`] with the value; if the value is not found, applies the
+    /// function to [`Option::None`]. Then returns [`Result::Ok`] with the
+    /// output of the function.
     /// On failure, returns [`Result::Err`] without applying the function.
     pub async fn get<F, R>(&self, key: &[u8], lsn: u64, f: F) -> Result<R>
     where
