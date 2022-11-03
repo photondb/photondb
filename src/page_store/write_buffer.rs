@@ -623,6 +623,11 @@ impl RecordHeader {
     }
 
     #[inline]
+    pub(crate) fn page_size(&self) -> usize {
+        self.page_size as usize
+    }
+
+    #[inline]
     pub(crate) fn set_page_id(&mut self, page_id: u64) {
         self.page_id = page_id;
     }

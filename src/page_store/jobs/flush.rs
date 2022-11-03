@@ -2,7 +2,10 @@ use std::{
     collections::{HashMap, HashSet},
     rc::Rc,
     sync::{Arc, Mutex},
+    time::Instant,
 };
+
+use log::info;
 
 use crate::{
     env::Env,
@@ -18,6 +21,16 @@ pub(crate) struct FlushCtx<E: Env> {
     global_version: Arc<Mutex<Version>>,
     page_files: Arc<PageFiles<E>>,
     manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
+}
+
+#[derive(Default)]
+struct FlushPageStats {
+    data_size: usize,
+
+    num_records: usize,
+    num_tombstone_records: usize,
+    num_dealloc_pages: usize,
+    num_recycle_pages: usize,
 }
 
 impl<E: Env> FlushCtx<E> {
@@ -71,8 +84,17 @@ impl<E: Env> FlushCtx<E> {
     }
 
     async fn flush(&self, version: &Version, write_buffer: &WriteBuffer) -> Result<()> {
+        let start_at = Instant::now();
         let file_id = write_buffer.file_id();
         let (deleted_pages, file_info) = self.build_page_file(write_buffer).await?;
+
+        info!(
+            "Flush file {file_id} with {} bytes, {} active pages, lasted {} microseconds",
+            file_info.file_size(),
+            file_info.num_active_pages(),
+            start_at.elapsed().as_micros()
+        );
+
         let files = self.apply_deleted_pages(version, file_id, deleted_pages);
 
         let mut files = files;
@@ -100,8 +122,14 @@ impl<E: Env> FlushCtx<E> {
     /// Flush [`WriteBuffer`] to page files and returns deleted pages.
     async fn build_page_file(&self, write_buffer: &WriteBuffer) -> Result<(Vec<u64>, FileInfo)> {
         assert!(write_buffer.is_flushable());
+
+        let mut flush_stats = FlushPageStats::default();
+        let (dealloc_pages, skip_pages) =
+            collect_dealloc_pages_and_stats(write_buffer, &mut flush_stats);
+
         let file_id = write_buffer.file_id();
-        let (dealloc_pages, skip_pages) = collect_dealloc_pages(write_buffer);
+        info!("Flush write buffer {file_id} {flush_stats}");
+
         let mut builder = self.page_files.new_file_builder(file_id).await?;
         for (page_addr, header, record_ref) in write_buffer.iter() {
             match record_ref {
@@ -173,11 +201,30 @@ impl<E: Env> FlushCtx<E> {
     }
 }
 
-fn collect_dealloc_pages(write_buffer: &WriteBuffer) -> (Vec<u64>, HashSet<u64>) {
+impl std::fmt::Display for FlushPageStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "num_records: {} num_tombstone_records: {} num_dealloc_pages: {} num_recycle_pages: {} data_size: {}",
+            self.num_records, self.num_tombstone_records, self.num_dealloc_pages, self.num_recycle_pages, self.data_size
+        )
+    }
+}
+
+fn collect_dealloc_pages_and_stats(
+    write_buffer: &WriteBuffer,
+    flush_stats: &mut FlushPageStats,
+) -> (Vec<u64>, HashSet<u64>) {
     let file_id = write_buffer.file_id();
     let mut dealloc_pages = Vec::new();
     let mut skip_pages = HashSet::new();
-    for (_, _, record_ref) in write_buffer.iter() {
+    for (_, header, record_ref) in write_buffer.iter() {
+        flush_stats.num_records += 1;
+        if header.is_tombstone() {
+            flush_stats.num_tombstone_records += 1;
+        }
+
+        flush_stats.data_size += header.page_size();
         if let RecordRef::DeallocPages(pages) = record_ref {
             dealloc_pages.extend(
                 pages
@@ -193,6 +240,10 @@ fn collect_dealloc_pages(write_buffer: &WriteBuffer) -> (Vec<u64>, HashSet<u64>)
             );
         }
     }
+
+    flush_stats.num_recycle_pages = skip_pages.len();
+    flush_stats.num_dealloc_pages = dealloc_pages.len();
+
     (dealloc_pages, skip_pages)
 }
 
