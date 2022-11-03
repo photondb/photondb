@@ -64,9 +64,7 @@ where
         loop {
             self.gc(&version).await;
             match with_shutdown(&mut self.shutdown, version.wait_next_version()).await {
-                Some(next_version) => {
-                    version = next_version.refresh().unwrap_or_else(move || next_version)
-                }
+                Some(next_version) => version = next_version.refresh().unwrap_or(next_version),
                 None => break,
             }
         }
@@ -148,12 +146,12 @@ where
             }
             cached_pages.push(*page_addr);
             if cached_pages.len() == 128 {
-                self.rewrite_dealloc_pages_chunk(&version, &cached_pages)?;
+                self.rewrite_dealloc_pages_chunk(version, &cached_pages)?;
                 cached_pages.clear();
             }
         }
         if !cached_pages.is_empty() {
-            self.rewrite_dealloc_pages_chunk(&version, &cached_pages)?;
+            self.rewrite_dealloc_pages_chunk(version, &cached_pages)?;
         }
         Ok(())
     }

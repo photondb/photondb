@@ -112,7 +112,7 @@ impl<E: Env> FlushCtx<E> {
         };
 
         let buffer_set = version.buffer_set.clone();
-        Version::install(&version, delta)?;
+        Version::install(version, delta)?;
         buffer_set.on_flushed(file_id);
         Ok(())
     }
