@@ -221,12 +221,11 @@ impl<'a, E: Env> PageTxn<'a, E> {
 
     /// Commits the transaction.
     pub(crate) fn commit(mut self) {
-        if !self.records.is_empty() {
-            self.drop_writer_guard();
-            self.records.clear();
-        }
-
         self.page_ids.clear();
+        if !self.records.is_empty() {
+            self.records.clear();
+            self.drop_writer_guard();
+        }
     }
 
     fn seal_write_buffer(&mut self) {
@@ -236,13 +235,8 @@ impl<'a, E: Env> PageTxn<'a, E> {
                 .write_buffer(self.file_id)
                 .expect("The memory buffer should exists");
 
-            let release_writer = !self.is_first_op();
-            // Safety: all references are immutable.
-            match unsafe { write_buffer.seal(release_writer) } {
-                Ok(release_state) => {
-                    self.records.clear();
-                    release_state
-                }
+            match write_buffer.seal() {
+                Ok(release_state) => release_state,
                 Err(_) => {
                     // The write buffer has been sealed.
                     return;
@@ -326,12 +320,7 @@ impl<'a, E: Env> Drop for PageTxn<'a, E> {
                 header.set_tombstone();
             }
             self.records.clear();
-            self.guard
-                .version
-                .with_write_buffer(self.file_id, |write_buffer| {
-                    // Safety: all mutable references are released.
-                    unsafe { write_buffer.release_writer() };
-                });
+            self.drop_writer_guard();
         }
     }
 }
@@ -436,6 +425,23 @@ mod tests {
         let guard = Guard::new(version, &page_table, &files);
         let mut page_txn = guard.begin();
         page_txn.seal_write_buffer();
+    }
+
+    #[photonio::test]
+    async fn page_txn_seal_write_buffer_twice() {
+        let env = crate::env::Photon;
+        let files = {
+            let base = std::env::temp_dir();
+            Arc::new(PageFiles::new(env, &base, "test_page_seal_write_buffer").await)
+        };
+
+        let version = new_version(512);
+        let page_table = PageTable::default();
+        let guard = Guard::new(version, &page_table, &files);
+        let mut page_txn_1 = guard.begin();
+        let mut page_txn_2 = guard.begin();
+        page_txn_1.seal_write_buffer();
+        page_txn_2.seal_write_buffer();
     }
 
     #[photonio::test]

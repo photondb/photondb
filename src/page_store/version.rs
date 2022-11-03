@@ -545,7 +545,7 @@ mod tests {
         });
 
         // 1. seal previous buffer.
-        unsafe { buffer_set.current().current_buffer.seal(false).unwrap() };
+        buffer_set.current().current_buffer.seal().unwrap();
 
         let file_id = buffer_set.current().next_file_id();
         let buf = WriteBuffer::with_capacity(file_id, buffer_set.write_buffer_capacity());
@@ -566,7 +566,7 @@ mod tests {
         };
         assert_eq!(Arc::strong_count(&buf), 2);
 
-        unsafe { buf.seal(false).unwrap() };
+        buf.seal().unwrap();
 
         // Install new buf.
         buffer_set.install(Arc::new(WriteBuffer::with_capacity(
