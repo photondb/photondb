@@ -496,6 +496,17 @@ impl WriteBuffer {
     }
 }
 
+impl std::fmt::Debug for WriteBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let buffer_state = BufferState::load(self.buffer_state.load(Ordering::Relaxed));
+        f.debug_struct("WriteBuffer")
+            .field("file_id", &self.file_id)
+            .field("buf_size", &self.buf_size)
+            .field("buffer_state", &buffer_state)
+            .finish()
+    }
+}
+
 impl Drop for WriteBuffer {
     fn drop(&mut self) {
         use std::alloc::{dealloc, Layout};

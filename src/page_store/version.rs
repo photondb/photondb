@@ -78,8 +78,7 @@ pub(crate) struct BufferSetVersion {
 pub(crate) struct BufferSetRef<'a> {
     version: &'a BufferSetVersion,
     // `guard` is used to ensure that the referenced `BufferSetVersion` will not be released early.
-    #[allow(unused)]
-    guard: Guard,
+    _guard: Guard,
 }
 
 impl Version {
@@ -185,6 +184,7 @@ impl Version {
                 .take()
                 .expect("There can only be one waiter per version")
         };
+        drop(self);
         handle.await.unwrap_or_default();
     }
 
@@ -327,7 +327,7 @@ impl BufferSet {
         let current = unsafe { self.current_without_guard() };
         BufferSetRef {
             version: current,
-            guard,
+            _guard: guard,
         }
     }
 
@@ -414,6 +414,9 @@ impl BufferSet {
             // any references to the memory, which guarrantted by epoch based reclamation.
             drop(Box::from_raw(current as *mut BufferSetVersion));
         });
+
+        // Get the defer function executed as soon as possible.
+        guard.flush();
     }
 }
 
@@ -550,5 +553,34 @@ mod tests {
 
         buffer_set.notify_flush_job();
         handle.await.unwrap();
+    }
+
+    #[test]
+    fn buffer_set_write_buffer_switch_release() {
+        let buffer_set = BufferSet::new(1, 1 << 10);
+        let (file_id, buf) = {
+            let current = buffer_set.current();
+            let buf = current.last_writer_buffer();
+            let file_id = buf.file_id();
+            (file_id, current.write_buffer(file_id).unwrap().clone())
+        };
+        assert_eq!(Arc::strong_count(&buf), 2);
+
+        unsafe { buf.seal(false).unwrap() };
+
+        // Install new buf.
+        buffer_set.install(Arc::new(WriteBuffer::with_capacity(
+            file_id + 1,
+            buffer_set.write_buffer_capacity(),
+        )));
+        buffer_set.on_flushed(file_id);
+
+        {
+            // Some advance.
+            let guard = buffer_set_guard::pin();
+            guard.flush();
+        }
+
+        assert_eq!(Arc::strong_count(&buf), 1);
     }
 }
