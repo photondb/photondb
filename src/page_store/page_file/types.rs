@@ -79,7 +79,7 @@ impl FileInfo {
     }
 
     #[inline]
-    fn is_page_active(&self, page_addr: u64) -> bool {
+    pub(crate) fn is_page_active(&self, page_addr: u64) -> bool {
         let index = page_addr as u32;
         self.active_pages.contains(index)
     }
