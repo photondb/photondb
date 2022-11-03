@@ -7,6 +7,7 @@ pub(super) const ROOT_INDEX: Index = Index::new(MIN_ID, 0);
 pub(super) const NULL_INDEX: Index = Index::new(NAN_ID, 0);
 
 /// Related information of a page.
+#[derive(Clone, Debug)]
 pub(super) struct PageView<'a> {
     pub(super) id: u64,
     pub(super) addr: u64,

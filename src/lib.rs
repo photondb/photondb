@@ -52,7 +52,7 @@ mod util;
 
 #[cfg(test)]
 mod tests {
-    use ::std::env::temp_dir;
+    use tempdir::TempDir;
 
     use super::*;
 
@@ -76,9 +76,10 @@ mod tests {
 
     #[photonio::test]
     async fn crud() {
-        let path = temp_dir();
+        let path = TempDir::new("crud").unwrap();
         let options = Options {
-            page_size: 128,
+            page_size: 64,
+            page_chain_length: 2,
             ..Default::default()
         };
         let table = Table::open(path, options).await.unwrap();
