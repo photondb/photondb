@@ -15,7 +15,7 @@ use super::*;
 /// An implementation of [`Env`] based on [PhotonIO].
 ///
 /// [PhotonIO]: https://crates.io/crates/photonio
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Photon;
 
 #[async_trait]

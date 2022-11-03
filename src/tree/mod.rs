@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     future::Future,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -60,6 +61,15 @@ impl Tree {
                 return;
             }
         }
+    }
+}
+
+impl fmt::Debug for Tree {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Tree")
+            .field("options", &self.options)
+            .field("safe_lsn", &self.safe_lsn())
+            .finish()
     }
 }
 

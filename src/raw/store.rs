@@ -5,6 +5,8 @@ use crate::{env::Env, Options, Result};
 
 /// A persistent key-value store that manages multiple tables.
 #[allow(dead_code)]
+#[doc(hidden)]
+#[derive(Clone, Debug)]
 pub struct Store<E: Env> {
     table: Table<E>,
 }

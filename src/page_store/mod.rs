@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    mem,
+    fmt, mem,
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -42,7 +42,7 @@ pub(crate) use strategy::{MinDeclineRateStrategyBuilder, StrategyBuilder};
 
 /// Options to configure a page store.
 #[non_exhaustive]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Options {
     /// The capacity of [`WriteBuffer`]. It should be power of two.
     ///
@@ -183,5 +183,11 @@ impl<E: Env> PageStore<E> {
 impl<E: Env> Drop for PageStore<E> {
     fn drop(&mut self) {
         self.shutdown.terminate();
+    }
+}
+
+impl<E: Env> fmt::Debug for PageStore<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PageStore").finish()
     }
 }
