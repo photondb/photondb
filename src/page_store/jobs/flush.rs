@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    rc::Rc,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -113,7 +112,6 @@ impl<E: Env> FlushCtx<E> {
         };
 
         let buffer_set = version.buffer_set.clone();
-        let version = Rc::new(version.clone());
         Version::install(version, delta)?;
         buffer_set.on_flushed(file_id);
         Ok(())
@@ -196,7 +194,7 @@ impl<E: Env> FlushCtx<E> {
     fn refresh_version(&self) {
         let mut version = self.global_version.lock().expect("Poisoned");
         if let Some(new) = version.refresh() {
-            *version = <Version as Clone>::clone(&new);
+            *version = new;
         }
     }
 }
