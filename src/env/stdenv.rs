@@ -13,7 +13,7 @@ use futures::executor::block_on;
 use super::*;
 
 /// An implementation of [`Env`] based on [`std`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Std;
 
 #[async_trait]

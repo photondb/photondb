@@ -230,29 +230,16 @@ impl WriteBuffer {
 
     /// Seal the [`WriteBuffer`]. `Err(Error::Again)` is returned if the buffer
     /// has been sealed.
-    ///
-    /// # Safety
-    ///
-    /// Before the writer is released if `release_writer` is set, it must be
-    /// ensured that all former allocated [`PageBuf`] have been released or
-    /// converted to [`PageRef`] to avoid violating pointer aliasing rules.
-    pub(crate) unsafe fn seal(&self, release_writer: bool) -> Result<ReleaseState> {
+    pub(crate) fn seal(&self) -> Result<ReleaseState> {
         let mut current = self.buffer_state.load(Ordering::Acquire);
         loop {
             let mut buffer_state = BufferState::load(current);
             if buffer_state.sealed {
-                if release_writer {
-                    return Ok(self.release_writer());
-                }
                 return Err(Error::Again);
             }
 
             buffer_state.set_sealed();
-            if release_writer {
-                buffer_state.dec_writer();
-            }
             let new = buffer_state.apply();
-
             match self.buffer_state.compare_exchange(
                 current,
                 new,
@@ -496,6 +483,17 @@ impl WriteBuffer {
     }
 }
 
+impl std::fmt::Debug for WriteBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let buffer_state = BufferState::load(self.buffer_state.load(Ordering::Relaxed));
+        f.debug_struct("WriteBuffer")
+            .field("file_id", &self.file_id)
+            .field("buf_size", &self.buf_size)
+            .field("buffer_state", &buffer_state)
+            .finish()
+    }
+}
+
 impl Drop for WriteBuffer {
     fn drop(&mut self) {
         use std::alloc::{dealloc, Layout};
@@ -620,6 +618,11 @@ impl RecordHeader {
     #[inline]
     pub(crate) fn page_id(&self) -> u64 {
         self.page_id
+    }
+
+    #[inline]
+    pub(crate) fn page_size(&self) -> usize {
+        self.page_size as usize
     }
 
     #[inline]
@@ -813,17 +816,14 @@ mod tests {
     #[test]
     fn write_buffer_seal() {
         let buf = WriteBuffer::with_capacity(1, 512);
-        assert!(matches!(
-            unsafe { buf.seal(false) },
-            Ok(ReleaseState::Flush)
-        ));
+        assert!(matches!(buf.seal(), Ok(ReleaseState::Flush)));
     }
 
     #[test]
     fn write_buffer_sealed_seal() {
         let buf = WriteBuffer::with_capacity(1, 512);
-        unsafe { buf.seal(false) }.unwrap();
-        assert!(matches!(unsafe { buf.seal(false) }, Err(Error::Again)));
+        buf.seal().unwrap();
+        assert!(matches!(buf.seal(), Err(Error::Again)));
     }
 
     #[test]
@@ -831,15 +831,19 @@ mod tests {
         // Even if the buffer is sealed, release writer is still needed.
         let buf = WriteBuffer::with_capacity(1, 1024);
         buf.batch(&[], &[1]).unwrap();
-        unsafe { buf.seal(false) }.unwrap();
-        assert!(matches!(unsafe { buf.seal(true) }, Ok(ReleaseState::Flush)));
+        buf.seal().unwrap();
+        assert!(matches!(
+            unsafe { buf.release_writer() },
+            ReleaseState::Flush
+        ));
     }
 
     #[test]
     #[should_panic]
     fn write_buffer_empty_writer_release_seal() {
         let buf = WriteBuffer::with_capacity(1, 512);
-        unsafe { buf.seal(true).unwrap() };
+        buf.seal().unwrap();
+        unsafe { buf.release_writer() };
     }
 
     #[test]
@@ -863,7 +867,8 @@ mod tests {
             h.set_tombstone()
         }
 
-        unsafe { buf.seal(true) }.unwrap();
+        unsafe { buf.release_writer() };
+        buf.seal().unwrap();
 
         let expect_dealloc_pages = vec![11, 12, 13, 14, 15];
         let mut active_pages: HashSet<u64> = vec![1, 3, 5, 7, 9].into_iter().collect();
@@ -892,7 +897,7 @@ mod tests {
             page_addrs.push(addr);
         }
 
-        unsafe { buf.seal(false).unwrap() };
+        buf.seal().unwrap();
 
         let new_page_addrs = buf.iter().map(|(addr, _, _)| addr).collect::<Vec<_>>();
         assert_eq!(page_addrs, new_page_addrs);

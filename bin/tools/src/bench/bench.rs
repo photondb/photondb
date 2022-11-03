@@ -32,7 +32,7 @@ impl Benchmark {
 
 struct PhotonBench<E: Env> {
     config: Args,
-    table: Option<Arc<Table<E>>>,
+    table: Option<Table<E>>,
     bench_ops: Vec<BenchOperation>,
 }
 
@@ -44,11 +44,11 @@ impl<E: Env> PhotonBench<E> {
             .as_ref()
             .map(Into::into)
             .unwrap_or_else(|| std::env::temp_dir());
-        let table = Some(Arc::new(
+        let table = Some(
             Table::open(env, path, options)
                 .await
                 .expect("open table fail"),
-        ));
+        );
         let benchmarks = Self::parse_bench_ops(config.benchmarks.as_slice());
         Self {
             config,
@@ -102,9 +102,7 @@ impl<E: Env> PhotonBench<E> {
 
     async fn cleanup(&mut self) {
         if let Some(table) = self.table.take() {
-            if let Ok(t) = Arc::try_unwrap(table) {
-                t.close().await
-            }
+            let _ = table.close().await;
         }
     }
 }
