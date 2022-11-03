@@ -500,12 +500,24 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     // Reconciles a pending split on the root page.
     async fn reconcile_split_root(&self, view: PageView<'_>) -> Result<()> {
         assert_eq!(view.id, ROOT_ID);
-        // Move the root to another place.
         let mut txn = self.guard.begin();
-        let left_id = txn.insert_page(view.addr);
+        // Move the root to another place.
+        let root = view.page;
+        let left_id = {
+            // The transaction requires that inserted pages must be allocated by it.
+            // So we allocates an empty delta page here.
+            let iter: ItemIter<(Key, Value)> = None.into();
+            let builder = SortedPageBuilder::new(root.tier(), root.kind()).with_iter(iter);
+            let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+            builder.build(&mut new_page);
+            new_page.set_epoch(root.epoch());
+            new_page.set_chain_len(root.chain_len().saturating_add(1));
+            new_page.set_chain_next(view.addr);
+            txn.insert_page(new_addr)
+        };
         let left_key = [].as_slice();
-        let left_index = Index::new(left_id, view.page.epoch());
-        let (split_key, split_index) = split_delta_from_page(view.page);
+        let left_index = Index::new(left_id, root.epoch());
+        let (split_key, split_index) = split_delta_from_page(root);
         // Build a new root with the original root on the left and the new split page on
         // the right.
         let delta = [(left_key, left_index), (split_key, split_index)];
@@ -639,7 +651,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         view = self.consolidate_page(view).await?;
         // Try to split the page if it is too large.
         if self.should_split_page(view.page) {
-            let _ = self.split_page(view, parent);
+            let _ = self.split_page(view, parent).await;
         }
         Ok(())
     }

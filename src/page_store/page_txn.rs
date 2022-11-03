@@ -142,6 +142,10 @@ impl<'a, E: Env> PageTxn<'a, E> {
     /// Returns the id of the inserted page.
     ///
     /// If the transaction aborts, the inserted page will be deleted.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `addr` is not allocated by this transaction.
     pub(crate) fn insert_page(&mut self, addr: u64) -> u64 {
         let header = self.records.get_mut(&addr).expect("no such pages");
         if header.is_tombstone() {
@@ -164,6 +168,10 @@ impl<'a, E: Env> PageTxn<'a, E> {
     /// On failure, if `new_addr` is not large than `old_addr`, `Err(None)` is
     /// returned, otherwise returns the transaction and the current address of
     /// the page.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `new_addr` is not allocated by this transaction.
     pub(crate) fn update_page(
         mut self,
         id: u64,
@@ -193,6 +201,10 @@ impl<'a, E: Env> PageTxn<'a, E> {
     ///
     /// The deallocated pages will still be valid until no one is able to access
     /// them.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `new_addr` is not allocated by this transaction.
     pub(crate) fn replace_page(
         mut self,
         id: u64,
