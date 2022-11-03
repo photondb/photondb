@@ -56,36 +56,39 @@ mod tests {
 
     use super::*;
 
-    #[photonio::test]
-    async fn crud() {
-        let path = temp_dir();
-        let table = Table::open(path, Options::default()).await.unwrap();
-        let key = &[1];
-        let lsn = 2;
-        let value = &[3];
-        table.put(key, lsn, value).await.unwrap();
+    async fn must_put(table: &Table, i: u64, lsn: u64) {
+        let buf = i.to_be_bytes();
+        table.put(&buf, lsn, &buf).await.unwrap()
+    }
+
+    async fn must_get(table: &Table, i: u64, lsn: u64, expect: Option<u64>) {
+        let buf = i.to_be_bytes();
         table
-            .get(key, lsn, |v| {
-                assert_eq!(v, Some(value.as_slice()));
+            .get(&buf, lsn, |v| match expect {
+                Some(expect) => {
+                    assert_eq!(v, Some(expect.to_be_bytes().as_slice()));
+                }
+                None => assert!(v.is_none()),
             })
             .await
             .unwrap();
-        table.close().await.unwrap();
     }
 
-    #[test]
-    fn std_crud() {
+    #[photonio::test]
+    async fn crud() {
         let path = temp_dir();
-        let table = std::Table::open(path, Options::default()).unwrap();
-        let key = &[1];
-        let lsn = 2;
-        let value = &[3];
-        table.put(key, lsn, value).unwrap();
-        table
-            .get(key, lsn, |v| {
-                assert_eq!(v, Some(value.as_slice()));
-            })
-            .unwrap();
-        table.close().unwrap();
+        let options = Options {
+            page_size: 128,
+            ..Default::default()
+        };
+        let table = Table::open(path, options).await.unwrap();
+        const N: u64 = 1024;
+        for i in 0..N {
+            must_put(&table, i, i).await;
+            must_get(&table, i, i, Some(i)).await;
+        }
+        for i in 0..N {
+            must_get(&table, i, i, Some(i)).await;
+        }
     }
 }
