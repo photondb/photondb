@@ -140,8 +140,12 @@ impl PhotonBench {
             let task_ctx = TaskCtx {
                 config: self.config.to_owned(),
                 table: self.table.as_ref().unwrap().clone(),
-                stats: Rc::new(RefCell::new(Stats::start(tid, self.config.to_owned()))),
-                barrier: barrier.clone(),
+                stats: Rc::new(RefCell::new(Stats::start(
+                    tid,
+                    self.config.to_owned(),
+                    self.table.as_ref().unwrap().to_owned(),
+                ))),
+                _barrier: barrier.clone(),
                 op: op.to_owned(),
                 seed: self.config.seed_base + (tid as u64),
             };
@@ -180,8 +184,8 @@ impl PhotonBench {
     }
 
     async fn cleanup(&mut self) {
-        if let Some(table) = self.table.take() {
-            let _ = table.close().await;
+        if let Some(_table) = self.table.take() {
+            // let _ = table.close().await;
         }
     }
 }
@@ -192,12 +196,14 @@ impl PhotonBench {
         let cfg = ctx.config.to_owned();
         let op_cnt = if cfg.writes > 0 { cfg.writes } else { cfg.num };
         let mut rng = SmallRng::seed_from_u64(ctx.seed);
+        let mut lsn = 0;
         for _ in 0..op_cnt {
             let mut key = vec![0u8; ctx.config.key_size as usize];
             let mut value = vec![0u8; ctx.config.value_size as usize];
             Self::fill_rang(&mut rng, &mut key);
             Self::fill_rang(&mut rng, &mut value);
-            table.put(&key, 0, &value).await.unwrap();
+            lsn += 1;
+            table.put(&key, lsn, &value).await.unwrap();
 
             let bytes = key.len() + value.len() + std::mem::size_of::<u64>();
 
@@ -219,7 +225,7 @@ enum WriteMode {
 #[derive(Clone)]
 pub struct TaskCtx {
     stats: Rc<RefCell<Stats>>,
-    barrier: Barrier,
+    _barrier: Barrier,
     op: BenchOperation,
     table: Table<Photon>,
     config: Arc<Args>,
@@ -250,10 +256,12 @@ pub struct Stats {
     next_report_cnt: u64,
 
     hist: HashMap<OpType, hdrhistogram::Histogram<u64>>,
+
+    table: Table<Photon>,
 }
 
 impl Stats {
-    fn start(tid: u32, config: Arc<Args>) -> Self {
+    fn start(tid: u32, config: Arc<Args>, table: Table<Photon>) -> Self {
         let next_report_cnt = config.stats_interval;
         Self {
             tid,
@@ -270,6 +278,7 @@ impl Stats {
             last_report_finish: None,
             last_report_done_cnt: 0,
             hist: HashMap::new(),
+            table,
         }
     }
 
@@ -281,14 +290,16 @@ impl Stats {
         self.bytes += bytes;
         self.last_op_finish = Some(now);
 
-        let _ = self
-            .hist
-            .entry(typ)
-            .or_insert_with(|| {
-                hdrhistogram::Histogram::new_with_bounds(1, 60 * 60 * 1000, 2).unwrap()
-            })
-            .record(op_elapsed.as_micros() as u64);
-        // .expect("duration should be in range");
+        if self.config.hist {
+            let _ = self
+                .hist
+                .entry(typ)
+                .or_insert_with(|| {
+                    hdrhistogram::Histogram::new_with_bounds(1, 60 * 60 * 1000, 2).unwrap()
+                })
+                .record(op_elapsed.as_micros() as u64);
+            // .expect("duration should be in range");
+        }
 
         if self.done_cnt >= self.next_report_cnt {
             if self.config.stats_interval > 0 {
@@ -368,6 +379,11 @@ impl Stats {
             elapsed.as_secs_f64(),
             self.done_cnt,
             bytes_rate,
+        );
+        let table_stats = self.table.stats();
+        println!(
+            "table stats: conflict: {:?}, success: {:?}",
+            table_stats.conflict, table_stats.success
         )
     }
 }

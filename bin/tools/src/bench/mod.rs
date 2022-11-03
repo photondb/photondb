@@ -21,7 +21,7 @@ pub(crate) struct Args {
 
     /// Size of each value in fixed distribution // TODO: support unfixed size
     /// value.
-    #[arg(short, long, default_value_t = 100)]
+    #[arg(short, long, default_value_t = 1000)]
     value_size: u64,
 
     /// Number of key/values to place in database.
@@ -64,6 +64,10 @@ pub(crate) struct Args {
     /// derived from the current time when it's 0.
     #[arg(long, default_value_t = 0)]
     seed_base: u64,
+
+    // Enable collect histogram.
+    #[arg(long, default_value_t = false)]
+    hist: bool,
 }
 
 #[derive(Debug, Copy, Clone)]
