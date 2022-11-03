@@ -1,6 +1,6 @@
 use std::{
     cell::{Ref, RefCell},
-    collections::HashMap,
+    collections::{hash_map, HashMap},
     io::Write,
     rc::Rc,
     sync::{Arc, Mutex},
@@ -291,14 +291,14 @@ impl Stats {
         self.last_op_finish = Some(now);
 
         if self.config.hist {
-            let _ = self
-                .hist
+            let t = op_elapsed.as_millis() as u64;
+            self.hist
                 .entry(typ)
                 .or_insert_with(|| {
                     hdrhistogram::Histogram::new_with_bounds(1, 60 * 60 * 1000, 2).unwrap()
                 })
-                .record(op_elapsed.as_micros() as u64);
-            // .expect("duration should be in range");
+                .record(t)
+                .expect("duration should be in range");
         }
 
         if self.done_cnt >= self.next_report_cnt {
@@ -362,7 +362,19 @@ impl Stats {
         if self.finish > o.finish {
             self.finish = o.finish
         }
-        // TODO: merge hist.
+        if self.config.hist {
+            for (typ, histo) in &o.hist {
+                match self.hist.entry(typ.to_owned()) {
+                    hash_map::Entry::Occupied(mut ent) => {
+                        let h1 = ent.get_mut();
+                        h1.add(histo).unwrap();
+                    }
+                    hash_map::Entry::Vacant(ent) => {
+                        ent.insert(histo.to_owned());
+                    }
+                }
+            }
+        }
     }
 
     fn report(&self, bench: BenchmarkType) {
@@ -384,11 +396,23 @@ impl Stats {
         println!(
             "table stats: conflict: {:?}, success: {:?}",
             table_stats.conflict, table_stats.success
-        )
+        );
+        if self.config.hist {
+            for (op, hist) in &self.hist {
+                print!(
+                    "{:12?} : p50: {} ms, p95: {} ms, p99: {} ms, p100: {} ms",
+                    op,
+                    hist.value_at_quantile(50.0),
+                    hist.value_at_quantile(95.0),
+                    hist.value_at_quantile(99.0),
+                    hist.value_at_quantile(100.0),
+                )
+            }
+        }
     }
 }
 
-#[derive(Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum OpType {
     Write,
 }
