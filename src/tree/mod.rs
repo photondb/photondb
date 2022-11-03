@@ -86,7 +86,7 @@ impl<E: Env> RewritePage<E> for Arc<Tree> {
     }
 }
 
-pub(super) struct TreeTxn<'a, E: Env> {
+pub(crate) struct TreeTxn<'a, E: Env> {
     tree: &'a Tree,
     guard: Guard<'a, E>,
 }
@@ -125,13 +125,10 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                     return Ok(value);
                 }
                 Err(Error::Again) => {
-                    self.tree.stats.restart.get.inc();
+                    self.tree.stats.conflict.get.inc();
                     continue;
                 }
-                Err(e) => {
-                    self.tree.stats.failure.get.inc();
-                    return Err(e);
-                }
+                Err(e) => return Err(e),
             }
         }
     }
@@ -150,13 +147,10 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                     return Ok(());
                 }
                 Err(Error::Again) => {
-                    self.tree.stats.restart.write.inc();
+                    self.tree.stats.conflict.write.inc();
                     continue;
                 }
-                Err(e) => {
-                    self.tree.stats.failure.write.inc();
-                    return Err(e);
-                }
+                Err(e) => return Err(e),
             }
         }
     }
@@ -368,7 +362,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         Ok(child)
     }
 
-    // Splits the page into two halfs.
+    // Splits the page into two halves.
     async fn split_page(&self, view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
         match view.page.tier() {
             PageTier::Leaf => self.split_page_impl::<Key, Value>(view, parent).await,
@@ -419,7 +413,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                     view.page = new_page.into();
                 })
                 .map_err(|_| {
-                    self.tree.stats.failure.split_page.inc();
+                    self.tree.stats.conflict.split_page.inc();
                     Error::Again
                 })?;
         }
@@ -431,19 +425,30 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
     /// Reconciles any conflicts on the page.
     async fn reconcile_page(&self, view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
-        match view.page.kind() {
-            PageKind::Data => {}
+        let result = match view.page.kind() {
+            PageKind::Data => Ok(()),
             PageKind::Split => {
                 if let Some(parent) = parent {
-                    self.reconcile_split_page(view, parent).await?;
+                    self.reconcile_split_page(view, parent).await
                 } else if view.id == ROOT_ID {
-                    self.reconcile_split_root(view).await?;
+                    self.reconcile_split_root(view).await
                 } else {
-                    return Err(Error::InvalidArgument);
+                    Err(Error::InvalidArgument)
                 }
             }
+        };
+        match result {
+            Ok(_) => {
+                self.tree.stats.success.reconcile_page.inc();
+                Ok(())
+            }
+            Err(e) => {
+                if let Error::Again = e {
+                    self.tree.stats.conflict.reconcile_page.inc();
+                }
+                Err(e)
+            }
         }
-        Ok(())
     }
 
     // Reconciles a pending split on the page.
@@ -494,7 +499,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
     // Reconciles a pending split on the root page.
     async fn reconcile_split_root(&self, view: PageView<'_>) -> Result<()> {
-        debug_assert_eq!(view.id, ROOT_ID);
+        assert_eq!(view.id, ROOT_ID);
         // Move the root to another place.
         let mut txn = self.guard.begin();
         let left_id = txn.insert_page(view.addr);
@@ -574,7 +579,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                 view
             })
             .map_err(|_| {
-                self.tree.stats.failure.consolidate_page.inc();
+                self.tree.stats.conflict.consolidate_page.inc();
                 Error::Again
             })
     }
@@ -598,7 +603,6 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         self.walk_page(view.page, |page| {
             match page.kind() {
                 PageKind::Data => {
-                    // TODO: do some benchmarks to evaluate this.
                     if builder.len() >= 2 && page_size < page.size() / 2 && range_limit.is_none() {
                         return true;
                     }
@@ -645,7 +649,6 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         let mut max_size = self.tree.options.page_size;
         if page.tier().is_inner() {
             // Adjust the page size for inner pages.
-            // TODO: do some benchmarks to evaluate this.
             max_size /= 2;
         }
         page.size() > max_size
@@ -656,7 +659,6 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         let mut max_chain_len = self.tree.options.page_chain_length;
         if page.tier().is_inner() {
             // Adjust the chain length for inner pages.
-            // TODO: do some benchmarks to evaluate this.
             max_chain_len /= 2;
         }
         page.chain_len() as usize > max_chain_len.max(1)
