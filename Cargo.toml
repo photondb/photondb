@@ -31,3 +31,7 @@ debug = true
 
 [profile.release]
 debug = true
+
+[dev-dependencies]
+env_logger = "0.9.1"
+tempdir = "0.3.7"

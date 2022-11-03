@@ -196,6 +196,12 @@ impl<'a> DerefMut for PageBuf<'a> {
     }
 }
 
+impl<'a> fmt::Debug for PageBuf<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.ptr.fmt(f)
+    }
+}
+
 impl<'a> From<&'a mut [u8]> for PageBuf<'a> {
     fn from(buf: &'a mut [u8]) -> Self {
         PageBuf::new(buf)
@@ -238,6 +244,12 @@ impl<'a> Deref for PageRef<'a> {
 
     fn deref(&self) -> &Self::Target {
         &self.ptr
+    }
+}
+
+impl<'a> fmt::Debug for PageRef<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.ptr.fmt(f)
     }
 }
 

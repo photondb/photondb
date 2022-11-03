@@ -7,6 +7,8 @@ use std::{
     },
 };
 
+use log::trace;
+
 use crate::{env::Env, page::*, page_store::*};
 
 mod page;
@@ -486,6 +488,13 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         new_page.set_chain_next(parent.addr);
         txn.update_page(parent.id, parent.addr, new_addr)
             .map(|_| {
+                trace!(
+                    "reconciled split page {:?} to {:?} at {}",
+                    parent,
+                    new_page,
+                    new_addr
+                );
+                parent.addr = new_addr;
                 parent.page = new_page.into();
             })
             .map_err(|_| Error::Again)?;
@@ -507,12 +516,13 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             // The transaction requires that inserted pages must be allocated by it.
             // So we allocates an empty delta page here.
             let iter: ItemIter<(Key, Value)> = None.into();
-            let builder = SortedPageBuilder::new(root.tier(), root.kind()).with_iter(iter);
+            let builder = SortedPageBuilder::new(root.tier(), PageKind::Data).with_iter(iter);
             let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
             builder.build(&mut new_page);
             new_page.set_epoch(root.epoch());
             new_page.set_chain_len(root.chain_len().saturating_add(1));
             new_page.set_chain_next(view.addr);
+            trace!("moved root {:?} to {:?} at {}", view, new_page, new_addr);
             txn.insert_page(new_addr)
         };
         let left_key = [].as_slice();
@@ -526,6 +536,14 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         builder.build(&mut new_page);
         // Update the original root with the new root.
         txn.update_page(view.id, view.addr, new_addr)
+            .map(|_| {
+                trace!(
+                    "reconciled split root {:?} to {:?} at {}",
+                    view,
+                    new_page,
+                    new_addr
+                );
+            })
             .map_err(|_| Error::Again)
     }
 
@@ -585,6 +603,12 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Update the page and deallocate the consolidated delta pages.
         txn.replace_page(view.id, view.addr, new_addr, &info.page_addrs)
             .map(|_| {
+                trace!(
+                    "consolidated page {:?} to {:?} at {}",
+                    view,
+                    new_page,
+                    new_addr
+                );
                 self.tree.stats.success.consolidate_page.inc();
                 view.addr = new_addr;
                 view.page = new_page.into();
