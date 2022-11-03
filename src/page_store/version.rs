@@ -2,7 +2,6 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     ops::Deref,
-    rc::Rc,
     sync::{
         atomic::{AtomicPtr, Ordering},
         Arc, Mutex,
@@ -110,12 +109,8 @@ impl Version {
     ///
     /// TODO: It is assumed that all installations come in [`WriteBuffer`]
     /// order, so there is no need to consider concurrency issues.
-    pub(crate) fn install(version: Rc<Version>, delta: DeltaVersion) -> Result<()> {
-        let current = version
-            .next
-            .refresh()
-            .map(Rc::new)
-            .unwrap_or_else(move || version);
+    pub(crate) fn install(version: &Version, delta: DeltaVersion) -> Result<()> {
+        let current = version;
         let (buffers_range, write_buffers) = {
             let buffers_ref = current.buffer_set.current();
             (buffers_ref.buffers_range.clone(), buffers_ref.snapshot())
@@ -169,7 +164,9 @@ impl Version {
     /// Wait and construct next [`Version`].
     pub(crate) async fn wait_next_version(&self) -> Self {
         self.next.new_version_notify.notified().await;
-        self.refresh().expect("New version has been installed")
+        self.next
+            .try_next()
+            .expect("New version has been installed")
     }
 
     /// Wait until all reference pointed to the [`Version`] has been released.
@@ -255,17 +252,26 @@ impl NextVersion {
         self.new_version_notify.notify_all();
     }
 
+    #[inline]
+    fn try_next(&self) -> Option<Version> {
+        Self::try_next_impl(self.raw_version.load(Ordering::Acquire))
+    }
+
+    #[inline]
+    fn try_next_impl(raw: *mut Version) -> Option<Version> {
+        // Safety:
+        // 1. It is valid and initialized since obtained from [`Box::into_raw`].
+        // 2. All references are immutable.
+        unsafe { raw.as_ref() }.cloned()
+    }
+
     fn refresh(&self) -> Option<Version> {
         let mut new: Option<Version> = None;
         let mut raw = self.raw_version.load(Ordering::Acquire);
         loop {
-            // Safety:
-            // 1. It is valid and initialized since obtained from [`Box::into_raw`].
-            // 2. All references are immutable.
-            match unsafe { raw.as_ref() } {
+            match Self::try_next_impl(raw) {
                 None => break,
                 Some(version) => {
-                    let version = version.clone();
                     raw = version.next.raw_version.load(Ordering::Acquire);
                     new = Some(version);
                 }

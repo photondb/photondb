@@ -64,7 +64,9 @@ where
         loop {
             self.gc(&version).await;
             match with_shutdown(&mut self.shutdown, version.wait_next_version()).await {
-                Some(next_version) => version = next_version,
+                Some(next_version) => {
+                    version = next_version.refresh().unwrap_or_else(move || next_version)
+                }
                 None => break,
             }
         }
@@ -102,9 +104,10 @@ where
         let page_table = reader.read_page_table().await?;
         let dealloc_pages = reader.read_delete_pages().await?;
 
-        self.rewrite_active_pages(file, version, &page_table)
+        let version = Arc::new(version.clone());
+        self.rewrite_active_pages(file, &version, &page_table)
             .await?;
-        self.rewrite_dealloc_pages(version, &dealloc_pages).await?;
+        self.rewrite_dealloc_pages(&version, &dealloc_pages).await?;
 
         Ok(())
     }
@@ -112,10 +115,9 @@ where
     async fn rewrite_active_pages(
         &self,
         file: &FileInfo,
-        version: &Version,
+        version: &Arc<Version>,
         page_table: &BTreeMap<u64, u64>,
     ) -> Result<()> {
-        let version = Arc::new(version.clone());
         let mut rewrite_pages = HashSet::new();
         for page_addr in file.iter() {
             let page_id = page_table
@@ -132,9 +134,11 @@ where
         Ok(())
     }
 
-    async fn rewrite_dealloc_pages(&self, version: &Version, dealloc_pages: &[u64]) -> Result<()> {
-        let version = Arc::new(version.clone());
-
+    async fn rewrite_dealloc_pages(
+        &self,
+        version: &Arc<Version>,
+        dealloc_pages: &[u64],
+    ) -> Result<()> {
         let active_files = version.files();
         let mut cached_pages = Vec::with_capacity(128);
         for page_addr in dealloc_pages {
@@ -144,17 +148,17 @@ where
             }
             cached_pages.push(*page_addr);
             if cached_pages.len() == 128 {
-                self.rewrite_dealloc_pages_chunk(version.clone(), &cached_pages)?;
+                self.rewrite_dealloc_pages_chunk(&version, &cached_pages)?;
                 cached_pages.clear();
             }
         }
         if !cached_pages.is_empty() {
-            self.rewrite_dealloc_pages_chunk(version.clone(), &cached_pages)?;
+            self.rewrite_dealloc_pages_chunk(&version, &cached_pages)?;
         }
         Ok(())
     }
 
-    fn rewrite_dealloc_pages_chunk(&self, version: Arc<Version>, pages: &[u64]) -> Result<()> {
+    fn rewrite_dealloc_pages_chunk(&self, version: &Arc<Version>, pages: &[u64]) -> Result<()> {
         loop {
             let guard = Guard::new(version.clone(), &self.page_table, &self.page_files);
             let txn = guard.begin();
