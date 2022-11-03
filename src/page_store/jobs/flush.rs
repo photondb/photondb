@@ -297,7 +297,7 @@ mod tests {
         unsafe {
             let (addr, _, _) = wb.alloc_page(1, 123, false).unwrap();
             wb.dealloc_pages(&[addr], false).unwrap();
-            wb.seal(false).unwrap();
+            wb.seal().unwrap();
             let (deleted_pages, file_info) = ctx.build_page_file(&wb).await.unwrap();
             assert!(deleted_pages.is_empty());
             assert!(!file_info.is_page_active(addr));
@@ -312,7 +312,7 @@ mod tests {
         unsafe {
             let (addr, header, _) = wb.alloc_page(1, 123, false).unwrap();
             header.set_tombstone();
-            wb.seal(false).unwrap();
+            wb.seal().unwrap();
             let (deleted_pages, file_info) = ctx.build_page_file(&wb).await.unwrap();
             assert!(deleted_pages.is_empty());
             assert!(!file_info.is_page_active(addr));
