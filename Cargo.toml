@@ -30,3 +30,6 @@ debug = true
 
 [profile.release]
 debug = true
+
+[features]
+force-tokio = ["photonio/tokio"]

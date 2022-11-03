@@ -201,7 +201,7 @@ pub struct Metadata {
     pub is_dir: bool,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(not(feature = "force-tokio"), target_os = "linux"))]
 pub(in crate::env) fn direct_io_ify(fd: i32) -> Result<()> {
     macro_rules! syscall {
             ($fn: ident ( $($arg: expr),* $(,)* ) ) => {{
@@ -219,7 +219,7 @@ pub(in crate::env) fn direct_io_ify(fd: i32) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(feature = "force-tokio", not(target_os = "linux")))]
 pub(in crate::env) fn direct_io_ify(_: i32) -> Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
