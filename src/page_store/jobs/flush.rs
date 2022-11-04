@@ -183,17 +183,6 @@ impl<E: Env> FlushCtx<E> {
         }
         files
     }
-
-    // fn version(&self) -> Version {
-    //     self.global_version.lock().expect("Poisoned").clone()
-    // }
-
-    // fn refresh_version(&self) {
-    //     let mut version = self.global_version.lock().expect("Poisoned");
-    //     if let Some(new) = version.refresh() {
-    //         *version = new;
-    //     }
-    // }
 }
 
 impl std::fmt::Display for FlushPageStats {
