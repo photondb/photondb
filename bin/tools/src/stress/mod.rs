@@ -200,7 +200,7 @@ pub(crate) fn run(args: Args) -> Result<()> {
 }
 
 async fn run_with_args(args: Args) -> Result<()> {
-    if args.destory_db {
+    if args.destory_db && args.db.exists() {
         if let Err(err) = std::fs::remove_dir_all(&args.db) {
             error!("Destory DB {}: {err:?}", args.db.display());
             std::process::abort();
@@ -285,6 +285,7 @@ async fn write_task(job: Arc<Job>) {
             error!("Write to DB: {err:?}");
             std::process::abort();
         }
+        photonio::task::yield_now().await;
     }
 }
 
@@ -303,12 +304,14 @@ async fn mutate_task(job: Arc<Job>) {
         if rng.gen::<f64>() < job.args.third_char_mutate_probability {
             job.key_prefix[2].store(rng.gen_range(b'a'..b'z'), Ordering::Relaxed);
         }
+        photonio::task::yield_now().await;
     }
 }
 
 async fn read_task(job: Arc<Job>) {
     // TODO: How to test read task?
     while !job.stop.load(Ordering::Relaxed) {
-        job.timer.sleep(Duration::from_secs(1));
+        job.timer.sleep(Duration::from_secs(1)).await;
+        photonio::task::yield_now().await;
     }
 }
