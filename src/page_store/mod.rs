@@ -1,9 +1,4 @@
-use std::{
-    collections::HashSet,
-    fmt, mem,
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashSet, fmt, mem, path::Path, sync::Arc};
 
 use crate::{env::Env, util::shutdown::ShutdownNotifier};
 
@@ -11,6 +6,7 @@ mod error;
 pub(crate) use error::{Error, Result};
 
 mod page_txn;
+use futures::lock::Mutex;
 pub(crate) use page_txn::Guard;
 
 mod page_table;
@@ -21,7 +17,7 @@ mod meta;
 pub(crate) use meta::{NewFile, VersionEdit};
 
 mod version;
-use version::Version;
+use version::{Version, VersionOwner};
 
 mod jobs;
 pub(crate) use jobs::RewritePage;
@@ -65,14 +61,10 @@ pub(crate) struct PageStore<E: Env> {
     env: E,
     table: PageTable,
 
-    /// The global [`Version`] of [`PageStore`], used when tls [`Version`] does
-    /// not exist. It needs to be updated every time a new [`Version`] is
-    /// installed.
-    version: Arc<Mutex<Version>>,
-
+    version_owner: Arc<VersionOwner>,
     page_files: Arc<PageFiles<E>>,
     #[allow(unused)]
-    manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
+    manifest: Arc<Mutex<Manifest<E>>>,
 
     jobs: Vec<E::JoinHandle<()>>,
     shutdown: ShutdownNotifier,
@@ -94,7 +86,7 @@ impl<E: Env> PageStore<E> {
             HashSet::default(),
         );
 
-        let version = Arc::new(Mutex::new(version));
+        let version_owner = Arc::new(VersionOwner::new(version));
         let manifest = Arc::new(futures::lock::Mutex::new(manifest));
         let page_files = Arc::new(page_files);
         let shutdown = ShutdownNotifier::new();
@@ -103,7 +95,7 @@ impl<E: Env> PageStore<E> {
             options,
             env,
             table,
-            version,
+            version_owner,
             page_files,
             manifest,
             jobs: Vec::new(),
@@ -118,8 +110,9 @@ impl<E: Env> PageStore<E> {
         Ok(store)
     }
 
+    #[inline]
     pub(crate) fn guard(&self) -> Guard<E> {
-        Guard::new(self.current_version(), &self.table, &self.page_files)
+        Guard::new(self.version(), &self.table, &self.page_files)
     }
 
     pub(crate) async fn close(mut self) {
@@ -131,23 +124,14 @@ impl<E: Env> PageStore<E> {
     }
 
     #[inline]
-    fn current_version(&self) -> Arc<Version> {
-        Version::from_local().unwrap_or_else(|| {
-            let version = Arc::new(self.global_version());
-            Version::set_local(version);
-            Version::from_local().expect("Already installed")
-        })
-    }
-
-    #[inline]
-    fn global_version(&self) -> Version {
-        self.version.lock().expect("Poisoned").clone()
+    fn version(&self) -> Arc<Version> {
+        self.version_owner.current()
     }
 
     fn spawn_flush_job(&mut self) {
         let job = FlushCtx::new(
             self.shutdown.subscribe(),
-            self.version.clone(),
+            self.version_owner.clone(),
             self.page_files.clone(),
             self.manifest.clone(),
         );
@@ -157,8 +141,7 @@ impl<E: Env> PageStore<E> {
 
     fn spawn_cleanup_job(&mut self) {
         let job = CleanupCtx::new(self.shutdown.subscribe(), self.page_files.clone());
-        let global_version = self.global_version();
-        let handle = self.env.spawn_background(job.run(global_version));
+        let handle = self.env.spawn_background(job.run(self.version()));
         self.jobs.push(handle);
     }
 
@@ -174,8 +157,7 @@ impl<E: Env> PageStore<E> {
             self.table.clone(),
             self.page_files.clone(),
         );
-        let global_version = self.global_version();
-        let handle = self.env.spawn_background(job.run(global_version));
+        let handle = self.env.spawn_background(job.run(self.version()));
         self.jobs.push(handle);
     }
 }

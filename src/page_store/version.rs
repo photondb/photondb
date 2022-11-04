@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     ops::Deref,
     sync::{
@@ -11,22 +10,16 @@ use std::{
 use crossbeam_epoch::Guard;
 use futures::channel::oneshot;
 
-use super::{FileInfo, Result, WriteBuffer};
+use super::{FileInfo, WriteBuffer};
 use crate::util::notify::Notify;
 
-thread_local! {
-    static VERSION: RefCell<Option<Arc<Version>>> = RefCell::new(None);
+pub(crate) struct VersionOwner {
+    raw: AtomicPtr<Arc<Version>>,
 }
 
-#[derive(Clone)]
 pub(crate) struct Version {
     pub(crate) buffer_set: Arc<BufferSet>,
 
-    inner: Arc<VersionInner>,
-    next: Arc<NextVersion>,
-}
-
-struct VersionInner {
     buffers_range: std::ops::Range<u32>,
 
     /// Holds a reference to all [`WriteBuffer`]s at the time of the version
@@ -40,20 +33,17 @@ struct VersionInner {
     write_buffers: Vec<Arc<WriteBuffer>>,
     files: HashMap<u32, FileInfo>,
     deleted_files: HashSet<u32>,
+
+    next_version: AtomicPtr<Arc<Version>>,
+    new_version_notify: Notify,
+
+    _cleanup_guard: oneshot::Sender<()>,
+    cleanup_handle: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
 pub(crate) struct DeltaVersion {
     pub(crate) files: HashMap<u32, FileInfo>,
     pub(crate) deleted_files: HashSet<u32>,
-}
-
-pub(crate) struct NextVersion {
-    raw_version: AtomicPtr<Version>,
-
-    new_version_notify: Notify,
-
-    _cleanup_guard: oneshot::Sender<()>,
-    cleanup_handle: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
 pub(crate) struct BufferSet {
@@ -80,6 +70,114 @@ pub(crate) struct BufferSetRef<'a> {
     _guard: Guard,
 }
 
+impl VersionOwner {
+    pub(crate) fn new(version: Version) -> Self {
+        let version = Box::new(Arc::new(version));
+        VersionOwner {
+            raw: AtomicPtr::new(Box::into_raw(version)),
+        }
+    }
+
+    /// Obtains a reference of current [`Version`].
+    #[inline]
+    pub(crate) fn current(&self) -> Arc<Version> {
+        let _guard = version_guard::pin();
+        // Safety: guard by `buffer_set_guard::pin`.
+        unsafe { self.current_without_guard() }.clone()
+    }
+
+    /// Obtain current [`Version`].
+    ///
+    /// # Safety
+    ///
+    /// This should be guard by `version_guard::pin`.
+    #[inline]
+    unsafe fn current_without_guard(&self) -> &Arc<Version> {
+        // Safety:
+        // 1. Obtained from `Box::new`, so it is aligned and not null.
+        // 2. There is not mutable references pointer to it.
+        &*self.raw.load(Ordering::Acquire)
+    }
+
+    /// Try install new version into version chains.
+    ///
+    /// TODO: It is assumed that all installations come in [`WriteBuffer`]
+    /// order, so there is no need to consider concurrency issues.
+    pub(crate) fn install(&self, delta: DeltaVersion) {
+        let guard = version_guard::pin();
+
+        // Safety: guard by `buffer_set_guard::pin`.
+        let current = unsafe { self.current_without_guard() };
+        let (buffers_range, write_buffers) = {
+            let buffers_ref = current.buffer_set.current();
+            (buffers_ref.buffers_range.clone(), buffers_ref.snapshot())
+        };
+
+        let (sender, receiver) = oneshot::channel();
+        let new = Box::new(Arc::new(Version {
+            buffers_range,
+            write_buffers,
+            files: delta.files,
+            deleted_files: delta.deleted_files,
+            buffer_set: current.buffer_set.clone(),
+
+            next_version: AtomicPtr::default(),
+            new_version_notify: Notify::default(),
+            _cleanup_guard: sender,
+            cleanup_handle: Mutex::new(Some(receiver)),
+        }));
+        self.switch_version(new, guard);
+    }
+
+    /// Switch to new version.
+    ///
+    /// # Panic
+    ///
+    /// Panic if there has already exists a version.
+    #[allow(clippy::redundant_allocation)]
+    fn switch_version(&self, next: Box<Arc<Version>>, guard: Guard) {
+        let raw_former = self.raw.load(Ordering::Acquire);
+
+        // Safety:
+        // 1. Obtained from `Box::new`, so it is aligned and not null.
+        // 2. There is not mutable references pointer to it.
+        let former = unsafe { Box::from_raw(raw_former) };
+
+        let raw_next = Box::into_raw(next.clone());
+        self.raw
+            .compare_exchange(raw_former, raw_next, Ordering::AcqRel, Ordering::Acquire)
+            .expect("There has already exists a version");
+
+        former
+            .next_version
+            .compare_exchange(
+                std::ptr::null_mut(),
+                Box::into_raw(next),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .expect("There has already exists a version");
+        former.new_version_notify.notify_all();
+
+        guard.defer(move || drop(former));
+        // Get the defer function executed as soon as possible.
+        guard.flush();
+    }
+}
+
+impl Drop for VersionOwner {
+    fn drop(&mut self) {
+        let raw = self.raw.load(Ordering::SeqCst);
+        if !raw.is_null() {
+            unsafe {
+                // Safety: the backing memory is obtained from [`Box::into_raw`] and there no
+                // any references to the memory.
+                drop(Box::from_raw(raw));
+            }
+        }
+    }
+}
+
 impl Version {
     pub(crate) fn new(
         write_buffer_capacity: u32,
@@ -92,90 +190,34 @@ impl Version {
             let current = buffer_set.current();
             (current.buffers_range.clone(), current.snapshot())
         };
-        let inner = Arc::new(VersionInner {
+
+        let (sender, receiver) = oneshot::channel();
+        Version {
             buffers_range,
             write_buffers,
             files,
             deleted_files,
-        });
-        Version {
             buffer_set,
-            inner,
-            next: Arc::default(),
+
+            next_version: AtomicPtr::default(),
+            new_version_notify: Notify::default(),
+            _cleanup_guard: sender,
+            cleanup_handle: Mutex::new(Some(receiver)),
         }
-    }
-
-    /// Try install new version into version chains.
-    ///
-    /// TODO: It is assumed that all installations come in [`WriteBuffer`]
-    /// order, so there is no need to consider concurrency issues.
-    pub(crate) fn install(version: &Version, delta: DeltaVersion) -> Result<()> {
-        let current = version;
-        let (buffers_range, write_buffers) = {
-            let buffers_ref = current.buffer_set.current();
-            (buffers_ref.buffers_range.clone(), buffers_ref.snapshot())
-        };
-
-        let inner = Arc::new(VersionInner {
-            buffers_range,
-            write_buffers,
-            files: delta.files,
-            deleted_files: delta.deleted_files,
-        });
-        let new = Box::new(Version {
-            buffer_set: current.buffer_set.clone(),
-            inner,
-            next: Arc::default(),
-        });
-        current.next.install(new);
-        Ok(())
-    }
-
-    /// Construct [`Version`] from thread local storage.
-    pub(crate) fn from_local() -> Option<Arc<Self>> {
-        let current = Self::get_local();
-        if let Some(version) = &current {
-            if let Some(new) = version.next.refresh() {
-                let new = Arc::new(new);
-                Self::set_local(new.clone());
-                return Some(new);
-            }
-        }
-        current
-    }
-
-    #[inline]
-    pub(crate) fn set_local(version: Arc<Version>) {
-        VERSION.with(move |v| {
-            *v.borrow_mut() = Some(version);
-        });
-    }
-
-    #[inline]
-    fn get_local() -> Option<Arc<Self>> {
-        VERSION.with(|v| v.borrow().clone())
-    }
-
-    #[inline]
-    pub(crate) fn refresh(&self) -> Option<Version> {
-        self.next.refresh()
     }
 
     /// Wait and construct next [`Version`].
-    pub(crate) async fn wait_next_version(&self) -> Self {
-        self.next.new_version_notify.notified().await;
-        self.next
-            .try_next()
-            .expect("New version has been installed")
+    pub(crate) async fn wait_next_version(&self) -> Arc<Self> {
+        self.new_version_notify.notified().await;
+        self.try_next().expect("New version has been installed")
     }
 
     /// Wait until all reference pointed to the [`Version`] has been released.
     ///
     /// There can only be one waiter per [`Version`].
-    pub(crate) async fn wait_version_released(self) {
+    pub(crate) async fn wait_version_released(self: Arc<Self>) {
         let handle = {
-            self.next
-                .cleanup_handle
+            self.cleanup_handle
                 .lock()
                 .expect("Poisoned")
                 .take()
@@ -188,17 +230,17 @@ impl Version {
     /// Fetch the files which obsolated but referenced by the [`Version`].
     #[inline]
     pub(crate) fn deleted_files(&self) -> Vec<u32> {
-        self.inner.deleted_files.iter().cloned().collect()
+        self.deleted_files.iter().cloned().collect()
     }
 
     #[inline]
     pub(crate) fn files(&self) -> &HashMap<u32, FileInfo> {
-        &self.inner.files
+        &self.files
     }
 
     #[inline]
     pub(crate) fn next_file_id(&self) -> u32 {
-        self.inner.buffers_range.end
+        self.buffers_range.end
     }
 
     /// Invoke `f` with the specified [`WriteBuffer`].
@@ -211,15 +253,14 @@ impl Version {
     where
         F: FnOnce(&WriteBuffer) -> O,
     {
-        if self.inner.buffers_range.contains(&file_id) {
-            let index = (file_id - self.inner.buffers_range.start) as usize;
-            if index >= self.inner.write_buffers.len() {
+        if self.buffers_range.contains(&file_id) {
+            let index = (file_id - self.buffers_range.start) as usize;
+            if index >= self.write_buffers.len() {
                 panic!("buffers_range is invalid");
             }
-            return f(self.inner.write_buffers[index].as_ref());
+            return f(self.write_buffers[index].as_ref());
         }
 
-        // TODO: load write buffer from version directly.
         let current = self.buffer_set.current();
         let write_buffer = current.write_buffer(file_id).expect("No such write buffer");
         f(write_buffer.as_ref())
@@ -227,75 +268,43 @@ impl Version {
 
     #[inline]
     pub(crate) fn contains_write_buffer(&self, file_id: u32) -> bool {
-        self.inner.buffers_range.contains(&file_id)
+        self.buffers_range.contains(&file_id)
             || self.buffer_set.current().write_buffer(file_id).is_some()
     }
-}
 
-impl NextVersion {
-    /// Install new version.
-    ///
-    /// # Panic
-    ///
-    /// Panic if there has already exists a version.
-    fn install(&self, version: Box<Version>) {
-        let new = Box::into_raw(version);
-        self.raw_version
-            .compare_exchange(
-                std::ptr::null_mut(),
-                new,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .expect("There has already exists a version");
-
-        self.new_version_notify.notify_all();
+    #[inline]
+    pub(crate) fn try_next(&self) -> Option<Arc<Version>> {
+        Self::try_next_impl(self.next_version.load(Ordering::Acquire))
     }
 
     #[inline]
-    fn try_next(&self) -> Option<Version> {
-        Self::try_next_impl(self.raw_version.load(Ordering::Acquire))
-    }
-
-    #[inline]
-    fn try_next_impl(raw: *mut Version) -> Option<Version> {
-        // Safety:
-        // 1. It is valid and initialized since obtained from [`Box::into_raw`].
-        // 2. All references are immutable.
-        unsafe { raw.as_ref() }.cloned()
-    }
-
-    fn refresh(&self) -> Option<Version> {
-        let mut new: Option<Version> = None;
-        let mut raw = self.raw_version.load(Ordering::Acquire);
+    pub(crate) fn refresh(&self) -> Option<Arc<Version>> {
+        let mut new: Option<Arc<Version>> = None;
+        let mut raw = self.next_version.load(Ordering::Acquire);
         loop {
             match Self::try_next_impl(raw) {
                 None => break,
                 Some(version) => {
-                    raw = version.next.raw_version.load(Ordering::Acquire);
+                    raw = version.next_version.load(Ordering::Acquire);
                     new = Some(version);
                 }
             }
         }
         new
     }
-}
 
-impl Default for NextVersion {
-    fn default() -> Self {
-        let (sender, receiver) = oneshot::channel();
-        NextVersion {
-            raw_version: AtomicPtr::default(),
-            new_version_notify: Notify::default(),
-            _cleanup_guard: sender,
-            cleanup_handle: Mutex::new(Some(receiver)),
-        }
+    #[inline]
+    fn try_next_impl(raw: *mut Arc<Version>) -> Option<Arc<Version>> {
+        // Safety:
+        // 1. It is valid and initialized since obtained from [`Box::into_raw`].
+        // 2. All references are immutable.
+        unsafe { raw.as_ref() }.cloned()
     }
 }
 
-impl Drop for NextVersion {
+impl Drop for Version {
     fn drop(&mut self) {
-        let raw = self.raw_version.load(Ordering::SeqCst);
+        let raw = self.next_version.load(Ordering::SeqCst);
         if !raw.is_null() {
             unsafe {
                 // Safety: the backing memory is obtained from [`Box::into_raw`] and there no
@@ -330,6 +339,7 @@ impl BufferSet {
     /// Obtains a reference of current [`BufferSetVersion`].
     pub(crate) fn current<'a>(&self) -> BufferSetRef<'a> {
         let guard = buffer_set_guard::pin();
+        // Safety: guard by `buffer_set_guard::pin`.
         let current = unsafe { self.current_without_guard() };
         BufferSetRef {
             version: current,
@@ -492,6 +502,40 @@ impl<'a> Deref for BufferSetRef<'a> {
 }
 
 mod buffer_set_guard {
+    use crossbeam_epoch::{Collector, Guard, LocalHandle};
+    use once_cell::sync::Lazy;
+
+    static COLLECTOR: Lazy<Collector> = Lazy::new(Collector::new);
+
+    thread_local! {
+        static HANDLE: LocalHandle = COLLECTOR.register();
+    }
+
+    /// Pins the current thread.
+    #[inline]
+    pub(super) fn pin() -> Guard {
+        with_handle(|handle| handle.pin())
+    }
+
+    /// Returns `true` if the current thread is pinned.
+    #[allow(dead_code)]
+    #[inline]
+    pub(super) fn is_pinned() -> bool {
+        with_handle(|handle| handle.is_pinned())
+    }
+
+    #[inline]
+    fn with_handle<F, R>(mut f: F) -> R
+    where
+        F: FnMut(&LocalHandle) -> R,
+    {
+        HANDLE
+            .try_with(|h| f(h))
+            .unwrap_or_else(|_| f(&COLLECTOR.register()))
+    }
+}
+
+mod version_guard {
     use crossbeam_epoch::{Collector, Guard, LocalHandle};
     use once_cell::sync::Lazy;
 

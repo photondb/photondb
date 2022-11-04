@@ -19,7 +19,7 @@ impl<E: Env> CleanupCtx<E> {
         }
     }
 
-    pub(crate) async fn run(mut self, mut version: Version) {
+    pub(crate) async fn run(mut self, mut version: Arc<Version>) {
         loop {
             let deleted_files = version.deleted_files();
 
