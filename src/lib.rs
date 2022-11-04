@@ -105,10 +105,12 @@ mod tests {
         let options = Options {
             page_size: 64,
             page_chain_length: 2,
-            ..Default::default()
+            page_store: PageStoreOptions {
+                write_buffer_capacity: 1 << 20,
+            },
         };
         let table = Table::open(&path, options).await.unwrap();
-        const N: u64 = 1 << 14;
+        const N: u64 = 1 << 12;
         for _ in 0..N {
             let i = random();
             must_put(&table, i, i).await;
