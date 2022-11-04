@@ -581,10 +581,17 @@ mod tests {
         )));
         buffer_set.on_flushed(file_id);
 
-        {
-            // Some advance.
+        // Advance epoch and reclaim [`BufferSetVersion`].
+        for _ in 0..128 {
             let guard = buffer_set_guard::pin();
             guard.flush();
+            if Arc::strong_count(&buf) == 1 {
+                break;
+            }
+
+            // Wait until other processes touching buffer_set_guard have released the guard
+            // so the epoch can be advanced.
+            std::thread::yield_now();
         }
 
         assert_eq!(Arc::strong_count(&buf), 1);
