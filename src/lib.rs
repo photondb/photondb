@@ -46,8 +46,10 @@ pub use photon::Table;
 mod tree;
 pub use tree::{Options, ReadOptions, Stats, WriteOptions};
 
-mod page;
 mod page_store;
+pub use page_store::Options as PageStoreOptions;
+
+mod page;
 mod util;
 
 #[cfg(test)]
@@ -80,9 +82,11 @@ mod tests {
         let options = Options {
             page_size: 64,
             page_chain_length: 2,
-            ..Default::default()
+            page_store: PageStoreOptions {
+                write_buffer_capacity: 1 << 20,
+            },
         };
-        let table = Table::open(path, options).await.unwrap();
+        let table = Table::open(&path, options).await.unwrap();
         const N: u64 = 1024;
         for i in 0..N {
             must_put(&table, i, i).await;
@@ -91,5 +95,6 @@ mod tests {
         for i in 0..N {
             must_get(&table, i, i, Some(i)).await;
         }
+        table.close().await.unwrap();
     }
 }

@@ -385,7 +385,7 @@ impl BufferSet {
 
         let sealed_buffers = {
             let mut buffers = current.sealed_buffers.clone();
-            let buffer = buffers.pop().expect("Flushable WriteBuffer must be sealed");
+            let buffer = buffers.remove(0);
             assert_eq!(buffer.file_id(), file_id);
             buffers
         };

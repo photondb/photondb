@@ -1,4 +1,4 @@
-use crate::page_store::Options as PageStoreOptions;
+use crate::PageStoreOptions;
 
 /// Options to configure a table.
 #[non_exhaustive]
