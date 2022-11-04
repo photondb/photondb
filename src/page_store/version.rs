@@ -9,6 +9,7 @@ use std::{
 
 use crossbeam_epoch::Guard;
 use futures::channel::oneshot;
+use log::debug;
 
 use super::{FileInfo, WriteBuffer};
 use crate::util::notify::Notify;
@@ -18,6 +19,8 @@ pub(crate) struct VersionOwner {
 }
 
 pub(crate) struct Version {
+    pub(crate) id: usize,
+
     pub(crate) buffer_set: Arc<BufferSet>,
 
     buffers_range: std::ops::Range<u32>,
@@ -115,6 +118,7 @@ impl VersionOwner {
 
         let (sender, receiver) = oneshot::channel();
         let new = Box::new(Arc::new(Version {
+            id: current.id + 1,
             buffers_range,
             write_buffers,
             files: delta.files,
@@ -137,16 +141,16 @@ impl VersionOwner {
     #[allow(clippy::redundant_allocation)]
     fn switch_version(&self, next: Box<Arc<Version>>, guard: Guard) {
         let raw_former = self.raw.load(Ordering::Acquire);
-
-        // Safety:
-        // 1. Obtained from `Box::new`, so it is aligned and not null.
-        // 2. There is not mutable references pointer to it.
-        let former = unsafe { Box::from_raw(raw_former) };
-
         let raw_next = Box::into_raw(next.clone());
         self.raw
             .compare_exchange(raw_former, raw_next, Ordering::AcqRel, Ordering::Acquire)
             .expect("There has already exists a version");
+
+        // Safety:
+        // 1. Obtained from `Box::new`, so it is aligned and not null.
+        // 2. There is not mutable references pointer to it.
+        let former = unsafe { &*raw_former };
+        debug!("Switch version from {} to {}", former.id, next.id);
 
         former
             .next_version
@@ -159,7 +163,13 @@ impl VersionOwner {
             .expect("There has already exists a version");
         former.new_version_notify.notify_all();
 
-        guard.defer(move || drop(former));
+        let raw_former = raw_former as usize;
+        guard.defer(move || {
+            // Safety:
+            // 1. Obtained from `Box::new`, so it is aligned and not null.
+            // 2. There is not mutable references pointer to it.
+            drop(unsafe { Box::from_raw(raw_former as *mut Arc<Version>) });
+        });
         // Get the defer function executed as soon as possible.
         guard.flush();
     }
@@ -193,6 +203,7 @@ impl Version {
 
         let (sender, receiver) = oneshot::channel();
         Version {
+            id: next_file_id as usize,
             buffers_range,
             write_buffers,
             files,
@@ -357,46 +368,70 @@ impl BufferSet {
     ///
     /// Panic if file IDs are not consecutive.
     pub(crate) fn install(&self, write_buffer: Arc<WriteBuffer>) {
-        let guard = buffer_set_guard::pin();
+        let mut guard = buffer_set_guard::pin();
 
         // Safety: guard by `buffer_set_guard::pin`.
-        let current = unsafe { self.current_without_guard() };
-        let next_file_id = current.buffers_range.end;
-        let new_file_id = write_buffer.file_id();
-        if new_file_id != next_file_id {
-            panic!("the buffer {new_file_id} to be installed is not a successor of the previous buffers, expect {next_file_id}.");
+        let mut current = unsafe { self.current_without_guard() };
+        loop {
+            let next_file_id = current.buffers_range.end;
+            let new_file_id = write_buffer.file_id();
+            if new_file_id != next_file_id {
+                panic!("the buffer {new_file_id} to be installed is not a successor of the previous buffers, expect {next_file_id}.");
+            }
+
+            let sealed_buffers = current.snapshot();
+            let new = Box::new(BufferSetVersion {
+                buffers_range: current.buffers_range.start..(next_file_id + 1),
+                sealed_buffers,
+                current_buffer: write_buffer.clone(),
+            });
+
+            debug!(
+                "Install new buffer {}, range {:?}",
+                new_file_id, new.buffers_range
+            );
+
+            match self.switch_version(guard, current, new) {
+                Ok(_) => break,
+                Err(v) => (guard, current) = v,
+            };
         }
-
-        let sealed_buffers = current.snapshot();
-        let new = Box::new(BufferSetVersion {
-            buffers_range: current.buffers_range.start..(next_file_id + 1),
-            sealed_buffers,
-            current_buffer: write_buffer,
-        });
-
-        self.switch_version(new, guard);
     }
 
     pub(crate) fn on_flushed(&self, file_id: u32) {
-        let guard = buffer_set_guard::pin();
+        debug!("Release buffer {file_id}");
+
+        let mut guard = buffer_set_guard::pin();
         // Safety: guarded by `buffer_set_guard::pin`.
-        let current = unsafe { self.current_without_guard() };
-        assert_eq!(current.min_file_id(), file_id);
+        let mut current = unsafe { self.current_without_guard() };
+        loop {
+            if current.min_file_id() != file_id {
+                panic!(
+                    "expect file {} but got {file_id}, current range {:?}",
+                    current.min_file_id(),
+                    current.buffers_range,
+                );
+            }
+            assert_eq!(current.min_file_id(), file_id);
 
-        let sealed_buffers = {
-            let mut buffers = current.sealed_buffers.clone();
-            let buffer = buffers.pop().expect("Flushable WriteBuffer must be sealed");
-            assert_eq!(buffer.file_id(), file_id);
-            buffers
-        };
-        let current_buffer = current.current_buffer.clone();
-        let new = Box::new(BufferSetVersion {
-            buffers_range: (file_id + 1)..current.buffers_range.end,
-            sealed_buffers,
-            current_buffer,
-        });
+            let sealed_buffers = {
+                let mut buffers = current.sealed_buffers.clone();
+                let buffer = buffers.remove(0);
+                assert_eq!(buffer.file_id(), file_id);
+                buffers
+            };
+            let current_buffer = current.current_buffer.clone();
+            let new = Box::new(BufferSetVersion {
+                buffers_range: (file_id + 1)..current.buffers_range.end,
+                sealed_buffers,
+                current_buffer,
+            });
 
-        self.switch_version(new, guard);
+            match self.switch_version(guard, current, new) {
+                Ok(_) => break,
+                Err(v) => (guard, current) = v,
+            }
+        }
     }
 
     #[inline]
@@ -422,17 +457,46 @@ impl BufferSet {
     }
 
     /// Switch to the specified `BufferSetVersion`.
-    fn switch_version(&self, new: Box<BufferSetVersion>, guard: Guard) {
-        let current = self.current.load(Ordering::Acquire) as usize;
-        self.current.store(Box::into_raw(new), Ordering::Release);
-        guard.defer(move || unsafe {
-            // Safety: the backing memory is obtained from [`Box::into_raw`] and there no
-            // any references to the memory, which guarrantted by epoch based reclamation.
-            drop(Box::from_raw(current as *mut BufferSetVersion));
-        });
+    ///
+    /// [`Err`] is returned if the `current` has been changed.
+    fn switch_version(
+        &self,
+        guard: Guard,
+        current: &BufferSetVersion,
+        new: Box<BufferSetVersion>,
+    ) -> Result<(), (Guard, &BufferSetVersion)> {
+        let new = Box::into_raw(new);
+        let current = current as *const _ as usize;
 
-        // Get the defer function executed as soon as possible.
-        guard.flush();
+        // No ABA problem here, since the `guard` guarantees that the `current` will not
+        // be reclamation.
+        match self.current.compare_exchange(
+            current as *mut BufferSetVersion,
+            new,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                guard.defer(move || {
+                    // Safety: the backing memory is obtained from [`Box::into_raw`] and there no
+                    // any references to the memory, which guarrantted by epoch based reclamation.
+                    drop(unsafe { Box::from_raw(current as *mut BufferSetVersion) });
+                });
+
+                // Get the defer function executed as soon as possible.
+                guard.flush();
+                Ok(())
+            }
+            Err(actual) => {
+                // Safety: X_X
+                drop(unsafe { Box::from_raw(new) });
+
+                // Safety:
+                // 1. Obtained from `Box::new`, so it is aligned and not null.
+                // 2. There is not mutable references pointer to it.
+                Err((guard, unsafe { &*actual }))
+            }
+        }
     }
 }
 
@@ -571,6 +635,8 @@ mod version_guard {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicU32;
+
     use super::*;
 
     #[test]
@@ -584,6 +650,78 @@ mod tests {
         let file_id = buffer_set.current().next_file_id();
         let buf = WriteBuffer::with_capacity(file_id, buffer_set.write_buffer_capacity());
         buffer_set.install(Arc::new(buf));
+    }
+
+    #[test]
+    fn buffer_set_write_buffer_install_and_release() {
+        let buffer_set = BufferSet::new(1, 1 << 10);
+        let file_id = buffer_set.current().last_writer_buffer().file_id();
+
+        // 1. seal current.
+        {
+            buffer_set.current().last_writer_buffer().seal().unwrap();
+        }
+
+        // 2. install
+        {
+            let buf = WriteBuffer::with_capacity(file_id + 1, buffer_set.write_buffer_capacity());
+            buffer_set.install(Arc::new(buf));
+        }
+
+        // 3. seal current again.
+        {
+            buffer_set.current().last_writer_buffer().seal().unwrap();
+        }
+
+        // 4. release former buffer.
+        buffer_set.on_flushed(file_id);
+
+        assert!(buffer_set.current().write_buffer(file_id).is_none());
+        assert!(buffer_set.current().write_buffer(file_id + 1).is_some());
+    }
+
+    #[photonio::test]
+    async fn buffer_set_concurrent_update() {
+        let buffer_set = Arc::new(BufferSet::new(1, 1 << 10));
+        let file_id = buffer_set.current().last_writer_buffer().file_id();
+        let first_active_buffer_id = Arc::new(AtomicU32::new(file_id));
+        let cloned_first_active_buffer_id = first_active_buffer_id.clone();
+        let cloned_buffer_set = buffer_set.clone();
+        let handle_1 = photonio::task::spawn(async move {
+            let mut file_id = file_id;
+            while file_id < 100000 {
+                cloned_buffer_set
+                    .current()
+                    .last_writer_buffer()
+                    .seal()
+                    .unwrap();
+
+                file_id += 1;
+                let buf = WriteBuffer::with_capacity(file_id, 1 << 10);
+                cloned_buffer_set.install(Arc::new(buf));
+                cloned_first_active_buffer_id.store(file_id, Ordering::Release);
+                photonio::task::yield_now().await;
+            }
+        });
+        let handle_2 = photonio::task::spawn(async move {
+            let mut file_id = file_id;
+            while file_id < 100000 {
+                while first_active_buffer_id.load(Ordering::Acquire) <= file_id {
+                    photonio::task::yield_now().await;
+                }
+
+                let buf = buffer_set
+                    .current()
+                    .write_buffer(file_id)
+                    .cloned()
+                    .expect("WriteBuffer must exists");
+                assert!(buf.is_flushable());
+                buffer_set.on_flushed(file_id);
+                file_id += 1;
+            }
+        });
+        handle_1.await.unwrap_or_default();
+        handle_2.await.unwrap_or_default();
     }
 
     #[photonio::test]

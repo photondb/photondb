@@ -80,9 +80,11 @@ mod tests {
         let options = Options {
             page_size: 64,
             page_chain_length: 2,
-            ..Default::default()
+            page_store: page_store::Options {
+                write_buffer_capacity: 1 << 10,
+            },
         };
-        let table = Table::open(path, options).await.unwrap();
+        let table = Table::open(&path, options).await.unwrap();
         const N: u64 = 1024;
         for i in 0..N {
             must_put(&table, i, i).await;
