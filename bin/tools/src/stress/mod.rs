@@ -267,11 +267,6 @@ fn spawn_read_task<E: Env>(env: &E, job: Arc<Job>) -> E::JoinHandle<()> {
 async fn write_task(job: Arc<Job>) {
     let seed = job.args.seed.unwrap_or_else(|| OsRng.next_u64());
     let mut rng = SmallRng::seed_from_u64(seed);
-    let fill_bytes = |rng: &mut SmallRng, buf: &mut [u8]| {
-        const BYTES: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        rng.fill(buf);
-    };
-
     while !job.stop.load(Ordering::Relaxed) {
         let mut key = vec![0u8; job.args.key_size];
         let mut value = vec![0u8; job.args.value_size];
@@ -309,9 +304,39 @@ async fn mutate_task(job: Arc<Job>) {
 }
 
 async fn read_task(job: Arc<Job>) {
-    // TODO: How to test read task?
+    let seed = job.args.seed.unwrap_or_else(|| OsRng.next_u64());
+    let mut rng = SmallRng::seed_from_u64(seed);
     while !job.stop.load(Ordering::Relaxed) {
-        job.timer.sleep(Duration::from_secs(1)).await;
+        let mut key = vec![0u8; job.args.key_size];
+        assert!(key.len() > PREFIX_SIZE);
+        key[0] = job.key_prefix[0].load(Ordering::Relaxed);
+        key[1] = job.key_prefix[1].load(Ordering::Relaxed);
+        key[2] = job.key_prefix[2].load(Ordering::Relaxed);
+        fill_bytes(&mut rng, &mut key[3..]);
+        match job.table.get(&key, u64::MAX, |v| v.is_some()).await {
+            Ok(true) => {
+                continue;
+            }
+            Ok(false) => {
+                let mut value = vec![0u8; job.args.value_size];
+                fill_bytes(&mut rng, value.as_mut_slice());
+                if let Err(err) = job.table.put(&key, 0, &value).await {
+                    error!("Write to DB: {err:?}");
+                    std::process::abort();
+                }
+            }
+            Err(err) => {
+                error!("Read DB: {err:?}");
+                std::process::abort();
+            }
+        }
+
         photonio::task::yield_now().await;
     }
+}
+
+fn fill_bytes(rng: &mut SmallRng, buf: &mut [u8]) {
+    const BYTES: &[u8; 62] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    rng.fill(buf);
+    buf.iter_mut().for_each(|v| *v = BYTES[(*v % 62) as usize]);
 }
