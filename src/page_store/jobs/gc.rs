@@ -60,7 +60,7 @@ where
         }
     }
 
-    pub(crate) async fn run(mut self, mut version: Version) {
+    pub(crate) async fn run(mut self, mut version: Arc<Version>) {
         loop {
             self.gc(&version).await;
             match with_shutdown(&mut self.shutdown, version.wait_next_version()).await {
@@ -70,7 +70,7 @@ where
         }
     }
 
-    async fn gc(&mut self, version: &Version) {
+    async fn gc(&mut self, version: &Arc<Version>) {
         let now = version.next_file_id();
         let mut strategy = self.strategy_builder.build(now);
         let cleaned_files = std::mem::take(&mut self.cleaned_files);
@@ -96,16 +96,15 @@ where
         }
     }
 
-    async fn rewrite_file(&self, file: &FileInfo, version: &Version) -> Result<()> {
+    async fn rewrite_file(&self, file: &FileInfo, version: &Arc<Version>) -> Result<()> {
         let file_id = file.get_file_id();
         let reader = self.page_files.open_meta_reader(file_id).await?;
         let page_table = reader.read_page_table().await?;
         let dealloc_pages = reader.read_delete_pages().await?;
 
-        let version = Arc::new(version.clone());
-        self.rewrite_active_pages(file, &version, &page_table)
+        self.rewrite_active_pages(file, version, &page_table)
             .await?;
-        self.rewrite_dealloc_pages(&version, &dealloc_pages).await?;
+        self.rewrite_dealloc_pages(version, &dealloc_pages).await?;
 
         Ok(())
     }

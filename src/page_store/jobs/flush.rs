@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Instant,
 };
 
@@ -17,7 +17,7 @@ use crate::{
 
 pub(crate) struct FlushCtx<E: Env> {
     shutdown: Shutdown,
-    global_version: Arc<Mutex<Version>>,
+    version_owner: Arc<VersionOwner>,
     page_files: Arc<PageFiles<E>>,
     manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
 }
@@ -35,13 +35,13 @@ struct FlushPageStats {
 impl<E: Env> FlushCtx<E> {
     pub(crate) fn new(
         shutdown: Shutdown,
-        global_version: Arc<Mutex<Version>>,
+        version_owner: Arc<VersionOwner>,
         page_files: Arc<PageFiles<E>>,
         manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
     ) -> Self {
         FlushCtx {
             shutdown,
-            global_version,
+            version_owner,
             page_files,
             manifest,
         }
@@ -49,7 +49,7 @@ impl<E: Env> FlushCtx<E> {
 
     pub(crate) async fn run(mut self) {
         loop {
-            let version = self.version();
+            let version = self.version_owner.current();
             let write_buffer = {
                 let current = version.buffer_set.current();
                 let file_id = current.min_file_id();
@@ -72,9 +72,7 @@ impl<E: Env> FlushCtx<E> {
             }
 
             match self.flush(&version, write_buffer.as_ref()).await {
-                Ok(()) => {
-                    self.refresh_version();
-                }
+                Ok(()) => {}
                 Err(err) => {
                     todo!("flush write buffer: {err:?}");
                 }
@@ -111,9 +109,8 @@ impl<E: Env> FlushCtx<E> {
             deleted_files,
         };
 
-        let buffer_set = version.buffer_set.clone();
-        Version::install(version, delta)?;
-        buffer_set.on_flushed(file_id);
+        self.version_owner.install(delta);
+        version.buffer_set.on_flushed(file_id);
         Ok(())
     }
 
@@ -187,16 +184,16 @@ impl<E: Env> FlushCtx<E> {
         files
     }
 
-    fn version(&self) -> Version {
-        self.global_version.lock().expect("Poisoned").clone()
-    }
+    // fn version(&self) -> Version {
+    //     self.global_version.lock().expect("Poisoned").clone()
+    // }
 
-    fn refresh_version(&self) {
-        let mut version = self.global_version.lock().expect("Poisoned");
-        if let Some(new) = version.refresh() {
-            *version = new;
-        }
-    }
+    // fn refresh_version(&self) {
+    //     let mut version = self.global_version.lock().expect("Poisoned");
+    //     if let Some(new) = version.refresh() {
+    //         *version = new;
+    //     }
+    // }
 }
 
 impl std::fmt::Display for FlushPageStats {
@@ -268,7 +265,10 @@ mod tests {
     use super::FlushCtx;
     use crate::{
         env::Photon,
-        page_store::{version::Version, Manifest, PageFiles, WriteBuffer},
+        page_store::{
+            version::{Version, VersionOwner},
+            Manifest, PageFiles, WriteBuffer,
+        },
         util::shutdown::ShutdownNotifier,
     };
 
@@ -277,9 +277,10 @@ mod tests {
         let notifier = ShutdownNotifier::default();
         let shutdown = notifier.subscribe();
         let version = Version::new(1 << 16, 1, HashMap::default(), HashSet::new());
+        let version_owner = Arc::new(VersionOwner::new(version));
         FlushCtx {
             shutdown,
-            global_version: Arc::new(std::sync::Mutex::new(version)),
+            version_owner,
             page_files: Arc::new(PageFiles::new(Photon, base, "prefix").await),
             manifest: Arc::new(futures::lock::Mutex::new(
                 Manifest::open(Photon, base).await.unwrap(),
