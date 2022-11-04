@@ -34,4 +34,5 @@ debug = true
 
 [dev-dependencies]
 env_logger = "0.9.1"
+rand = "0.8.5"
 tempdir = "0.3.7"

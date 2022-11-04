@@ -410,6 +410,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             new_page.set_chain_next(view.addr);
             txn.update_page(view.id, view.addr, new_addr)
                 .map(|_| {
+                    trace!("split page {:?} with delta {:?}", view, delta);
                     self.tree.stats.success.split_page.inc();
                     view.addr = new_addr;
                     view.page = new_page.into();
@@ -488,12 +489,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         new_page.set_chain_next(parent.addr);
         txn.update_page(parent.id, parent.addr, new_addr)
             .map(|_| {
-                trace!(
-                    "reconciled split page {:?} to {:?} at {}",
-                    parent,
-                    new_page,
-                    new_addr
-                );
+                trace!("reconciled split page {:?} with delta {:?}", view, delta);
                 parent.addr = new_addr;
                 parent.page = new_page.into();
             })
@@ -522,7 +518,6 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             new_page.set_epoch(root.epoch());
             new_page.set_chain_len(root.chain_len().saturating_add(1));
             new_page.set_chain_next(view.addr);
-            trace!("moved root {:?} to {:?} at {}", view, new_page, new_addr);
             txn.insert_page(new_addr)
         };
         let left_key = [].as_slice();
@@ -537,12 +532,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Update the original root with the new root.
         txn.update_page(view.id, view.addr, new_addr)
             .map(|_| {
-                trace!(
-                    "reconciled split root {:?} to {:?} at {}",
-                    view,
-                    new_page,
-                    new_addr
-                );
+                trace!("reconciled split root {:?} with delta {:?}", view, delta);
             })
             .map_err(|_| Error::Again)
     }
@@ -603,12 +593,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Update the page and deallocate the consolidated delta pages.
         txn.replace_page(view.id, view.addr, new_addr, &info.page_addrs)
             .map(|_| {
-                trace!(
-                    "consolidated page {:?} to {:?} at {}",
-                    view,
-                    new_page,
-                    new_addr
-                );
+                trace!("consolidated page {:?}", view);
                 self.tree.stats.success.consolidate_page.inc();
                 view.addr = new_addr;
                 view.page = new_page.into();
@@ -639,7 +624,13 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         self.walk_page(view.page, |page| {
             match page.kind() {
                 PageKind::Data => {
-                    if builder.len() >= 2 && page_size < page.size() / 2 && range_limit.is_none() {
+                    // Inner pages can not do partial consolidations because of the placeholders.
+                    // This is fine since inner pages doesn't consolidate as often as leaf pages.
+                    if page.tier().is_leaf()
+                        && builder.len() >= 2
+                        && page_size < page.size() / 2
+                        && range_limit.is_none()
+                    {
                         return true;
                     }
                     builder.add(SortedPageIter::from(page));

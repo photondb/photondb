@@ -46,12 +46,15 @@ pub use photon::Table;
 mod tree;
 pub use tree::{Options, ReadOptions, Stats, WriteOptions};
 
-mod page;
 mod page_store;
+pub use page_store::Options as PageStoreOptions;
+
+mod page;
 mod util;
 
 #[cfg(test)]
 mod tests {
+    use rand::random;
     use tempdir::TempDir;
 
     use super::*;
@@ -80,12 +83,12 @@ mod tests {
         let options = Options {
             page_size: 64,
             page_chain_length: 2,
-            page_store: page_store::Options {
+            page_store: PageStoreOptions {
                 write_buffer_capacity: 1 << 10,
             },
         };
         let table = Table::open(&path, options).await.unwrap();
-        const N: u64 = 1024;
+        const N: u64 = 1 << 8;
         for i in 0..N {
             must_put(&table, i, i).await;
             must_get(&table, i, i, Some(i)).await;
@@ -93,5 +96,24 @@ mod tests {
         for i in 0..N {
             must_get(&table, i, i, Some(i)).await;
         }
+        table.close().await.unwrap();
+    }
+
+    #[photonio::test]
+    async fn random_crud() {
+        let path = TempDir::new("random_crud").unwrap();
+        let options = Options {
+            page_size: 64,
+            page_chain_length: 2,
+            ..Default::default()
+        };
+        let table = Table::open(&path, options).await.unwrap();
+        const N: u64 = 1 << 14;
+        for _ in 0..N {
+            let i = random();
+            must_put(&table, i, i).await;
+            must_get(&table, i, i, Some(i)).await;
+        }
+        table.close().await.unwrap();
     }
 }
