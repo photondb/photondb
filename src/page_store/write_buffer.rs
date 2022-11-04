@@ -5,6 +5,7 @@ use std::{
 };
 
 use bitflags::bitflags;
+use log::info;
 
 use super::Result;
 use crate::{
@@ -247,6 +248,12 @@ impl WriteBuffer {
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
+                    info!(
+                        "Seal write buffer {}, allocated {} bytes, usage {}",
+                        self.file_id,
+                        buffer_state.allocated,
+                        buffer_state.allocated as f64 / self.buf_size as f64
+                    );
                     if buffer_state.has_writer() {
                         return Ok(ReleaseState::None);
                     } else {
