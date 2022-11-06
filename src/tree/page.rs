@@ -67,20 +67,20 @@ where
     }
 }
 
-impl<'a, V> SeekableIterator<[u8]> for MergingPageIter<'a, &'a [u8], V>
-where
-    V: SortedPageValue,
-{
-    fn seek(&mut self, target: &[u8]) -> bool {
-        self.iter.seek(target)
-    }
-}
-
 impl<'a, V> SeekableIterator<Key<'_>> for MergingPageIter<'a, Key<'a>, V>
 where
     V: SortedPageValue,
 {
     fn seek(&mut self, target: &Key<'_>) -> bool {
+        self.iter.seek(target)
+    }
+}
+
+impl<'a, V> SeekableIterator<[u8]> for MergingPageIter<'a, &'a [u8], V>
+where
+    V: SortedPageValue,
+{
+    fn seek(&mut self, target: &[u8]) -> bool {
         self.iter.seek(target)
     }
 }

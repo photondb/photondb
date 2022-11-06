@@ -317,11 +317,11 @@ where
     }
 }
 
-impl<'a, V> SeekableIterator<[u8]> for SortedPageIter<'a, &'a [u8], V>
+impl<'a, V> SeekableIterator<Key<'_>> for SortedPageIter<'a, Key<'_>, V>
 where
     V: SortedPageValue,
 {
-    fn seek(&mut self, target: &[u8]) -> bool {
+    fn seek(&mut self, target: &Key<'_>) -> bool {
         match self.page.rank(target) {
             Ok(i) => {
                 self.next = i;
@@ -335,11 +335,11 @@ where
     }
 }
 
-impl<'a, V> SeekableIterator<Key<'_>> for SortedPageIter<'a, Key<'_>, V>
+impl<'a, V> SeekableIterator<[u8]> for SortedPageIter<'a, &'a [u8], V>
 where
     V: SortedPageValue,
 {
-    fn seek(&mut self, target: &Key<'_>) -> bool {
+    fn seek(&mut self, target: &[u8]) -> bool {
         match self.page.rank(target) {
             Ok(i) => {
                 self.next = i;
@@ -551,19 +551,19 @@ mod tests {
             iter.rewind();
         }
 
-        assert!(!iter.seek(&[0].as_slice()));
+        assert!(!iter.seek([0].as_slice()));
         assert_eq!(iter.next(), Some(data[0]));
-        assert!(iter.seek(&[1].as_slice()));
+        assert!(iter.seek([1].as_slice()));
         assert_eq!(iter.next(), Some(data[0]));
-        assert!(!iter.seek(&[2].as_slice()));
+        assert!(!iter.seek([2].as_slice()));
         assert_eq!(iter.next(), Some(data[1]));
-        assert!(iter.seek(&[3].as_slice()));
+        assert!(iter.seek([3].as_slice()));
         assert_eq!(iter.next(), Some(data[1]));
-        assert!(!iter.seek(&[4].as_slice()));
+        assert!(!iter.seek([4].as_slice()));
         assert_eq!(iter.next(), Some(data[2]));
-        assert!(iter.seek(&[5].as_slice()));
+        assert!(iter.seek([5].as_slice()));
         assert_eq!(iter.next(), Some(data[2]));
-        assert!(!iter.seek(&[6].as_slice()));
+        assert!(!iter.seek([6].as_slice()));
         assert_eq!(iter.next(), None);
     }
 }
