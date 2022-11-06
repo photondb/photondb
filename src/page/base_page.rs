@@ -152,6 +152,7 @@ unsafe impl Send for PagePtr {}
 impl fmt::Debug for PagePtr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Page")
+            .field("size", &self.size())
             .field("tier", &self.tier())
             .field("kind", &self.kind())
             .field("epoch", &self.epoch())

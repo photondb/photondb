@@ -5,16 +5,19 @@ use std::{
     mem,
 };
 
-/// An extension of [`Iterator`] that can seek to a target.
-pub(crate) trait SeekableIterator<T>: Iterator {
-    /// Positions the iterator at the first item that is at or after `target`.
-    fn seek(&mut self, target: &T);
-}
-
 /// An extension of [`Iterator`] that can rewind back to the beginning.
 pub(crate) trait RewindableIterator: Iterator {
     /// Positions the iterator at the first item.
     fn rewind(&mut self);
+}
+
+/// An extension of [`Iterator`] that can seek to a target.
+pub(crate) trait SeekableIterator<T: ?Sized>: Iterator {
+    /// Positions the iterator at the first item that is at or after `target`.
+    ///
+    /// Returns true if the iterator is positioned at an item that is equal to
+    /// `target`.
+    fn seek(&mut self, target: &T) -> bool;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -77,20 +80,26 @@ impl<'a, T: Clone> Iterator for SliceIter<'a, T> {
     }
 }
 
-/// This assumes that the slice is sorted.
-#[cfg(test)]
-impl<'a, T: Clone + Ord> SeekableIterator<T> for SliceIter<'a, T> {
-    fn seek(&mut self, target: &T) {
-        self.next = match self.data.binary_search(target) {
-            Ok(i) => i,
-            Err(i) => i,
-        }
-    }
-}
-
 impl<'a, T: Clone> RewindableIterator for SliceIter<'a, T> {
     fn rewind(&mut self) {
         self.next = 0;
+    }
+}
+
+/// This assumes that the slice is sorted.
+#[cfg(test)]
+impl<'a, T: Clone + Ord> SeekableIterator<T> for SliceIter<'a, T> {
+    fn seek(&mut self, target: &T) -> bool {
+        match self.data.binary_search(target) {
+            Ok(i) => {
+                self.next = i;
+                true
+            }
+            Err(i) => {
+                self.next = i;
+                false
+            }
+        }
     }
 }
 
@@ -181,16 +190,6 @@ where
     }
 }
 
-impl<I, T> SeekableIterator<T> for OrderedIter<I>
-where
-    I: SeekableIterator<T>,
-{
-    fn seek(&mut self, target: &T) {
-        self.iter.seek(target);
-        self.next = self.iter.next();
-    }
-}
-
 impl<I> RewindableIterator for OrderedIter<I>
 where
     I: RewindableIterator,
@@ -198,6 +197,18 @@ where
     fn rewind(&mut self) {
         self.iter.rewind();
         self.next = self.iter.next();
+    }
+}
+
+impl<I, T> SeekableIterator<T> for OrderedIter<I>
+where
+    T: ?Sized,
+    I: SeekableIterator<T>,
+{
+    fn seek(&mut self, target: &T) -> bool {
+        let found = self.iter.seek(target);
+        self.next = self.iter.next();
+        found
     }
 }
 
@@ -223,9 +234,9 @@ where
         Self { heap: vec.into() }
     }
 
-    fn for_each<F>(&mut self, f: F)
+    fn for_each<F>(&mut self, mut f: F)
     where
-        F: Fn(&mut Reverse<OrderedIter<I>>),
+        F: FnMut(&mut Reverse<OrderedIter<I>>),
     {
         let mut vec = mem::take(&mut self.heap).into_vec();
         for iter in vec.iter_mut() {
@@ -252,16 +263,6 @@ where
     }
 }
 
-impl<I, T> SeekableIterator<T> for MergingIter<I>
-where
-    I: Iterator,
-    OrderedIter<I>: SeekableIterator<T, Item = I::Item> + Ord,
-{
-    fn seek(&mut self, target: &T) {
-        self.for_each(|iter| iter.0.seek(target))
-    }
-}
-
 impl<I> RewindableIterator for MergingIter<I>
 where
     I: Iterator,
@@ -269,6 +270,23 @@ where
 {
     fn rewind(&mut self) {
         self.for_each(|iter| iter.0.rewind());
+    }
+}
+
+impl<I, T> SeekableIterator<T> for MergingIter<I>
+where
+    T: ?Sized,
+    I: Iterator,
+    OrderedIter<I>: SeekableIterator<T, Item = I::Item> + Ord,
+{
+    fn seek(&mut self, target: &T) -> bool {
+        let mut found = false;
+        self.for_each(|iter| {
+            if iter.0.seek(target) {
+                found = true;
+            }
+        });
+        found
     }
 }
 
@@ -383,17 +401,17 @@ mod tests {
             iter.rewind();
         }
 
-        iter.seek(&(0, ""));
+        assert!(!iter.seek(&(0, "")));
         assert_eq!(iter.next(), Some((1, "a")));
         assert_eq!(iter.next(), Some((1, "c")));
-        iter.seek(&(9, ""));
+        assert!(!iter.seek(&(9, "")));
         assert_eq!(iter.next(), None);
-        iter.seek(&(1, ""));
+        assert!(iter.seek(&(1, "a")));
         assert_eq!(iter.next(), Some((1, "a")));
-        iter.seek(&(3, ""));
+        assert!(iter.seek(&(3, "a")));
         assert_eq!(iter.next(), Some((3, "a")));
         assert_eq!(iter.next(), Some((3, "d")));
-        iter.seek(&(5, ""));
+        assert!(!iter.seek(&(5, "")));
         assert_eq!(iter.next(), Some((7, "a")));
         assert_eq!(iter.next(), Some((7, "d")));
         assert_eq!(iter.next(), Some((8, "c")));
