@@ -120,22 +120,6 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
     /// Gets the value corresponding to the key.
     pub(crate) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
-        loop {
-            match self.try_get(key).await {
-                Ok(value) => {
-                    self.tree.stats.success.get.inc();
-                    return Ok(value);
-                }
-                Err(Error::Again) => {
-                    self.tree.stats.conflict.get.inc();
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-    }
-
-    async fn try_get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
         let (view, _) = self.find_leaf(key.raw).await?;
         self.find_value(&key, &view).await
     }
@@ -215,6 +199,22 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     ///
     /// Returns the leaf page and its parent.
     async fn find_leaf(&self, key: &[u8]) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
+        loop {
+            match self.try_find_leaf(key).await {
+                Ok((view, parent)) => {
+                    self.tree.stats.success.read.inc();
+                    return Ok((view, parent));
+                }
+                Err(Error::Again) => {
+                    self.tree.stats.conflict.read.inc();
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    async fn try_find_leaf(&self, key: &[u8]) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
         // The index, range, and parent of the current page, starting from the root.
         let mut index = ROOT_INDEX;
         let mut range = ROOT_RANGE;
@@ -689,6 +689,112 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             max_chain_len /= 2;
         }
         page.chain_len() as usize > max_chain_len.max(1)
+    }
+}
+
+pub(crate) struct TreeIter<'a, 't: 'a, E: Env> {
+    txn: &'a TreeTxn<'t, E>,
+    options: ReadOptions,
+    inner_iter: Option<MergingInnerPageIter<'a>>,
+    inner_next: Option<&'a [u8]>,
+}
+
+impl<'a, 't: 'a, E: Env> TreeIter<'a, 't, E> {
+    pub(crate) fn new(txn: &'a TreeTxn<'t, E>, options: ReadOptions) -> Self {
+        Self {
+            txn,
+            options,
+            inner_iter: None,
+            inner_next: None,
+        }
+    }
+
+    async fn seek(&mut self, target: &[u8]) -> Result<PageIter<'_>> {
+        let (view, parent) = self.txn.find_leaf(target).await?;
+        let iter = self.txn.iter_page(&view).await?;
+        let mut leaf_iter = PageIter::new(iter, self.options.max_lsn);
+        leaf_iter.seek(target);
+        if let Some(parent) = parent {
+            let iter = self.txn.iter_page(&parent).await?;
+            let mut iter = MergingInnerPageIter::new(iter);
+            if iter.seek(target) {
+                iter.next();
+            }
+            self.inner_iter = Some(iter);
+            self.inner_next = parent.range.unwrap().end;
+        } else {
+            self.inner_iter = None;
+            self.inner_next = None;
+        }
+        Ok(leaf_iter)
+    }
+
+    pub(crate) async fn next_page(&mut self) -> Result<Option<PageIter<'_>>> {
+        let Some(inner_iter) = self.inner_iter.as_mut() else {
+            return Ok(None);
+        };
+        let mut inner_next = self.inner_next;
+        if let Some((start, index)) = inner_iter.next() {
+            let view = self.txn.page_view(index.id, None).await?;
+            if view.page.epoch() == index.epoch {
+                let iter = self.txn.iter_page(&view).await?;
+                return Ok(Some(PageIter::new(iter, self.options.max_lsn)));
+            } else {
+                // The page epoch has changed, we need to restart from this.
+                inner_next = Some(start);
+            }
+        }
+        if let Some(next) = inner_next {
+            let iter = self.seek(next).await?;
+            Ok(Some(iter))
+        } else {
+            self.inner_iter = None;
+            Ok(None)
+        }
+    }
+}
+
+/// An iterator over entries in a page.
+pub struct PageIter<'a> {
+    iter: MergingPageIter<'a, Key<'a>, Value<'a>>,
+    read_lsn: u64,
+    last_raw: Option<&'a [u8]>,
+}
+
+impl<'a> PageIter<'a> {
+    fn new(iter: MergingPageIter<'a, Key<'a>, Value<'a>>, read_lsn: u64) -> Self {
+        Self {
+            iter,
+            read_lsn,
+            last_raw: None,
+        }
+    }
+
+    /// Positions the iterator at the first item that is at or after `target`.
+    pub fn seek(&mut self, target: &[u8]) {
+        self.iter.seek(&Key::new(target, self.read_lsn));
+    }
+}
+
+impl<'a> Iterator for PageIter<'a> {
+    type Item = (&'a [u8], &'a [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for (k, v) in &mut self.iter {
+            if k.lsn > self.read_lsn {
+                continue;
+            }
+            if let Some(last) = self.last_raw {
+                if k.raw == last {
+                    continue;
+                }
+            }
+            self.last_raw = Some(k.raw);
+            if let Value::Put(value) = v {
+                return Some((k.raw, value));
+            }
+        }
+        None
     }
 }
 

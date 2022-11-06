@@ -50,6 +50,11 @@ impl<E: Env> Table<E> {
         self.tree.begin(self.store.guard())
     }
 
+    /// Returns a [`Guard`] that pins the table for user operations.
+    pub fn pin(&self) -> Guard<'_, E> {
+        Guard::new(self)
+    }
+
     /// Gets the value corresponding to the key and applies a function to it.
     //
     /// On success, if the value is found, applies the function to
@@ -105,5 +110,45 @@ impl<E: Env> Table<E> {
     /// entries that are not visible to the LSN anymore.
     pub fn set_safe_lsn(&self, lsn: u64) {
         self.tree.set_safe_lsn(lsn);
+    }
+}
+
+/// A handle that holds some resources of a table to protect user operations.
+pub struct Guard<'a, E: Env> {
+    t: &'a Table<E>,
+    txn: TreeTxn<'a, E>,
+}
+
+impl<'a, E: Env> Guard<'a, E> {
+    fn new(t: &'a Table<E>) -> Self {
+        Self { t, txn: t.begin() }
+    }
+
+    /// Re-pins the table so that the current pinned resources can be released.
+    pub fn repin(&mut self) {
+        self.txn = self.t.begin();
+    }
+
+    /// Returns an iterator over pages in the table.
+    pub fn pages(&self, options: ReadOptions) -> Pages<'_, 'a, E> {
+        Pages::new(&self.txn, options)
+    }
+}
+
+/// An iterator over pages in a table.
+pub struct Pages<'a, 't: 'a, E: Env> {
+    iter: TreeIter<'a, 't, E>,
+}
+
+impl<'a, 't: 'a, E: Env> Pages<'a, 't, E> {
+    fn new(txn: &'a TreeTxn<'t, E>, options: ReadOptions) -> Self {
+        Self {
+            iter: TreeIter::new(txn, options),
+        }
+    }
+
+    /// Returns the next page in the table.
+    pub async fn next(&mut self) -> Result<Option<PageIter<'_>>> {
+        Ok(self.iter.next_page().await?)
     }
 }

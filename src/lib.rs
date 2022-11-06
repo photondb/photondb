@@ -97,6 +97,18 @@ mod tests {
         for i in 0..N {
             must_get(&table, i, i, Some(i)).await;
         }
+
+        let guard = table.pin();
+        let mut pages = guard.pages(ReadOptions::default());
+        let mut i = 0u64;
+        while let Some(page) = pages.next().await.unwrap() {
+            for (k, v) in page {
+                assert_eq!(k, &i.to_be_bytes());
+                assert_eq!(v, &i.to_be_bytes());
+                i += 1;
+            }
+        }
+
         table.close().await.unwrap();
     }
 
