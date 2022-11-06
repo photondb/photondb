@@ -77,18 +77,19 @@ mod tests {
             .unwrap();
     }
 
+    const OPTIONS: Options = Options {
+        page_size: 64,
+        page_chain_length: 2,
+        page_store: PageStoreOptions {
+            write_buffer_capacity: 1 << 20,
+        },
+    };
+
     #[photonio::test]
     async fn crud() {
         let path = TempDir::new("crud").unwrap();
-        let options = Options {
-            page_size: 64,
-            page_chain_length: 2,
-            page_store: PageStoreOptions {
-                write_buffer_capacity: 1 << 10,
-            },
-        };
-        let table = Table::open(&path, options).await.unwrap();
-        const N: u64 = 1 << 8;
+        let table = Table::open(&path, OPTIONS).await.unwrap();
+        const N: u64 = 1 << 10;
         for i in 0..N {
             must_put(&table, i, i).await;
             must_get(&table, i, i, Some(i)).await;
@@ -102,19 +103,35 @@ mod tests {
     #[photonio::test]
     async fn random_crud() {
         let path = TempDir::new("random_crud").unwrap();
-        let options = Options {
-            page_size: 64,
-            page_chain_length: 2,
-            page_store: PageStoreOptions {
-                write_buffer_capacity: 1 << 20,
-            },
-        };
-        let table = Table::open(&path, options).await.unwrap();
+        let table = Table::open(&path, OPTIONS).await.unwrap();
         const N: u64 = 1 << 12;
         for _ in 0..N {
             let i = random();
             must_put(&table, i, i).await;
             must_get(&table, i, i, Some(i)).await;
+        }
+        table.close().await.unwrap();
+    }
+
+    #[photonio::test]
+    async fn concurrent_crud() {
+        let path = TempDir::new("concurrent_crud").unwrap();
+        let table = Table::open(&path, OPTIONS).await.unwrap();
+        let mut tasks = Vec::new();
+        for _ in 0..4 {
+            let table = table.clone();
+            let handle = photonio::task::spawn(async move {
+                const N: u64 = 1 << 10;
+                for _ in 0..N {
+                    let i = random();
+                    must_put(&table, i, i).await;
+                    must_get(&table, i, i, Some(i)).await;
+                }
+            });
+            tasks.push(handle);
+        }
+        for task in tasks {
+            task.await.unwrap();
         }
         table.close().await.unwrap();
     }
