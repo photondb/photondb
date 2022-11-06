@@ -4,4 +4,4 @@ mod store;
 pub use store::Store;
 
 mod table;
-pub use table::Table;
+pub use table::{Guard, Pages, Table};
