@@ -307,19 +307,6 @@ where
     }
 }
 
-impl<'a, K, V> SeekableIterator<K> for SortedPageIter<'a, K, V>
-where
-    K: SortedPageKey,
-    V: SortedPageValue,
-{
-    fn seek(&mut self, target: &K) {
-        self.next = match self.page.rank(target) {
-            Ok(i) => i,
-            Err(i) => i,
-        };
-    }
-}
-
 impl<'a, K, V> RewindableIterator for SortedPageIter<'a, K, V>
 where
     K: SortedPageKey,
@@ -327,6 +314,42 @@ where
 {
     fn rewind(&mut self) {
         self.next = self.init;
+    }
+}
+
+impl<'a, V> SeekableIterator<Key<'_>> for SortedPageIter<'a, Key<'_>, V>
+where
+    V: SortedPageValue,
+{
+    fn seek(&mut self, target: &Key<'_>) -> bool {
+        match self.page.rank(target) {
+            Ok(i) => {
+                self.next = i;
+                true
+            }
+            Err(i) => {
+                self.next = i;
+                false
+            }
+        }
+    }
+}
+
+impl<'a, V> SeekableIterator<[u8]> for SortedPageIter<'a, &'a [u8], V>
+where
+    V: SortedPageValue,
+{
+    fn seek(&mut self, target: &[u8]) -> bool {
+        match self.page.rank(target) {
+            Ok(i) => {
+                self.next = i;
+                true
+            }
+            Err(i) => {
+                self.next = i;
+                false
+            }
+        }
     }
 }
 
@@ -513,5 +536,34 @@ mod tests {
             let owned_page = OwnedSortedPage::from_slice(&data);
             assert!(owned_page.as_ref().into_split_iter().is_none());
         }
+    }
+
+    #[test]
+    fn sorted_page_iter() {
+        let data = raw_slice(&[[1], [3], [5]]);
+        let owned_page = OwnedSortedPage::from_slice(&data);
+
+        let mut iter = owned_page.as_iter();
+        for _ in 0..2 {
+            for (a, b) in (&mut iter).zip(data.clone()) {
+                assert_eq!(a, b);
+            }
+            iter.rewind();
+        }
+
+        assert!(!iter.seek([0].as_slice()));
+        assert_eq!(iter.next(), Some(data[0]));
+        assert!(iter.seek([1].as_slice()));
+        assert_eq!(iter.next(), Some(data[0]));
+        assert!(!iter.seek([2].as_slice()));
+        assert_eq!(iter.next(), Some(data[1]));
+        assert!(iter.seek([3].as_slice()));
+        assert_eq!(iter.next(), Some(data[1]));
+        assert!(!iter.seek([4].as_slice()));
+        assert_eq!(iter.next(), Some(data[2]));
+        assert!(iter.seek([5].as_slice()));
+        assert_eq!(iter.next(), Some(data[2]));
+        assert!(!iter.seek([6].as_slice()));
+        assert_eq!(iter.next(), None);
     }
 }

@@ -136,7 +136,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     async fn try_get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
-        let (view, _) = self.find_leaf(&key).await?;
+        let (view, _) = self.find_leaf(key.raw).await?;
         self.find_value(&key, &view).await
     }
 
@@ -158,7 +158,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     async fn try_write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
-        let (mut view, parent) = self.find_leaf(&key).await?;
+        let (mut view, parent) = self.find_leaf(key.raw).await?;
         // Build a delta page with the given key-value pair.
         let delta = (key, value);
         let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_item(delta);
@@ -214,7 +214,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     /// Finds the leaf page that may contain the key.
     ///
     /// Returns the leaf page and its parent.
-    async fn find_leaf(&self, key: &Key<'_>) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
+    async fn find_leaf(&self, key: &[u8]) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
         // The index, range, and parent of the current page, starting from the root.
         let mut index = ROOT_INDEX;
         let mut range = ROOT_RANGE;
@@ -232,7 +232,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             }
             // Find the child page that may contain the key.
             let (child_index, child_range) = self
-                .find_child(key.raw, &view)
+                .find_child(key, &view)
                 .await?
                 .expect("child page must exist");
             index = child_index;

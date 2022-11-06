@@ -67,6 +67,24 @@ where
     }
 }
 
+impl<'a, V> SeekableIterator<Key<'_>> for MergingPageIter<'a, Key<'a>, V>
+where
+    V: SortedPageValue,
+{
+    fn seek(&mut self, target: &Key<'_>) -> bool {
+        self.iter.seek(target)
+    }
+}
+
+impl<'a, V> SeekableIterator<[u8]> for MergingPageIter<'a, &'a [u8], V>
+where
+    V: SortedPageValue,
+{
+    fn seek(&mut self, target: &[u8]) -> bool {
+        self.iter.seek(target)
+    }
+}
+
 /// An iterator that merges multiple leaf delta pages for consolidation.
 pub(super) struct MergingLeafPageIter<'a> {
     iter: MergingPageIter<'a, Key<'a>, Value<'a>>,
@@ -131,6 +149,12 @@ impl<'a> RewindableIterator for MergingLeafPageIter<'a> {
     }
 }
 
+impl<'a> SeekableIterator<Key<'_>> for MergingLeafPageIter<'a> {
+    fn seek(&mut self, target: &Key<'_>) -> bool {
+        self.iter.seek(target)
+    }
+}
+
 /// An iterator that merges multiple inner delta pages for consolidation.
 pub(super) struct MergingInnerPageIter<'a> {
     iter: MergingPageIter<'a, &'a [u8], Index>,
@@ -171,6 +195,12 @@ impl<'a> Iterator for MergingInnerPageIter<'a> {
 impl<'a> RewindableIterator for MergingInnerPageIter<'a> {
     fn rewind(&mut self) {
         self.iter.rewind();
+    }
+}
+
+impl<'a> SeekableIterator<[u8]> for MergingInnerPageIter<'a> {
+    fn seek(&mut self, target: &[u8]) -> bool {
+        self.iter.seek(target)
     }
 }
 
