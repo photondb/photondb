@@ -83,9 +83,10 @@ impl<'a, E: Env> Guard<'a, E> {
             let Some(file_info) = self.version.files().get(&file_id) else {
                 panic!("File {file_id} is not exists");
             };
-            let handle = file_info
-                .get_page_handle(addr)
-                .expect("The addr is not belongs to the target page file");
+            assert_eq!(file_info.get_file_id(), file_id);
+            let Some(handle) = file_info.get_page_handle(addr) else {
+                panic!("The addr {addr} is not belongs to the target page file {file_id}");
+            };
 
             // TODO: cache page file reader for speed up.
             let reader = self
@@ -225,8 +226,18 @@ impl<'a, E: Env> PageTxn<'a, E> {
     }
 
     /// Deallocates some pages.
-    pub(crate) fn dealloc_pages(mut self, dealloc_addrs: &[u64]) -> Result<()> {
-        self.dealloc_pages_impl(dealloc_addrs)?;
+    ///
+    /// The `former_file_id` indicates that the corresponding file could be
+    /// deleted if the dealloc pages record is persistent.
+    pub(crate) fn dealloc_pages(
+        mut self,
+        former_file_id: Option<u32>,
+        dealloc_addrs: &[u64],
+    ) -> Result<()> {
+        let header = self.dealloc_pages_impl(dealloc_addrs)?;
+        if let Some(file_id) = former_file_id {
+            header.set_former_file_id(file_id);
+        }
         self.commit();
         Ok(())
     }
