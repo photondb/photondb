@@ -86,7 +86,7 @@ impl Deref for Table {
 pub type Guard<'a> = raw::Guard<'a, Std>;
 
 /// An iterator over pages in a table.
-pub type Pages<'a, 't> = raw::Pages<'a, 't, Std>;
+pub type Pages<'a, 't> = raw::NodesIter<'a, 't, Std>;
 
 fn poll<F: Future>(mut future: F) -> F::Output {
     let cx = &mut Context::from_waker(noop_waker_ref());

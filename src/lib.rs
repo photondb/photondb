@@ -44,7 +44,7 @@ mod error;
 pub use error::{Error, Result};
 
 mod tree;
-pub use tree::{Options as TableOptions, PageIter, ReadOptions, Stats, WriteOptions};
+pub use tree::{Options as TableOptions, NodeIterWithLsn, ReadOptions, Stats, WriteOptions};
 
 mod page_store;
 pub use page_store::Options as PageStoreOptions;
@@ -92,10 +92,10 @@ mod tests {
         }
 
         let guard = table.pin();
-        let mut pages = guard.pages();
+        let mut nodes = guard.nodes_iter();
         let mut i = 0u64;
-        while let Some(page) = pages.next().await.unwrap() {
-            for (k, v) in page {
+        while let Some(node) = nodes.next().await.unwrap() {
+            for (k, v) in node {
                 assert_eq!(k, &i.to_be_bytes());
                 assert_eq!(v, &i.to_be_bytes());
                 i += 1;

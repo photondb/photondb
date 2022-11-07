@@ -135,18 +135,18 @@ impl<'a, E: Env> Guard<'a, E> {
         Ok(self.txn.get(key).await?)
     }
 
-    /// Returns an iterator over pages in the table.
-    pub fn pages(&self) -> Pages<'_, 'a, E> {
-        Pages::new(&self.txn)
+    /// Returns an iterator over nodes in the table.
+    pub fn nodes_iter(&self) -> NodesIter<'_, 'a, E> {
+        NodesIter::new(&self.txn)
     }
 }
 
-/// An iterator over pages in a table.
-pub struct Pages<'a, 't: 'a, E: Env> {
+/// An iterator over nodes in a table.
+pub struct NodesIter<'a, 't: 'a, E: Env> {
     iter: TreeIter<'a, 't, E>,
 }
 
-impl<'a, 't: 'a, E: Env> Pages<'a, 't, E> {
+impl<'a, 't: 'a, E: Env> NodesIter<'a, 't, E> {
     fn new(txn: &'a TreeTxn<'t, E>) -> Self {
         Self {
             iter: TreeIter::new(txn, ReadOptions::default()),
@@ -154,7 +154,7 @@ impl<'a, 't: 'a, E: Env> Pages<'a, 't, E> {
     }
 
     /// Returns the next page in the table.
-    pub async fn next(&mut self) -> Result<Option<PageIter<'_>>> {
-        Ok(self.iter.next_page().await?)
+    pub async fn next(&mut self) -> Result<Option<NodeIterWithLsn<'_>>> {
+        Ok(self.iter.next_node().await?)
     }
 }

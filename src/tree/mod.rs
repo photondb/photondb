@@ -11,9 +11,9 @@ use log::trace;
 
 use crate::{env::Env, page::*, page_store::*};
 
-mod page;
-pub use page::PageIter;
-use page::*;
+mod node;
+pub use node::NodeIterWithLsn;
+use node::*;
 
 mod stats;
 use stats::AtomicStats;
@@ -76,15 +76,15 @@ impl fmt::Debug for Tree {
     }
 }
 
-impl<E: Env> RewritePage<E> for Arc<Tree> {
+impl<E: Env> RewritePageChain<E> for Arc<Tree> {
     type Rewrite<'a> = impl Future<Output = Result<(), Error>> + Send + 'a
         where
             Self: 'a;
 
-    fn rewrite<'a>(&'a self, id: u64, guard: Guard<'a, E>) -> Self::Rewrite<'a> {
+    fn rewrite<'a>(&'a self, node_id: u64, guard: Guard<'a, E>) -> Self::Rewrite<'a> {
         async move {
             let txn = self.begin(guard);
-            txn.rewrite_page(id).await
+            txn.rewrite_page_chain(node_id).await
         }
     }
 }
@@ -185,10 +185,10 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     /// Returns a view to the page.
-    async fn page_view<'g>(&'g self, id: u64, range: Option<Range<'g>>) -> Result<PageView<'g>> {
+    async fn node_view<'g>(&'g self, id: u64, range: Option<Range<'g>>) -> Result<NodeView<'g>> {
         let addr = self.guard.page_addr(id);
         let page = self.guard.read_page(addr).await?;
-        Ok(PageView {
+        Ok(NodeView {
             id,
             addr,
             page,
@@ -199,7 +199,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     /// Finds the leaf page that may contain the key.
     ///
     /// Returns the leaf page and its parent.
-    async fn find_leaf(&self, key: &[u8]) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
+    async fn find_leaf(&self, key: &[u8]) -> Result<(NodeView<'_>, Option<NodeView<'_>>)> {
         loop {
             match self.try_find_leaf(key).await {
                 Ok((view, parent)) => {
@@ -215,13 +215,13 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
     }
 
-    async fn try_find_leaf(&self, key: &[u8]) -> Result<(PageView<'_>, Option<PageView<'_>>)> {
+    async fn try_find_leaf(&self, key: &[u8]) -> Result<(NodeView<'_>, Option<NodeView<'_>>)> {
         // The index, range, and parent of the current page, starting from the root.
         let mut index = ROOT_INDEX;
         let mut range = ROOT_RANGE;
         let mut parent = None;
         loop {
-            let view = self.page_view(index.id, Some(range)).await?;
+            let view = self.node_view(index.id, Some(range)).await?;
             // If the page epoch has changed, the page may not contain the data we expect
             // anymore. Try to reconcile pending conflicts and restart the operation.
             if view.page.epoch() != index.epoch {
@@ -262,9 +262,9 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
     }
 
-    /// Creates an iterator over the key-value pairs in the page.
+    /// Creates an iterator over the key-value pairs in the node.
     #[allow(dead_code)]
-    async fn iter_page<'g, K, V>(&'g self, view: &PageView<'g>) -> Result<MergingPageIter<'g, K, V>>
+    async fn iter_node<'g, K, V>(&'g self, view: &NodeView<'g>) -> Result<NodeIter<'g, K, V>>
     where
         K: SortedPageKey,
         V: SortedPageValue,
@@ -292,14 +292,14 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             false
         })
         .await?;
-        Ok(MergingPageIter::new(builder.build(), range_limit))
+        Ok(NodeIter::new(builder.build(), range_limit))
     }
 
     /// Finds the value corresponding to the key from the page.
     async fn find_value<'g>(
         &'g self,
         key: &Key<'_>,
-        view: &PageView<'g>,
+        view: &NodeView<'g>,
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
         self.walk_page(view.page, |page| {
@@ -333,7 +333,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     async fn find_child<'g>(
         &'g self,
         key: &[u8],
-        view: &PageView<'g>,
+        view: &NodeView<'g>,
     ) -> Result<Option<(Index, Range<'g>)>> {
         let mut child = None;
         self.walk_page(view.page, |page| {
@@ -366,7 +366,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     // Splits the page into two halves.
-    async fn split_page(&self, view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
+    async fn split_page(&self, view: NodeView<'_>, parent: Option<NodeView<'_>>) -> Result<()> {
         match view.page.tier() {
             PageTier::Leaf => self.split_page_impl::<Key, Value>(view, parent).await,
             PageTier::Inner => self.split_page_impl::<&[u8], Index>(view, parent).await,
@@ -375,8 +375,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
     async fn split_page_impl<K, V>(
         &self,
-        mut view: PageView<'_>,
-        parent: Option<PageView<'_>>,
+        mut view: NodeView<'_>,
+        parent: Option<NodeView<'_>>,
     ) -> Result<()>
     where
         K: SortedPageKey,
@@ -428,7 +428,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     /// Reconciles any conflicts on the page.
-    async fn reconcile_page(&self, view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
+    async fn reconcile_page(&self, view: NodeView<'_>, parent: Option<NodeView<'_>>) -> Result<()> {
         let result = match view.page.kind() {
             PageKind::Data => Ok(()),
             PageKind::Split => {
@@ -458,8 +458,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     // Reconciles a pending split on the page.
     async fn reconcile_split_page(
         &self,
-        view: PageView<'_>,
-        mut parent: PageView<'_>,
+        view: NodeView<'_>,
+        mut parent: NodeView<'_>,
     ) -> Result<()> {
         let Some(range) = view.range else {
             return Err(Error::InvalidArgument);
@@ -498,13 +498,13 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
         // Try to consolidate the parent page if it is too long.
         if self.should_consolidate_page(parent.page) {
-            let _ = self.consolidate_page(parent).await;
+            let _ = self.consolidate_page_chain(parent).await;
         }
         Ok(())
     }
 
     // Reconciles a pending split on the root page.
-    async fn reconcile_split_root(&self, view: PageView<'_>) -> Result<()> {
+    async fn reconcile_split_root(&self, view: NodeView<'_>) -> Result<()> {
         assert_eq!(view.id, ROOT_ID);
         let mut txn = self.guard.begin();
         // Move the root to another place.
@@ -539,9 +539,9 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     /// Rewrites the page to reclaim its space.
-    async fn rewrite_page(&self, id: u64) -> Result<()> {
+    async fn rewrite_page_chain(&self, node_id: u64) -> Result<()> {
         loop {
-            match self.try_rewrite_page(id).await {
+            match self.try_rewrite_page_chain(node_id).await {
                 Ok(()) => return Ok(()),
                 Err(Error::Again) => continue,
                 Err(err) => return Err(err),
@@ -549,34 +549,34 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
     }
 
-    async fn try_rewrite_page(&self, id: u64) -> Result<()> {
-        let view = self.page_view(id, None).await?;
-        self.consolidate_page(view).await?;
+    async fn try_rewrite_page_chain(&self, node_id: u64) -> Result<()> {
+        let view = self.node_view(node_id, None).await?;
+        self.consolidate_page_chain(view).await?;
         Ok(())
     }
 
     /// Consolidates delta pages on the page chain.
-    async fn consolidate_page<'g>(&'g self, view: PageView<'g>) -> Result<PageView<'g>> {
+    async fn consolidate_page_chain<'g>(&'g self, view: NodeView<'g>) -> Result<NodeView<'g>> {
         match view.page.tier() {
             PageTier::Leaf => {
                 let safe_lsn = self.tree.safe_lsn();
-                self.consolidate_page_impl(view, |iter| MergingLeafPageIter::new(iter, safe_lsn))
+                self.consolidate_page_chain_impl(view, |iter| LeafNodeIter::new(iter, safe_lsn))
                     .await
             }
             PageTier::Inner => {
-                self.consolidate_page_impl(view, MergingInnerPageIter::new)
+                self.consolidate_page_chain_impl(view, InnerNodeIter::new)
                     .await
             }
         }
     }
 
-    async fn consolidate_page_impl<'g, F, I, K, V>(
+    async fn consolidate_page_chain_impl<'g, F, I, K, V>(
         &'g self,
-        mut view: PageView<'g>,
+        mut view: NodeView<'g>,
         f: F,
-    ) -> Result<PageView<'g>>
+    ) -> Result<NodeView<'g>>
     where
-        F: Fn(MergingPageIter<'g, K, V>) -> I,
+        F: Fn(NodeIter<'g, K, V>) -> I,
         I: RewindableIterator<Item = (K, V)>,
         K: SortedPageKey,
         V: SortedPageValue,
@@ -609,7 +609,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     /// Collects some information to consolidate a page.
     async fn collect_consolidation_info<'g, K, V>(
         &'g self,
-        view: &PageView<'g>,
+        view: &NodeView<'g>,
     ) -> Result<ConsolidationInfo<'g, K, V>>
     where
         K: SortedPageKey,
@@ -650,7 +650,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             false
         })
         .await?;
-        let iter = MergingPageIter::new(builder.build(), range_limit);
+        let iter = NodeIter::new(builder.build(), range_limit);
         Ok(ConsolidationInfo {
             iter,
             last_page,
@@ -661,10 +661,10 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     /// Consolidates and restructures a page.
     async fn consolidate_and_restructure_page<'g>(
         &'g self,
-        mut view: PageView<'g>,
-        parent: Option<PageView<'g>>,
+        mut view: NodeView<'g>,
+        parent: Option<NodeView<'g>>,
     ) -> Result<()> {
-        view = self.consolidate_page(view).await?;
+        view = self.consolidate_page_chain(view).await?;
         // Try to split the page if it is too large.
         if self.should_split_page(view.page) {
             let _ = self.split_page(view, parent).await;
@@ -697,7 +697,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 pub(crate) struct TreeIter<'a, 't: 'a, E: Env> {
     txn: &'a TreeTxn<'t, E>,
     options: ReadOptions,
-    inner_iter: Option<MergingInnerPageIter<'a>>,
+    inner_iter: Option<InnerNodeIter<'a>>,
     inner_next: Option<&'a [u8]>,
 }
 
@@ -711,14 +711,14 @@ impl<'a, 't: 'a, E: Env> TreeIter<'a, 't, E> {
         }
     }
 
-    async fn seek(&mut self, target: &[u8]) -> Result<PageIter<'_>> {
+    async fn seek(&mut self, target: &[u8]) -> Result<NodeIterWithLsn<'_>> {
         let (view, parent) = self.txn.find_leaf(target).await?;
-        let iter = self.txn.iter_page(&view).await?;
-        let mut leaf_iter = PageIter::new(iter, self.options.max_lsn);
+        let iter = self.txn.iter_node(&view).await?;
+        let mut leaf_iter = NodeIterWithLsn::new(iter, self.options.max_lsn);
         leaf_iter.seek(target);
         if let Some(parent) = parent {
-            let iter = self.txn.iter_page(&parent).await?;
-            let mut iter = MergingInnerPageIter::new(iter);
+            let iter = self.txn.iter_node(&parent).await?;
+            let mut iter = InnerNodeIter::new(iter);
             if iter.seek(target) {
                 iter.next();
             }
@@ -731,16 +731,16 @@ impl<'a, 't: 'a, E: Env> TreeIter<'a, 't, E> {
         Ok(leaf_iter)
     }
 
-    pub(crate) async fn next_page(&mut self) -> Result<Option<PageIter<'_>>> {
+    pub(crate) async fn next_node(&mut self) -> Result<Option<NodeIterWithLsn<'_>>> {
         let Some(inner_iter) = self.inner_iter.as_mut() else {
             return Ok(None);
         };
         let mut inner_next = self.inner_next;
         if let Some((start, index)) = inner_iter.next() {
-            let view = self.txn.page_view(index.id, None).await?;
+            let view = self.txn.node_view(index.id, None).await?;
             if view.page.epoch() == index.epoch {
-                let iter = self.txn.iter_page(&view).await?;
-                return Ok(Some(PageIter::new(iter, self.options.max_lsn)));
+                let iter = self.txn.iter_node(&view).await?;
+                return Ok(Some(NodeIterWithLsn::new(iter, self.options.max_lsn)));
             } else {
                 // The page epoch has changed, we need to restart from this.
                 inner_next = Some(start);
@@ -761,7 +761,7 @@ where
     K: SortedPageKey,
     V: SortedPageValue,
 {
-    iter: MergingPageIter<'a, K, V>,
+    iter: NodeIter<'a, K, V>,
     last_page: PageRef<'a>,
     page_addrs: Vec<u64>,
 }

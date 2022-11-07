@@ -13,19 +13,19 @@ use crate::{
 };
 
 /// Rewrites pages to reclaim disk space.
-pub(crate) trait RewritePage<E: Env>: Send + Sync + 'static {
+pub(crate) trait RewritePageChain<E: Env>: Send + Sync + 'static {
     type Rewrite<'a>: Future<Output = Result<()>> + Send + 'a
     where
         Self: 'a;
 
     /// Rewrites the corresponding page to reclaim the space it occupied.
-    fn rewrite<'a>(&'a self, page_id: u64, guard: Guard<'a, E>) -> Self::Rewrite<'a>;
+    fn rewrite<'a>(&'a self, node_id: u64, guard: Guard<'a, E>) -> Self::Rewrite<'a>;
 }
 
 pub(crate) struct GcCtx<E, R>
 where
     E: Env,
-    R: RewritePage<E>,
+    R: RewritePageChain<E>,
 {
     shutdown: Shutdown,
 
@@ -41,7 +41,7 @@ where
 impl<E, R> GcCtx<E, R>
 where
     E: Env,
-    R: RewritePage<E>,
+    R: RewritePageChain<E>,
 {
     pub(crate) fn new(
         shutdown: Shutdown,

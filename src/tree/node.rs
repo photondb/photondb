@@ -6,24 +6,24 @@ pub(super) const ROOT_RANGE: Range = Range::full();
 pub(super) const ROOT_INDEX: Index = Index::new(MIN_ID, 0);
 pub(super) const NULL_INDEX: Index = Index::new(NAN_ID, 0);
 
-/// Related information of a page.
+/// Related information of a node.
 #[derive(Clone, Debug)]
-pub(super) struct PageView<'a> {
+pub(super) struct NodeView<'a> {
     pub(super) id: u64,
     pub(super) addr: u64,
     pub(super) page: PageRef<'a>,
     pub(super) range: Option<Range<'a>>,
 }
 
-/// An iterator over user entries in a page.
-pub struct PageIter<'a> {
-    iter: MergingPageIter<'a, Key<'a>, Value<'a>>,
+/// A LSN aware iterator over user entries in a node.
+pub struct NodeIterWithLsn<'a> {
+    iter: NodeIter<'a, Key<'a>, Value<'a>>,
     read_lsn: u64,
     last_raw: Option<&'a [u8]>,
 }
 
-impl<'a> PageIter<'a> {
-    pub(super) fn new(iter: MergingPageIter<'a, Key<'a>, Value<'a>>, read_lsn: u64) -> Self {
+impl<'a> NodeIterWithLsn<'a> {
+    pub(super) fn new(iter: NodeIter<'a, Key<'a>, Value<'a>>, read_lsn: u64) -> Self {
         Self {
             iter,
             read_lsn,
@@ -38,7 +38,7 @@ impl<'a> PageIter<'a> {
     }
 }
 
-impl<'a> Iterator for PageIter<'a> {
+impl<'a> Iterator for NodeIterWithLsn<'a> {
     type Item = (&'a [u8], &'a [u8]);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -60,7 +60,7 @@ impl<'a> Iterator for PageIter<'a> {
     }
 }
 
-pub(super) struct MergingPageIter<'a, K, V>
+pub(super) struct NodeIter<'a, K, V>
 where
     K: SortedPageKey,
     V: SortedPageValue,
@@ -69,7 +69,7 @@ where
     range_limit: Option<&'a [u8]>,
 }
 
-impl<'a, K, V> MergingPageIter<'a, K, V>
+impl<'a, K, V> NodeIter<'a, K, V>
 where
     K: SortedPageKey,
     V: SortedPageValue,
@@ -82,7 +82,7 @@ where
     }
 }
 
-impl<'a, K, V> Iterator for MergingPageIter<'a, K, V>
+impl<'a, K, V> Iterator for NodeIter<'a, K, V>
 where
     K: SortedPageKey,
     V: SortedPageValue,
@@ -102,7 +102,7 @@ where
     }
 }
 
-impl<'a, K, V> RewindableIterator for MergingPageIter<'a, K, V>
+impl<'a, K, V> RewindableIterator for NodeIter<'a, K, V>
 where
     K: SortedPageKey,
     V: SortedPageValue,
@@ -112,7 +112,7 @@ where
     }
 }
 
-impl<'a, V> SeekableIterator<Key<'_>> for MergingPageIter<'a, Key<'a>, V>
+impl<'a, V> SeekableIterator<Key<'_>> for NodeIter<'a, Key<'a>, V>
 where
     V: SortedPageValue,
 {
@@ -121,7 +121,7 @@ where
     }
 }
 
-impl<'a, V> SeekableIterator<[u8]> for MergingPageIter<'a, &'a [u8], V>
+impl<'a, V> SeekableIterator<[u8]> for NodeIter<'a, &'a [u8], V>
 where
     V: SortedPageValue,
 {
@@ -130,16 +130,17 @@ where
     }
 }
 
-/// An iterator that merges multiple leaf delta pages for consolidation.
-pub(super) struct MergingLeafPageIter<'a> {
-    iter: MergingPageIter<'a, Key<'a>, Value<'a>>,
+/// A leaf node iterator.
+/// It merges multiple leaf delta pages for consolidation.
+pub(super) struct LeafNodeIter<'a> {
+    iter: NodeIter<'a, Key<'a>, Value<'a>>,
     safe_lsn: u64,
     last_raw: Option<&'a [u8]>,
     skip_same_raw: bool,
 }
 
-impl<'a> MergingLeafPageIter<'a> {
-    pub(super) fn new(iter: MergingPageIter<'a, Key<'a>, Value<'a>>, safe_lsn: u64) -> Self {
+impl<'a> LeafNodeIter<'a> {
+    pub(super) fn new(iter: NodeIter<'a, Key<'a>, Value<'a>>, safe_lsn: u64) -> Self {
         Self {
             iter,
             safe_lsn,
@@ -149,7 +150,7 @@ impl<'a> MergingLeafPageIter<'a> {
     }
 }
 
-impl<'a> Iterator for MergingLeafPageIter<'a> {
+impl<'a> Iterator for LeafNodeIter<'a> {
     type Item = (Key<'a>, Value<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -188,13 +189,13 @@ impl<'a> Iterator for MergingLeafPageIter<'a> {
     }
 }
 
-impl<'a> RewindableIterator for MergingLeafPageIter<'a> {
+impl<'a> RewindableIterator for LeafNodeIter<'a> {
     fn rewind(&mut self) {
         self.iter.rewind();
     }
 }
 
-impl<'a> SeekableIterator<Key<'_>> for MergingLeafPageIter<'a> {
+impl<'a> SeekableIterator<Key<'_>> for LeafNodeIter<'a> {
     fn seek(&mut self, target: &Key<'_>) -> bool {
         self.last_raw = None;
         self.skip_same_raw = false;
@@ -202,14 +203,15 @@ impl<'a> SeekableIterator<Key<'_>> for MergingLeafPageIter<'a> {
     }
 }
 
-/// An iterator that merges multiple inner delta pages for consolidation.
-pub(super) struct MergingInnerPageIter<'a> {
-    iter: MergingPageIter<'a, &'a [u8], Index>,
+/// An inner node iterator.
+/// It merges multiple inner delta pages for consolidation.
+pub(super) struct InnerNodeIter<'a> {
+    iter: NodeIter<'a, &'a [u8], Index>,
     last_raw: Option<&'a [u8]>,
 }
 
-impl<'a> MergingInnerPageIter<'a> {
-    pub(super) fn new(iter: MergingPageIter<'a, &'a [u8], Index>) -> Self {
+impl<'a> InnerNodeIter<'a> {
+    pub(super) fn new(iter: NodeIter<'a, &'a [u8], Index>) -> Self {
         Self {
             iter,
             last_raw: None,
@@ -217,7 +219,7 @@ impl<'a> MergingInnerPageIter<'a> {
     }
 }
 
-impl<'a> Iterator for MergingInnerPageIter<'a> {
+impl<'a> Iterator for InnerNodeIter<'a> {
     type Item = (&'a [u8], Index);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -239,13 +241,13 @@ impl<'a> Iterator for MergingInnerPageIter<'a> {
     }
 }
 
-impl<'a> RewindableIterator for MergingInnerPageIter<'a> {
+impl<'a> RewindableIterator for InnerNodeIter<'a> {
     fn rewind(&mut self) {
         self.iter.rewind();
     }
 }
 
-impl<'a> SeekableIterator<[u8]> for MergingInnerPageIter<'a> {
+impl<'a> SeekableIterator<[u8]> for InnerNodeIter<'a> {
     fn seek(&mut self, target: &[u8]) -> bool {
         self.last_raw = None;
         self.iter.seek(target)
@@ -260,7 +262,7 @@ mod tests {
     fn build_merging_iter<'a, K, V, const N: usize>(
         iters: [SortedPageIter<'a, K, V>; N],
         range_limit: Option<&'a [u8]>,
-    ) -> MergingPageIter<'a, K, V>
+    ) -> NodeIter<'a, K, V>
     where
         K: SortedPageKey,
         V: SortedPageValue,
@@ -270,7 +272,7 @@ mod tests {
             builder.add(iter);
         }
         let iter = builder.build();
-        MergingPageIter::new(iter, range_limit)
+        NodeIter::new(iter, range_limit)
     }
 
     fn as_slice(data: &[([u8; 1], [u8; 1])]) -> Vec<(&[u8], &[u8])> {
@@ -301,7 +303,7 @@ mod tests {
         ];
         for (lsn, expect) in lsn_expect {
             let merging_iter = build_merging_iter([owned_page.as_iter()], None);
-            let mut iter = PageIter::new(merging_iter, lsn);
+            let mut iter = NodeIterWithLsn::new(merging_iter, lsn);
             for (a, b) in (&mut iter).zip(expect) {
                 assert_eq!(a, b);
             }
@@ -309,7 +311,7 @@ mod tests {
 
         {
             let merging_iter = build_merging_iter([owned_page.as_iter()], None);
-            let mut iter = PageIter::new(merging_iter, 1);
+            let mut iter = NodeIterWithLsn::new(merging_iter, 1);
             iter.seek(&[]);
             assert_eq!(iter.next(), Some(([1].as_slice(), [1].as_slice())));
             iter.seek(&[1]);
@@ -365,7 +367,7 @@ mod tests {
         ];
         for (lsn, expect) in lsn_expect {
             let merging_iter = build_merging_iter([owned_page.as_iter()], None);
-            let mut iter = MergingLeafPageIter::new(merging_iter, lsn);
+            let mut iter = LeafNodeIter::new(merging_iter, lsn);
             for (a, b) in (&mut iter).zip(expect) {
                 assert_eq!(a, b);
             }
@@ -373,7 +375,7 @@ mod tests {
 
         {
             let merging_iter = build_merging_iter([owned_page.as_iter()], None);
-            let mut iter = MergingLeafPageIter::new(merging_iter, 2);
+            let mut iter = LeafNodeIter::new(merging_iter, 2);
             iter.seek(&Key::new(&[], 2));
             assert_eq!(iter.next(), Some(data[0]));
             iter.seek(&Key::new(&[1], 2));
@@ -404,7 +406,7 @@ mod tests {
         {
             let merging_iter =
                 build_merging_iter([owned_page1.as_iter(), owned_page2.as_iter()], None);
-            let mut iter = MergingInnerPageIter::new(merging_iter);
+            let mut iter = InnerNodeIter::new(merging_iter);
             for _ in 0..2 {
                 assert_eq!(iter.next(), Some(data1[0]));
                 assert_eq!(iter.next(), Some(data1[1]));
@@ -417,7 +419,7 @@ mod tests {
         {
             let merging_iter =
                 build_merging_iter([owned_page1.as_iter(), owned_page2.as_iter()], None);
-            let mut iter = MergingInnerPageIter::new(merging_iter);
+            let mut iter = InnerNodeIter::new(merging_iter);
             iter.seek([0].as_slice());
             assert_eq!(iter.next(), Some(([1].as_slice(), Index::new(1, 1))));
             iter.seek([1].as_slice());

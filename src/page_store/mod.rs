@@ -20,7 +20,7 @@ mod version;
 use version::{Version, VersionOwner};
 
 mod jobs;
-pub(crate) use jobs::RewritePage;
+pub(crate) use jobs::RewritePageChain;
 use jobs::{cleanup::CleanupCtx, flush::FlushCtx, gc::GcCtx};
 
 mod write_buffer;
@@ -74,7 +74,7 @@ impl<E: Env> PageStore<E> {
     pub(crate) async fn open<P, R>(env: E, path: P, options: Options, rewriter: R) -> Result<Self>
     where
         P: AsRef<Path>,
-        R: RewritePage<E>,
+        R: RewritePageChain<E>,
     {
         let (next_file_id, manifest, table, page_files, file_infos) =
             Self::recover(env.to_owned(), path).await?;
@@ -147,7 +147,7 @@ impl<E: Env> PageStore<E> {
 
     fn spawn_gc_job<R>(&mut self, rewriter: R)
     where
-        R: RewritePage<E>,
+        R: RewritePageChain<E>,
     {
         let strategy_builder = Box::new(MinDeclineRateStrategyBuilder::new(1 << 30, usize::MAX));
         let job = GcCtx::new(

@@ -52,4 +52,4 @@ impl Deref for Table {
 pub type Guard<'a> = raw::Guard<'a, Photon>;
 
 /// An iterator over pages in a table.
-pub type Pages<'a, 't> = raw::Pages<'a, 't, Photon>;
+pub type Pages<'a, 't> = raw::NodesIter<'a, 't, Photon>;
