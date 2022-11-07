@@ -8,7 +8,10 @@ use crate::{
     Result,
 };
 
-/// A latch-free, log-structured table with sorted key-value entries.
+/// A reference to a latch-free, log-structured table that stores sorted
+/// key-value entries.
+///
+/// The reference is thread-safe and cheap to clone.
 #[derive(Clone, Debug)]
 pub struct Table<E: Env> {
     tree: Arc<Tree>,
@@ -104,20 +107,23 @@ impl<E: Env> Table<E> {
     }
 }
 
-/// A handle that holds some resources of a table to protect user operations.
+/// A handle that holds some resources of a table for user operations.
 pub struct Guard<'a, E: Env> {
-    t: &'a Table<E>,
+    table: &'a Table<E>,
     txn: TreeTxn<'a, E>,
 }
 
 impl<'a, E: Env> Guard<'a, E> {
-    fn new(t: &'a Table<E>) -> Self {
-        Self { t, txn: t.begin() }
+    fn new(table: &'a Table<E>) -> Self {
+        Self {
+            table,
+            txn: table.begin(),
+        }
     }
 
     /// Re-pins the table so that the current pinned resources can be released.
     pub fn repin(&mut self) {
-        self.txn = self.t.begin();
+        self.txn = self.table.begin();
     }
 
     /// Gets the value corresponding to the key.
