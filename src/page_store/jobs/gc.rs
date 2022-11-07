@@ -104,7 +104,8 @@ where
 
         self.rewrite_active_pages(file, version, &page_table)
             .await?;
-        self.rewrite_dealloc_pages(version, &dealloc_pages).await?;
+        self.rewrite_dealloc_pages(file_id, version, &dealloc_pages)
+            .await?;
 
         Ok(())
     }
@@ -133,33 +134,46 @@ where
 
     async fn rewrite_dealloc_pages(
         &self,
+        file_id: u32,
         version: &Arc<Version>,
         dealloc_pages: &[u64],
     ) -> Result<()> {
         let active_files = version.files();
+        let mut total_rewrite_pages = 0;
         let mut cached_pages = Vec::with_capacity(128);
         for page_addr in dealloc_pages {
             let file_id = (page_addr >> 32) as u32;
             if !active_files.contains_key(&file_id) {
                 continue;
             }
-            cached_pages.push(*page_addr);
+
             if cached_pages.len() == 128 {
-                self.rewrite_dealloc_pages_chunk(version, &cached_pages)?;
+                self.rewrite_dealloc_pages_chunk(None, version, &cached_pages)?;
                 cached_pages.clear();
             }
+            cached_pages.push(*page_addr);
+            total_rewrite_pages += 1;
         }
-        if !cached_pages.is_empty() {
-            self.rewrite_dealloc_pages_chunk(version, &cached_pages)?;
+
+        // Ensure the `file_id` is recorded in write buffer.
+        if total_rewrite_pages != 0 {
+            assert!(!cached_pages.is_empty());
+            self.rewrite_dealloc_pages_chunk(Some(file_id), version, &cached_pages)?;
         }
+
         Ok(())
     }
 
-    fn rewrite_dealloc_pages_chunk(&self, version: &Arc<Version>, pages: &[u64]) -> Result<()> {
+    fn rewrite_dealloc_pages_chunk(
+        &self,
+        file_id: Option<u32>,
+        version: &Arc<Version>,
+        pages: &[u64],
+    ) -> Result<()> {
         loop {
             let guard = Guard::new(version.clone(), &self.page_table, &self.page_files);
             let txn = guard.begin();
-            match txn.dealloc_pages(pages) {
+            match txn.dealloc_pages(file_id, pages) {
                 Ok(()) => return Ok(()),
                 Err(Error::Again) => continue,
                 Err(err) => return Err(err),

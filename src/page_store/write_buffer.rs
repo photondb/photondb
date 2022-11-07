@@ -40,7 +40,13 @@ struct BufferState {
 
 #[repr(C)]
 pub(crate) struct RecordHeader {
-    page_id: u64,
+    /// A field used for relation recording.
+    ///
+    /// For dealloc pages, it records the file id which the former dealloc pages
+    /// record from (used by space reclamation).
+    ///
+    /// For normal pages, it records the page id which the page belongs to.
+    data: u64,
     flags: u32,
     page_size: u32,
 }
@@ -440,7 +446,7 @@ impl WriteBuffer {
         // Safety: here is the only one reference to the record.
         let header = unsafe { self.record_uninit_mut(offset) };
         header.write(RecordHeader {
-            page_id,
+            data: page_id,
             flags: RecordFlags::NORMAL_PAGE.bits(),
             page_size,
         });
@@ -475,7 +481,7 @@ impl WriteBuffer {
         // Safety: here is the only one reference to the record.
         let header = unsafe { self.record_uninit_mut(offset) };
         header.write(RecordHeader {
-            page_id: 0,
+            data: 0,
             flags: RecordFlags::DELETED_PAGES.bits(),
             page_size,
         });
@@ -624,7 +630,14 @@ impl RecordHeader {
 
     #[inline]
     pub(crate) fn page_id(&self) -> u64 {
-        self.page_id
+        debug_assert_eq!(self.flags, RecordFlags::NORMAL_PAGE.bits());
+        self.data
+    }
+
+    #[inline]
+    pub(crate) fn former_file_id(&self) -> u32 {
+        debug_assert_eq!(self.flags, RecordFlags::DELETED_PAGES.bits());
+        self.data as u32
     }
 
     #[inline]
@@ -634,7 +647,14 @@ impl RecordHeader {
 
     #[inline]
     pub(crate) fn set_page_id(&mut self, page_id: u64) {
-        self.page_id = page_id;
+        debug_assert_eq!(self.flags, RecordFlags::NORMAL_PAGE.bits());
+        self.data = page_id;
+    }
+
+    #[inline]
+    pub(crate) fn set_former_file_id(&mut self, file_id: u32) {
+        debug_assert_eq!(self.flags, RecordFlags::DELETED_PAGES.bits());
+        self.data = file_id as u64;
     }
 
     fn record_ref<'a>(&self) -> Option<RecordRef<'a>> {
@@ -797,7 +817,7 @@ mod tests {
         } in tests
         {
             let header = RecordHeader {
-                page_id: 0,
+                data: 0,
                 flags: RecordFlags::NORMAL_PAGE.bits(),
                 page_size,
             };
@@ -942,5 +962,16 @@ mod tests {
             unsafe { buf.alloc_page(1, 2 << 10, true) },
             Err(Error::Again)
         ));
+    }
+
+    #[test]
+    fn write_buffer_dealloc_pages_with_former_file_id() {
+        let buf = WriteBuffer::with_capacity(1, 1 << 10);
+        let header = unsafe { buf.dealloc_pages(&[1, 2], false) }.unwrap();
+        header.set_former_file_id(123123);
+        buf.seal().unwrap();
+        for (_, header, _) in buf.iter() {
+            assert_eq!(header.former_file_id(), 123123);
+        }
     }
 }
