@@ -33,9 +33,6 @@
     pointer_is_aligned
 )]
 
-mod error;
-pub use error::{Error, Result};
-
 pub mod env;
 pub mod raw;
 pub mod std;
@@ -43,8 +40,11 @@ pub mod std;
 pub mod photon;
 pub use photon::Table;
 
+mod error;
+pub use error::{Error, Result};
+
 mod tree;
-pub use tree::{Options, ReadOptions, Stats, WriteOptions};
+pub use tree::{Options as TableOptions, PageIter, ReadOptions, Stats, WriteOptions};
 
 mod page_store;
 pub use page_store::Options as PageStoreOptions;
@@ -59,6 +59,14 @@ mod tests {
 
     use super::*;
 
+    const OPTIONS: TableOptions = TableOptions {
+        page_size: 64,
+        page_chain_length: 2,
+        page_store: PageStoreOptions {
+            write_buffer_capacity: 1 << 20,
+        },
+    };
+
     async fn must_put(table: &Table, i: u64, lsn: u64) {
         let buf = i.to_be_bytes();
         table.put(&buf, lsn, &buf).await.unwrap()
@@ -66,24 +74,9 @@ mod tests {
 
     async fn must_get(table: &Table, i: u64, lsn: u64, expect: Option<u64>) {
         let buf = i.to_be_bytes();
-        table
-            .get(&buf, lsn, |v| match expect {
-                Some(expect) => {
-                    assert_eq!(v, Some(expect.to_be_bytes().as_slice()));
-                }
-                None => assert!(v.is_none()),
-            })
-            .await
-            .unwrap();
+        let value = table.get(&buf, lsn).await.unwrap();
+        assert_eq!(value, expect.map(|v| v.to_be_bytes().to_vec()));
     }
-
-    const OPTIONS: Options = Options {
-        page_size: 64,
-        page_chain_length: 2,
-        page_store: PageStoreOptions {
-            write_buffer_capacity: 1 << 20,
-        },
-    };
 
     #[photonio::test]
     async fn crud() {
@@ -99,7 +92,7 @@ mod tests {
         }
 
         let guard = table.pin();
-        let mut pages = guard.pages(ReadOptions::default());
+        let mut pages = guard.pages();
         let mut i = 0u64;
         while let Some(page) = pages.next().await.unwrap() {
             for (k, v) in page {

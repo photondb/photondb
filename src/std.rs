@@ -19,7 +19,7 @@ use std::{
 
 use futures::task::noop_waker_ref;
 
-use crate::{env::Std, raw, Options, Result};
+use crate::{env::Std, raw, Result, TableOptions};
 
 /// A persistent key-value store that manages multiple tables.
 ///
@@ -39,7 +39,7 @@ impl Table {
     ///
     /// This is a synchronous version of [`raw::Table::open`] with the [`Std`]
     /// environment.
-    pub fn open<P: AsRef<Path>>(path: P, options: Options) -> Result<Self> {
+    pub fn open<P: AsRef<Path>>(path: P, options: TableOptions) -> Result<Self> {
         let table = poll(raw::Table::open(Std, path, options))?;
         Ok(Self(table))
     }
@@ -51,14 +51,11 @@ impl Table {
         poll(self.0.close()).map_err(Self)
     }
 
-    /// Gets the value corresponding to the key and applies a function to it.
+    /// Gets the value corresponding to the key.
     ///
     /// This is a synchronous version of [`raw::Table::get`].
-    pub fn get<F, R>(&self, key: &[u8], lsn: u64, f: F) -> Result<R>
-    where
-        F: FnOnce(Option<&[u8]>) -> R,
-    {
-        poll(self.0.get(key, lsn, f))
+    pub fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>> {
+        poll(self.0.get(key, lsn))
     }
 
     /// Puts a key-value entry to the table.
@@ -83,6 +80,12 @@ impl Deref for Table {
         &self.0
     }
 }
+
+/// A handle that holds some resources of a table to protect user operations.
+pub type Guard<'a> = raw::Guard<'a, Std>;
+
+/// An iterator over pages in a table.
+pub type Pages<'a, 't> = raw::Pages<'a, 't, Std>;
 
 fn poll<F: Future>(mut future: F) -> F::Output {
     let cx = &mut Context::from_waker(noop_waker_ref());

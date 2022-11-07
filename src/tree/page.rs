@@ -15,6 +15,50 @@ pub(super) struct PageView<'a> {
     pub(super) range: Option<Range<'a>>,
 }
 
+/// An iterator over user entries in a page.
+pub struct PageIter<'a> {
+    iter: MergingPageIter<'a, Key<'a>, Value<'a>>,
+    read_lsn: u64,
+    last_raw: Option<&'a [u8]>,
+}
+
+impl<'a> PageIter<'a> {
+    pub(super) fn new(iter: MergingPageIter<'a, Key<'a>, Value<'a>>, read_lsn: u64) -> Self {
+        Self {
+            iter,
+            read_lsn,
+            last_raw: None,
+        }
+    }
+
+    /// Positions the iterator at the first item that is at or after `target`.
+    pub fn seek(&mut self, target: &[u8]) {
+        self.iter.seek(&Key::new(target, self.read_lsn));
+    }
+}
+
+impl<'a> Iterator for PageIter<'a> {
+    type Item = (&'a [u8], &'a [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for (k, v) in &mut self.iter {
+            if k.lsn > self.read_lsn {
+                continue;
+            }
+            if let Some(last) = self.last_raw {
+                if k.raw == last {
+                    continue;
+                }
+            }
+            self.last_raw = Some(k.raw);
+            if let Value::Put(value) = v {
+                return Some((k.raw, value));
+            }
+        }
+        None
+    }
+}
+
 pub(super) struct MergingPageIter<'a, K, V>
 where
     K: SortedPageKey,

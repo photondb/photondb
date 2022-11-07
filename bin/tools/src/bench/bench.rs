@@ -1,8 +1,7 @@
-use std::{path::Path, sync::Arc};
-
 use photondb::{
     env::{Env, Photon},
     raw::Table,
+    TableOptions,
 };
 
 use super::*;
@@ -38,7 +37,7 @@ struct PhotonBench<E: Env> {
 
 impl<E: Env> PhotonBench<E> {
     async fn prepare(config: Args, env: E) -> Self {
-        let options = photondb::Options::default();
+        let options = TableOptions::default();
         let path = config
             .path
             .as_ref()
