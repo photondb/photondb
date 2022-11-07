@@ -37,7 +37,7 @@ pub(crate) struct Version {
     files: HashMap<u32, FileInfo>,
 
     /// Records the ID of the file that can be deleted.
-    obsolated_files: HashSet<u32>,
+    obsoleted_files: HashSet<u32>,
 
     next_version: AtomicPtr<Arc<Version>>,
     new_version_notify: Notify,
@@ -48,7 +48,7 @@ pub(crate) struct Version {
 
 pub(crate) struct DeltaVersion {
     pub(crate) files: HashMap<u32, FileInfo>,
-    pub(crate) obsolated_files: HashSet<u32>,
+    pub(crate) obsoleted_files: HashSet<u32>,
 }
 
 pub(crate) struct BufferSet {
@@ -124,7 +124,7 @@ impl VersionOwner {
             buffers_range,
             write_buffers,
             files: delta.files,
-            obsolated_files: delta.obsolated_files,
+            obsoleted_files: delta.obsoleted_files,
             buffer_set: current.buffer_set.clone(),
 
             next_version: AtomicPtr::default(),
@@ -195,7 +195,7 @@ impl Version {
         write_buffer_capacity: u32,
         next_file_id: u32,
         files: HashMap<u32, FileInfo>,
-        obsolated_files: HashSet<u32>,
+        obsoleted_files: HashSet<u32>,
     ) -> Self {
         let buffer_set = Arc::new(BufferSet::new(next_file_id, write_buffer_capacity));
         let (buffers_range, write_buffers) = {
@@ -209,7 +209,7 @@ impl Version {
             buffers_range,
             write_buffers,
             files,
-            obsolated_files,
+            obsoleted_files,
             buffer_set,
 
             next_version: AtomicPtr::default(),
@@ -240,10 +240,10 @@ impl Version {
         handle.await.unwrap_or_default();
     }
 
-    /// Fetch the files which obsolated but referenced by former [`Version`]s.
+    /// Fetch the files which obsoleted but referenced by former [`Version`]s.
     #[inline]
-    pub(crate) fn obsolated_files(&self) -> Vec<u32> {
-        self.obsolated_files.iter().cloned().collect()
+    pub(crate) fn obsoleted_files(&self) -> Vec<u32> {
+        self.obsoleted_files.iter().cloned().collect()
     }
 
     #[inline]
