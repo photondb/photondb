@@ -28,7 +28,8 @@ use crate::{env::Std, raw, Result, TableOptions};
 #[derive(Clone, Debug)]
 pub struct Store(raw::Store<Std>);
 
-/// A latch-free, log-structured table with sorted key-value entries.
+/// A reference to a latch-free, log-structured table that stores sorted
+/// key-value entries.
 ///
 /// This is the same as [`raw::Table`] with the [`Std`] environment.
 #[derive(Clone, Debug)]
@@ -81,7 +82,7 @@ impl Deref for Table {
     }
 }
 
-/// A handle that holds some resources of a table to protect user operations.
+/// A handle that holds some resources of a table for user operations.
 pub type Guard<'a> = raw::Guard<'a, Std>;
 
 /// An iterator over pages in a table.
