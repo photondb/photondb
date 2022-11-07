@@ -23,7 +23,7 @@ pub(crate) mod constant {
 }
 
 pub(crate) mod facade {
-    use std::{path::PathBuf, sync::Arc};
+    use std::{io::ErrorKind, path::PathBuf, sync::Arc};
 
     use super::{
         constant::{DEFAULT_BLOCK_SIZE, MAX_OPEN_READER_FD_NUM},
@@ -146,10 +146,11 @@ pub(crate) mod facade {
 
         async fn remove_file(&self, file_id: u32) -> Result<()> {
             let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
-            self.env
-                .remove_file(&path)
-                .await
-                .expect("remove file failed");
+            match self.env.remove_file(&path).await {
+                Ok(_) => {}
+                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                err @ Err(_) => err.expect("remove file fail"),
+            };
             Ok(())
         }
     }

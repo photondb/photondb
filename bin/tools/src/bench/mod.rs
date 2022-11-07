@@ -5,7 +5,7 @@ use clap::{Parser, ValueEnum};
 mod error;
 pub(crate) use error::Result;
 
-mod bench;
+mod benchmark;
 
 #[derive(Parser, Debug, Clone)]
 #[clap(about = "Start bench testing")]
@@ -18,6 +18,14 @@ pub(crate) struct Args {
     /// Size of each key.
     #[arg(short, long, default_value_t = 16)]
     key_size: u64,
+
+    // Controls the key num for per prefix, 0 mean no prefix.
+    #[arg(long, default_value_t = 0)]
+    keys_per_prefix: u64,
+
+    // Prefix size of the key, it works with `keys_per_prefix`.
+    #[arg(long, default_value_t = 0)]
+    key_prefix_size: u64,
 
     /// Size of each value in fixed distribution // TODO: support unfixed size
     /// value.
@@ -111,6 +119,6 @@ impl fmt::Display for StoreType {
 }
 
 pub(crate) async fn run(config: Args) -> Result<()> {
-    let mut bench = bench::Benchmark::new(config);
+    let mut bench = benchmark::Benchmark::new(config);
     bench.run().await
 }

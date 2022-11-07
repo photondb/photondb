@@ -15,7 +15,7 @@ use photondb::{
     raw::Table,
     TableOptions,
 };
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{rngs::SmallRng, RngCore, SeedableRng};
 
 use super::*;
 use crate::bench::Result;
@@ -72,6 +72,10 @@ impl PhotonBench {
     }
 
     fn process_config(mut config: Args) -> Arc<Args> {
+        assert!(
+            config.key_size >= config.key_prefix_size,
+            "prefix_size should not longer than key_size"
+        );
         if config.seed_base == 0 {
             config.seed_base = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -159,6 +163,9 @@ impl PhotonBench {
                     BenchmarkType::FillRandom => {
                         Self::do_write(&mut task_ctx, WriteMode::Random).await
                     }
+                    BenchmarkType::Fillseq => {
+                        Self::do_write(&mut task_ctx, WriteMode::Sequence).await
+                    }
                     _ => unimplemented!(),
                 }
                 task_ctx.stats.as_ref().borrow_mut().stop();
@@ -191,17 +198,17 @@ impl PhotonBench {
 }
 
 impl PhotonBench {
-    async fn do_write(ctx: &mut TaskCtx, _mode: WriteMode) {
+    async fn do_write(ctx: &mut TaskCtx, mode: WriteMode) {
         let table = ctx.table.clone();
         let cfg = ctx.config.to_owned();
         let op_cnt = if cfg.writes > 0 { cfg.writes } else { cfg.num };
-        let mut rng = SmallRng::seed_from_u64(ctx.seed);
+        let mut key_gen = KeyGenerator::new(mode, ctx.config.key_size, ctx.config.num, ctx.seed);
         let mut lsn = 0;
         for _ in 0..op_cnt {
             let mut key = vec![0u8; ctx.config.key_size as usize];
             let mut value = vec![0u8; ctx.config.value_size as usize];
-            Self::fill_rang(&mut rng, &mut key);
-            Self::fill_rang(&mut rng, &mut value);
+            key_gen.fill_rang(&mut key);
+            key_gen.fill_rang(&mut value);
             lsn += 1;
             table.put(&key, lsn, &value).await.unwrap();
 
@@ -212,14 +219,11 @@ impl PhotonBench {
                 .finish_operation(OpType::Write, 1, 0, bytes as u64);
         }
     }
-
-    fn fill_rang(rng: &mut SmallRng, buf: &mut [u8]) {
-        rng.fill(buf);
-    }
 }
 
 enum WriteMode {
     Random,
+    Sequence,
 }
 
 #[derive(Clone)]
@@ -235,6 +239,71 @@ pub struct TaskCtx {
 unsafe impl Sync for TaskCtx {}
 
 unsafe impl Send for TaskCtx {}
+
+pub struct KeyGenerator {
+    key_per_prefix: u64,
+    prefix_size: u64,
+    key_size: u64,
+    key_nums: u64,
+    state: Option<KeyGeneratorState>,
+}
+
+pub enum KeyGeneratorState {
+    Random { rng: SmallRng },
+    Sequence { last: u64 },
+}
+
+impl KeyGenerator {
+    fn new(mode: WriteMode, key_size: u64, key_nums: u64, seed: u64) -> Self {
+        let state = Some(match mode {
+            WriteMode::Random => KeyGeneratorState::Random {
+                rng: SmallRng::seed_from_u64(seed),
+            },
+            WriteMode::Sequence => KeyGeneratorState::Sequence { last: 0 },
+        });
+        let key_per_prefix = 0;
+        let prefix_size = 0;
+        Self {
+            state,
+            key_per_prefix,
+            prefix_size,
+            key_size,
+            key_nums,
+        }
+    }
+
+    fn fill_rang(&mut self, buf: &mut [u8]) {
+        let rand_num = match self.state.as_mut().unwrap() {
+            KeyGeneratorState::Random { rng } => rng.next_u64(),
+            KeyGeneratorState::Sequence { last } => {
+                *last += 1;
+                *last
+            }
+        };
+        self.generate_key(rand_num, buf)
+    }
+
+    fn generate_key(&self, val: u64, buf: &mut [u8]) {
+        let mut pos = 0;
+        if self.key_per_prefix > 0 {
+            let prefix_cnt = self.key_nums / self.key_per_prefix;
+            let prefix = val % prefix_cnt;
+            let fill_size = self.prefix_size.min(8) as usize;
+            buf[pos as usize..fill_size].copy_from_slice(&prefix.to_le_bytes()[..fill_size]);
+            if self.prefix_size > 8 {
+                buf[(pos + 8) as usize..(self.prefix_size - 8) as usize].fill(0);
+            }
+            pos += self.prefix_size;
+        }
+        let fill_size = (self.key_size - pos).min(8);
+        let vals = val.to_be_bytes();
+        buf[pos as usize..(pos + fill_size) as usize].copy_from_slice(&vals[..fill_size as usize]);
+        pos += fill_size;
+        if pos < self.key_size {
+            buf[pos as usize..self.key_size as usize].fill(0)
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct Stats {
