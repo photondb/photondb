@@ -71,21 +71,68 @@ where
     }
 
     async fn gc(&mut self, version: &Arc<Version>) {
-        let now = version.next_file_id();
-        let mut strategy = self.strategy_builder.build(now);
+        // Reclaimate deleted files in `cleaned_files`.
         let cleaned_files = std::mem::take(&mut self.cleaned_files);
-        for file in version.files().values() {
-            let file_id = file.get_file_id();
-            if cleaned_files.contains(&file_id) {
-                self.cleaned_files.insert(file_id);
+
+        // Ignore the strategy, pick and reclaimate empty page files directly.
+        let empty_files = self.pick_empty_page_files(version, &cleaned_files);
+        self.rewrite_files(empty_files, version).await;
+
+        let picked_files = self.pick_page_file_by_strategy(version, &cleaned_files);
+        self.rewrite_files(picked_files, version).await;
+    }
+
+    fn pick_empty_page_files(
+        &mut self,
+        version: &Version,
+        cleaned_files: &HashSet<u32>,
+    ) -> Vec<u32> {
+        let mut empty_files = Vec::default();
+        for (id, file) in version.files() {
+            if cleaned_files.contains(id) {
+                self.cleaned_files.insert(*id);
                 continue;
             }
+
+            if file.is_empty() {
+                empty_files.push(*id);
+            }
+        }
+        empty_files
+    }
+
+    fn pick_page_file_by_strategy(
+        &mut self,
+        version: &Version,
+        cleaned_files: &HashSet<u32>,
+    ) -> Vec<u32> {
+        let now = version.next_file_id();
+        let mut strategy = self.strategy_builder.build(now);
+        for (id, file) in version.files() {
+            if cleaned_files.contains(id) {
+                self.cleaned_files.insert(*id);
+                continue;
+            }
+
             strategy.collect(file);
         }
 
+        let mut files = Vec::default();
         while let Some(file_id) = strategy.apply() {
+            files.push(file_id);
+        }
+        files
+    }
+
+    async fn rewrite_files(&mut self, files: Vec<u32>, version: &Arc<Version>) {
+        for file_id in files {
             if self.shutdown.is_terminated() {
                 break;
+            }
+
+            if self.cleaned_files.contains(&file_id) {
+                // This file has been rewritten.
+                continue;
             }
 
             let file = version.files().get(&file_id).expect("File must exists");
