@@ -28,7 +28,7 @@ impl<E: Env> CleanupCtx<E> {
                 break;
             };
 
-            let files = next_version.obsolated_files();
+            let files = next_version.obsoleted_files();
             std::mem::swap(&mut next_version, &mut version);
             if with_shutdown(&mut self.shutdown, next_version.wait_version_released())
                 .await
@@ -38,17 +38,17 @@ impl<E: Env> CleanupCtx<E> {
             }
 
             // Now it is safety to cleanup the version.
-            self.clean_obsolated_files(files).await;
+            self.clean_obsoleted_files(files).await;
         }
     }
 
     #[inline]
-    async fn clean_obsolated_files(&self, files: Vec<u32>) {
+    async fn clean_obsoleted_files(&self, files: Vec<u32>) {
         if files.is_empty() {
             return;
         }
 
-        info!("Clean obsolated page files {files:?}");
+        info!("Clean obsoleted page files {files:?}");
         if let Err(err) = self.page_files.remove_files(files).await {
             todo!("{err}");
         }

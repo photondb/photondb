@@ -8,7 +8,7 @@ use crate::{env::Env, page_store::Manifest};
 
 struct FilesSummary {
     active_files: HashMap<u32, NewFile>,
-    obsolated_files: HashSet<u32>,
+    obsoleted_files: HashSet<u32>,
 }
 
 impl<E: Env> PageStore<E> {
@@ -30,7 +30,7 @@ impl<E: Env> PageStore<E> {
         let file_infos = Self::recover_file_infos(&page_files, &summary.active_files).await?;
         let page_table = Self::recover_page_table(&page_files, &summary.active_files).await?;
 
-        let deleted_files = summary.obsolated_files.into_iter().collect::<Vec<_>>();
+        let deleted_files = summary.obsoleted_files.into_iter().collect::<Vec<_>>();
         page_files.remove_files(deleted_files).await?;
 
         let next_file_id = summary.active_files.keys().cloned().max().unwrap_or(0) + 1;
@@ -52,7 +52,7 @@ impl<E: Env> PageStore<E> {
 
         FilesSummary {
             active_files: files,
-            obsolated_files: deleted_files,
+            obsoleted_files: deleted_files,
         }
     }
 

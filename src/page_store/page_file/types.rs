@@ -56,7 +56,7 @@ impl FileInfo {
     }
 
     #[inline]
-    pub(crate) fn is_obsolated(&self, active_files: &HashSet<u32>) -> bool {
+    pub(crate) fn is_obsoleted(&self, active_files: &HashSet<u32>) -> bool {
         self.is_empty()
             && self
                 .referenced_files
