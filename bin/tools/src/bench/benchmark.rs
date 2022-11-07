@@ -15,7 +15,7 @@ use photondb::{
     raw::Table,
     TableOptions,
 };
-use rand::{rngs::SmallRng, RngCore, SeedableRng};
+use rand::{distributions::Uniform, prelude::Distribution, rngs::SmallRng, RngCore, SeedableRng};
 
 use super::*;
 use crate::bench::Result;
@@ -166,6 +166,7 @@ impl PhotonBench {
                     BenchmarkType::Fillseq => {
                         Self::do_write(&mut task_ctx, WriteMode::Sequence).await
                     }
+                    BenchmarkType::ReadRandom => Self::do_read_random(&mut task_ctx).await,
                     _ => unimplemented!(),
                 }
                 task_ctx.stats.as_ref().borrow_mut().stop();
@@ -203,14 +204,17 @@ impl PhotonBench {
         let cfg = ctx.config.to_owned();
         let op_cnt = if cfg.writes > 0 { cfg.writes } else { cfg.num };
         let mut key_gen = KeyGenerator::new(mode, ctx.config.key_size, ctx.config.num, ctx.seed);
+        let mut value_gen = ValueGenerator::new(
+            ctx.config.value_size_distribution_type,
+            ctx.config.value_size,
+        );
         let mut lsn = 0;
         for _ in 0..op_cnt {
             let mut key = vec![0u8; ctx.config.key_size as usize];
-            let mut value = vec![0u8; ctx.config.value_size as usize];
-            key_gen.fill_rang(&mut key);
-            key_gen.fill_rang(&mut value);
+            key_gen.generate_key(&mut key);
+            let value = value_gen.generate_value();
             lsn += 1;
-            table.put(&key, lsn, &value).await.unwrap();
+            table.put(&key, lsn, value).await.unwrap();
 
             let bytes = key.len() + value.len() + std::mem::size_of::<u64>();
 
@@ -218,6 +222,10 @@ impl PhotonBench {
                 .borrow_mut()
                 .finish_operation(OpType::Write, 1, 0, bytes as u64);
         }
+    }
+
+    async fn do_read_random(_ctx: &mut TaskCtx) {
+        todo!()
     }
 }
 
@@ -240,7 +248,7 @@ unsafe impl Sync for TaskCtx {}
 
 unsafe impl Send for TaskCtx {}
 
-pub struct KeyGenerator {
+struct KeyGenerator {
     key_per_prefix: u64,
     prefix_size: u64,
     key_size: u64,
@@ -272,7 +280,7 @@ impl KeyGenerator {
         }
     }
 
-    fn fill_rang(&mut self, buf: &mut [u8]) {
+    fn generate_key(&mut self, buf: &mut [u8]) {
         let rand_num = match self.state.as_mut().unwrap() {
             KeyGeneratorState::Random { rng } => rng.next_u64(),
             KeyGeneratorState::Sequence { last } => {
@@ -280,10 +288,10 @@ impl KeyGenerator {
                 *last
             }
         };
-        self.generate_key(rand_num, buf)
+        self.generate_from_num(rand_num, buf)
     }
 
-    fn generate_key(&self, val: u64, buf: &mut [u8]) {
+    fn generate_from_num(&self, val: u64, buf: &mut [u8]) {
         let mut pos = 0;
         if self.key_per_prefix > 0 {
             let prefix_cnt = self.key_nums / self.key_per_prefix;
@@ -302,6 +310,52 @@ impl KeyGenerator {
         if pos < self.key_size {
             buf[pos as usize..self.key_size as usize].fill(0)
         }
+    }
+}
+
+struct ValueGenerator {
+    distribution_type: ValueSizeDistributionType,
+    value_size: u64,
+
+    data: Vec<u8>,
+    pos: usize,
+}
+
+impl ValueGenerator {
+    fn new(distribution_type: ValueSizeDistributionType, value_size: u64) -> Self {
+        let mut rng = SmallRng::seed_from_u64(301);
+        let mut data = Vec::new();
+        while data.len() < value_size as usize {
+            let d = {
+                let size = 100;
+                let mut rand_str = Vec::with_capacity(size);
+                let range = Uniform::new(0, 95);
+                while rand_str.len() < size {
+                    rand_str.push(b' ' + (range.sample(&mut rng) as u8));
+                    // ' ' to '~'
+                }
+                rand_str
+            };
+            data.extend_from_slice(&d);
+        }
+        Self {
+            data,
+            pos: 0,
+            distribution_type,
+            value_size,
+        }
+    }
+
+    fn generate_value(&mut self) -> &[u8] {
+        let require_len = match self.distribution_type {
+            ValueSizeDistributionType::Fixed => self.value_size as usize,
+            ValueSizeDistributionType::Uniform => unimplemented!(),
+        };
+        if self.pos + require_len > self.data.len() {
+            self.pos = 0;
+        }
+        self.pos += require_len;
+        &self.data[self.pos - require_len..self.pos]
     }
 }
 

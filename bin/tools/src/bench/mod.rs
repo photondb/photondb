@@ -32,6 +32,9 @@ pub(crate) struct Args {
     #[arg(short, long, default_value_t = 100)]
     value_size: u64,
 
+    #[arg(long, default_value_t = ValueSizeDistributionType::Fixed)]
+    value_size_distribution_type: ValueSizeDistributionType,
+
     /// Number of key/values to place in database.
     #[arg(short, long, default_value_t = 1000000)]
     num: u64,
@@ -90,7 +93,7 @@ enum BenchmarkType {
     Fillseq,
     FillRandom,
     ReadSeq,
-    WriteRandom,
+    ReadRandom,
 }
 
 impl From<&str> for BenchmarkType {
@@ -99,7 +102,7 @@ impl From<&str> for BenchmarkType {
             "fillseq" => BenchmarkType::Fillseq,
             "fillrandom" => BenchmarkType::FillRandom,
             "readseq" => BenchmarkType::ReadSeq,
-            "writerandom" => BenchmarkType::WriteRandom,
+            "readrandom" => BenchmarkType::ReadRandom,
             _ => panic!("invalid benchmark type"),
         }
     }
@@ -114,6 +117,21 @@ impl fmt::Display for StoreType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             StoreType::Photon => "photon",
+        })
+    }
+}
+
+#[derive(ValueEnum, Clone, Debug, Copy)]
+enum ValueSizeDistributionType {
+    Fixed,
+    Uniform,
+}
+
+impl fmt::Display for ValueSizeDistributionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ValueSizeDistributionType::Fixed => "fixed",
+            ValueSizeDistributionType::Uniform => "uniform",
         })
     }
 }
