@@ -280,13 +280,9 @@ impl PhotonBench {
             let mut key = vec![0u8; ctx.config.key_size as usize];
             key_gen.generate_key(&mut key);
             reads += 1;
-            if let Some(vlen) = table
-                .get(&key, lsn, |v| v.map(|v| v.len()))
-                .await
-                .expect("get key fail")
-            {
+            if let Some(v) = table.get(&key, lsn).await.expect("get key fail") {
                 founds += 1;
-                let bytes = key.len() + vlen + std::mem::size_of::<u64>();
+                let bytes = key.len() + v.len() + std::mem::size_of::<u64>();
                 ctx.stats
                     .borrow_mut()
                     .finish_operation(OpType::Write, 1, 0, bytes as u64);
