@@ -196,6 +196,8 @@ impl PhotonBench {
                         Self::do_write(&mut task_ctx, GenMode::Sequence).await
                     }
                     BenchmarkType::ReadRandom => Self::do_read_random(&mut task_ctx).await,
+                    BenchmarkType::UpdateRandom => Self::do_update_random(&mut task_ctx).await,
+                    BenchmarkType::ReadRandomWriteRandom => {}
                     _ => unimplemented!(),
                 }
                 task_ctx.stats.as_ref().borrow_mut().stop();
@@ -285,14 +287,66 @@ impl PhotonBench {
                 let bytes = key.len() + v.len() + std::mem::size_of::<u64>();
                 ctx.stats
                     .borrow_mut()
-                    .finish_operation(OpType::Write, 1, 0, bytes as u64);
+                    .finish_operation(OpType::Read, 1, 0, bytes as u64);
             } else {
                 ctx.stats
                     .borrow_mut()
-                    .finish_operation(OpType::Write, 0, 1, 0);
+                    .finish_operation(OpType::Read, 0, 1, 0);
             }
         }
-        let msg = format!("({founds} of {reads} found)");
+        let msg = format!("(reads:{reads} founds:{founds})");
+        ctx.stats.borrow_mut().add_msg(&msg);
+    }
+
+    async fn do_update_random(ctx: &mut TaskCtx) {
+        let table = ctx.table.clone();
+        let cfg = ctx.config.to_owned();
+        let op_cnt = if cfg.read_writes >= 0 {
+            cfg.read_writes as u64
+        } else {
+            cfg.num
+        };
+
+        let mut updates = 0;
+        let mut founds = 0;
+
+        let mut key_gen = KeyGenerator::new(
+            GenMode::Random,
+            ctx.config.key_size,
+            ctx.config.num,
+            ctx.seed,
+        );
+        let mut val_gen = ValueGenerator::new(
+            ctx.config.value_size_distribution_type,
+            ctx.config.value_size,
+        );
+
+        let rlsn = 0;
+        let wlsn = 1;
+        for _ in 0..op_cnt {
+            let mut bytes = 0;
+            let mut key = vec![0u8; ctx.config.key_size as usize];
+            key_gen.generate_key(&mut key);
+
+            if let Some(ov) = table.get(&key, rlsn).await.expect("read of update fail") {
+                founds += 1;
+                bytes += key.len() + ov.len() + std::mem::size_of::<u64>();
+            }
+
+            updates += 1;
+            let value = val_gen.generate_value();
+            table
+                .put(&key, wlsn, value)
+                .await
+                .expect("put of update fail");
+
+            bytes += key.len() + value.len() + std::mem::size_of::<u64>();
+
+            ctx.stats
+                .borrow_mut()
+                .finish_operation(OpType::Update, 1, 0, bytes as u64);
+        }
+        let msg = format!("(updates:{updates} founds:{founds})");
         ctx.stats.borrow_mut().add_msg(&msg);
     }
 }
@@ -621,6 +675,8 @@ impl Stats {
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub enum OpType {
     Write,
+    Read,
+    Update,
 }
 
 #[derive(Clone)]
