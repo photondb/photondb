@@ -634,6 +634,7 @@ impl RecordHeader {
         self.data
     }
 
+    #[allow(dead_code)]
     #[inline]
     pub(crate) fn former_file_id(&self) -> u32 {
         debug_assert_eq!(self.flags, RecordFlags::DELETED_PAGES.bits());
