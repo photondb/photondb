@@ -1,6 +1,6 @@
 use std::{
     alloc::Layout,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     marker::PhantomData,
     sync::Arc,
 };
@@ -143,10 +143,26 @@ impl<'a, E: Env> FileBuilder<'a, E> {
             active_pages
         };
 
+        let referenced_files = {
+            let mut files = HashSet::new();
+            for page_addr in self.meta.get_deleted_pages() {
+                let (file_id, _) = split_page_addr(page_addr);
+                files.insert(file_id);
+            }
+            files
+        };
+
         let active_size = meta.total_page_size();
 
         let file_id = meta.get_file_id();
-        FileInfo::new(active_pages, active_size, file_id, file_id, meta)
+        FileInfo::new(
+            active_pages,
+            active_size,
+            file_id,
+            file_id,
+            referenced_files,
+            meta,
+        )
     }
 }
 
@@ -245,6 +261,11 @@ impl MetaBlockBuilder {
 
     pub(crate) fn finish_delete_pages_block(&self) -> Vec<u8> {
         self.delete_page_addrs.encode()
+    }
+
+    #[inline]
+    pub(crate) fn get_deleted_pages(&self) -> HashSet<u64> {
+        self.delete_page_addrs.0.iter().cloned().collect()
     }
 }
 

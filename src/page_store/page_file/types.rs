@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
 use crate::page_store::{Error, Result};
 
@@ -17,6 +20,9 @@ pub(crate) struct FileInfo {
 
     active_size: usize,
 
+    /// Records the files referenced by dealloc pages saved in the file.
+    referenced_files: HashSet<u32>,
+
     meta: Arc<FileMeta>,
 }
 
@@ -26,6 +32,7 @@ impl FileInfo {
         active_size: usize,
         up1: u32,
         up2: u32,
+        referenced_files: HashSet<u32>,
         meta: Arc<FileMeta>,
     ) -> Self {
         Self {
@@ -33,6 +40,7 @@ impl FileInfo {
             active_size,
             up1,
             up2,
+            referenced_files,
             meta,
         }
     }
@@ -45,6 +53,15 @@ impl FileInfo {
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.active_pages.is_empty()
+    }
+
+    #[inline]
+    pub(crate) fn is_obsolated(&self, active_files: &HashSet<u32>) -> bool {
+        self.is_empty()
+            && self
+                .referenced_files
+                .iter()
+                .all(|id| !active_files.contains(id))
     }
 
     pub(crate) fn deactivate_page(&mut self, now: u32, page_addr: u64) {

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use super::{
     constant::DEFAULT_BLOCK_SIZE, file_reader::MetaReader, types::split_page_addr, FileInfo,
@@ -77,10 +80,22 @@ impl<E: Env> FileInfoBuilder<E> {
             active_pages
         };
 
+        let mut referenced_files = HashSet::new();
         let delete_pages = meta_reader.read_delete_pages().await?;
+        for page_addr in &delete_pages {
+            let (file_id, _) = split_page_addr(*page_addr);
+            referenced_files.insert(file_id);
+        }
 
         let active_size = meta.total_page_size();
-        let info = FileInfo::new(active_pages, active_size, file.up1, file.up2, meta);
+        let info = FileInfo::new(
+            active_pages,
+            active_size,
+            file.up1,
+            file.up2,
+            referenced_files,
+            meta,
+        );
 
         Ok((info, delete_pages))
     }

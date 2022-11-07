@@ -9,7 +9,7 @@ use std::{
 
 use crossbeam_epoch::Guard;
 use futures::channel::oneshot;
-use log::debug;
+use log::{debug, trace};
 
 use super::{FileInfo, WriteBuffer};
 use crate::util::notify::Notify;
@@ -35,7 +35,9 @@ pub(crate) struct Version {
     /// throughout the lifetime of the [`Version`].
     write_buffers: Vec<Arc<WriteBuffer>>,
     files: HashMap<u32, FileInfo>,
-    deleted_files: HashSet<u32>,
+
+    /// Records the ID of the file that can be deleted.
+    obsolated_files: HashSet<u32>,
 
     next_version: AtomicPtr<Arc<Version>>,
     new_version_notify: Notify,
@@ -46,7 +48,7 @@ pub(crate) struct Version {
 
 pub(crate) struct DeltaVersion {
     pub(crate) files: HashMap<u32, FileInfo>,
-    pub(crate) deleted_files: HashSet<u32>,
+    pub(crate) obsolated_files: HashSet<u32>,
 }
 
 pub(crate) struct BufferSet {
@@ -122,7 +124,7 @@ impl VersionOwner {
             buffers_range,
             write_buffers,
             files: delta.files,
-            deleted_files: delta.deleted_files,
+            obsolated_files: delta.obsolated_files,
             buffer_set: current.buffer_set.clone(),
 
             next_version: AtomicPtr::default(),
@@ -193,7 +195,7 @@ impl Version {
         write_buffer_capacity: u32,
         next_file_id: u32,
         files: HashMap<u32, FileInfo>,
-        deleted_files: HashSet<u32>,
+        obsolated_files: HashSet<u32>,
     ) -> Self {
         let buffer_set = Arc::new(BufferSet::new(next_file_id, write_buffer_capacity));
         let (buffers_range, write_buffers) = {
@@ -207,7 +209,7 @@ impl Version {
             buffers_range,
             write_buffers,
             files,
-            deleted_files,
+            obsolated_files,
             buffer_set,
 
             next_version: AtomicPtr::default(),
@@ -238,10 +240,10 @@ impl Version {
         handle.await.unwrap_or_default();
     }
 
-    /// Fetch the files which obsolated but referenced by the [`Version`].
+    /// Fetch the files which obsolated but referenced by former [`Version`]s.
     #[inline]
-    pub(crate) fn deleted_files(&self) -> Vec<u32> {
-        self.deleted_files.iter().cloned().collect()
+    pub(crate) fn obsolated_files(&self) -> Vec<u32> {
+        self.obsolated_files.iter().cloned().collect()
     }
 
     #[inline]
@@ -387,7 +389,7 @@ impl BufferSet {
             });
 
             debug!(
-                "Install new buffer {}, range {:?}",
+                "Install new buffer {}, buffer set range {:?}",
                 new_file_id, new.buffers_range
             );
 
@@ -399,7 +401,7 @@ impl BufferSet {
     }
 
     pub(crate) fn on_flushed(&self, file_id: u32) {
-        debug!("Release buffer {file_id}");
+        trace!("Release write buffer {file_id}");
 
         let mut guard = buffer_set_guard::pin();
         // Safety: guarded by `buffer_set_guard::pin`.

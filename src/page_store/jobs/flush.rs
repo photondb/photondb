@@ -29,7 +29,7 @@ struct FlushPageStats {
     num_records: usize,
     num_tombstone_records: usize,
     num_dealloc_pages: usize,
-    num_recycle_pages: usize,
+    num_skip_pages: usize,
 }
 
 impl<E: Env> FlushCtx<E> {
@@ -83,30 +83,27 @@ impl<E: Env> FlushCtx<E> {
     async fn flush(&self, version: &Version, write_buffer: &WriteBuffer) -> Result<()> {
         let start_at = Instant::now();
         let file_id = write_buffer.file_id();
-        let (deleted_pages, file_info) = self.build_page_file(write_buffer).await?;
+        let (dealloc_pages, file_info, reclaimed_files) =
+            self.build_page_file(write_buffer).await?;
 
         info!(
-            "Flush file {file_id} with {} bytes, {} active pages, lasted {} microseconds",
+            "Flush output file {file_id} with {} bytes, {} active pages, {} dealloc pages, lasted {} microseconds",
             file_info.file_size(),
             file_info.num_active_pages(),
+            dealloc_pages.len(),
             start_at.elapsed().as_micros()
         );
 
-        let files = self.apply_deleted_pages(version, file_id, deleted_pages);
-
-        let mut files = files;
-        let deleted_files = files
-            .drain_filter(|_, info| info.is_empty())
-            .map(|(file_id, _)| file_id)
-            .collect::<HashSet<_>>();
+        let mut files = self.apply_dealloc_pages(version, file_id, dealloc_pages);
+        let obsolated_files = drain_obsolated_files(&mut files, reclaimed_files);
         files.insert(file_id, file_info);
 
-        self.save_version_edit(version, file_id, &deleted_files)
+        self.save_version_edit(version, file_id, &obsolated_files)
             .await?;
 
         let delta = DeltaVersion {
             files,
-            deleted_files,
+            obsolated_files,
         };
 
         self.version_owner.install(delta);
@@ -114,16 +111,19 @@ impl<E: Env> FlushCtx<E> {
         Ok(())
     }
 
-    /// Flush [`WriteBuffer`] to page files and returns deleted pages.
-    async fn build_page_file(&self, write_buffer: &WriteBuffer) -> Result<(Vec<u64>, FileInfo)> {
+    /// Flush [`WriteBuffer`] to page files and returns dealloc pages.
+    async fn build_page_file(
+        &self,
+        write_buffer: &WriteBuffer,
+    ) -> Result<(Vec<u64>, FileInfo, HashSet<u32>)> {
         assert!(write_buffer.is_flushable());
 
         let mut flush_stats = FlushPageStats::default();
-        let (dealloc_pages, skip_pages) =
+        let (dealloc_pages, skip_pages, reclaimed_files) =
             collect_dealloc_pages_and_stats(write_buffer, &mut flush_stats);
 
         let file_id = write_buffer.file_id();
-        info!("Flush write buffer {file_id} {flush_stats}");
+        info!("Flush write buffer {file_id} to page file, {flush_stats}");
 
         let mut builder = self.page_files.new_file_builder(file_id).await?;
         for (page_addr, header, record_ref) in write_buffer.iter() {
@@ -142,16 +142,16 @@ impl<E: Env> FlushCtx<E> {
         }
         builder.add_delete_pages(&dealloc_pages);
         let file_info = builder.finish().await?;
-        Ok((dealloc_pages, file_info))
+        Ok((dealloc_pages, file_info, reclaimed_files))
     }
 
     async fn save_version_edit(
         &self,
         version: &Version,
         file_id: u32,
-        deleted_files: &HashSet<u32>,
+        obsolated_files: &HashSet<u32>,
     ) -> Result<()> {
-        let deleted_files = deleted_files.iter().cloned().collect();
+        let deleted_files = obsolated_files.iter().cloned().collect();
         let edit = VersionEdit {
             new_files: vec![NewFile {
                 id: file_id,
@@ -167,14 +167,14 @@ impl<E: Env> FlushCtx<E> {
             .await
     }
 
-    fn apply_deleted_pages(
+    fn apply_dealloc_pages(
         &self,
         version: &Version,
         new_file_id: u32,
-        deleted_pages: Vec<u64>,
+        dealloc_pages: Vec<u64>,
     ) -> HashMap<u32, FileInfo> {
         let mut files = version.files().clone();
-        for page_addr in deleted_pages {
+        for page_addr in dealloc_pages {
             let file_id = (page_addr >> 32) as u32;
             let Some(file_info) = files.get_mut(&file_id) else {
                 panic!("file {file_id} is missing");
@@ -189,19 +189,61 @@ impl std::fmt::Display for FlushPageStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "num_records: {} num_tombstone_records: {} num_dealloc_pages: {} num_recycle_pages: {} data_size: {}",
-            self.num_records, self.num_tombstone_records, self.num_dealloc_pages, self.num_recycle_pages, self.data_size
+            "num_records: {} num_tombstone_records: {} num_dealloc_pages: {} num_skip_pages: {} data_size: {}",
+            self.num_records, self.num_tombstone_records, self.num_dealloc_pages, self.num_skip_pages, self.data_size
         )
+    }
+}
+
+/// Drain and return the obsolated files from active files.
+///
+/// There exists two obsolated sources:
+/// 1. file is reclaimed (no active pages and dealloc pages has been rewritten).
+/// 2. all referenced files (dealloc pages referenced to) is not belongs to
+/// active files.
+fn drain_obsolated_files(
+    files: &mut HashMap<u32, FileInfo>,
+    reclaimed_files: HashSet<u32>,
+) -> HashSet<u32> {
+    assert_files_are_deletable(files, &reclaimed_files);
+    let active_files = files
+        .keys()
+        .filter(|&id| !reclaimed_files.contains(id))
+        .cloned()
+        .collect::<HashSet<_>>();
+    let mut obsolated_files = reclaimed_files;
+    for (id, info) in &mut *files {
+        if info.is_obsolated(&active_files) {
+            obsolated_files.insert(*id);
+        }
+    }
+    files.drain_filter(|id, _| obsolated_files.contains(id));
+    obsolated_files
+}
+
+fn assert_files_are_deletable(files: &HashMap<u32, FileInfo>, reclaimed_files: &HashSet<u32>) {
+    for file_id in reclaimed_files {
+        match files.get(file_id) {
+            None => {
+                panic!("The reclaimed file {file_id} is not a active file");
+            }
+            Some(info) => {
+                if !info.is_empty() {
+                    panic!("The reclamied file {file_id} has active pages");
+                }
+            }
+        }
     }
 }
 
 fn collect_dealloc_pages_and_stats(
     write_buffer: &WriteBuffer,
     flush_stats: &mut FlushPageStats,
-) -> (Vec<u64>, HashSet<u64>) {
+) -> (Vec<u64>, HashSet<u64>, HashSet<u32>) {
     let file_id = write_buffer.file_id();
     let mut dealloc_pages = Vec::new();
     let mut skip_pages = HashSet::new();
+    let mut reclaimed_files = HashSet::new();
     for (_, header, record_ref) in write_buffer.iter() {
         flush_stats.num_records += 1;
         if header.is_tombstone() {
@@ -210,6 +252,9 @@ fn collect_dealloc_pages_and_stats(
 
         flush_stats.data_size += header.page_size();
         if let RecordRef::DeallocPages(pages) = record_ref {
+            if header.former_file_id() as u64 != NAN_ID {
+                reclaimed_files.insert(header.former_file_id());
+            }
             dealloc_pages.extend(
                 pages
                     .as_slice()
@@ -225,10 +270,10 @@ fn collect_dealloc_pages_and_stats(
         }
     }
 
-    flush_stats.num_recycle_pages = skip_pages.len();
+    flush_stats.num_skip_pages = skip_pages.len();
     flush_stats.num_dealloc_pages = dealloc_pages.len();
 
-    (dealloc_pages, skip_pages)
+    (dealloc_pages, skip_pages, reclaimed_files)
 }
 
 fn version_snapshot(version: &Version) -> VersionEdit {
@@ -236,7 +281,7 @@ fn version_snapshot(version: &Version) -> VersionEdit {
 
     // FIXME: only the deleted files of the current version are recorded here, and
     // the files of previous versions are not recorded here.
-    let deleted_files = version.deleted_files();
+    let deleted_files = version.obsolated_files();
     VersionEdit {
         new_files,
         deleted_files,
@@ -246,17 +291,18 @@ fn version_snapshot(version: &Version) -> VersionEdit {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{HashMap, HashSet},
+        collections::{BTreeMap, HashMap, HashSet},
         path::Path,
         sync::Arc,
     };
 
-    use super::FlushCtx;
+    use super::{drain_obsolated_files, FlushCtx};
     use crate::{
         env::Photon,
         page_store::{
+            page_file::FileMeta,
             version::{Version, VersionOwner},
-            Manifest, PageFiles, WriteBuffer,
+            FileInfo, Manifest, PageFiles, WriteBuffer,
         },
         util::shutdown::ShutdownNotifier,
     };
@@ -286,7 +332,7 @@ mod tests {
             let (addr, _, _) = wb.alloc_page(1, 123, false).unwrap();
             wb.dealloc_pages(&[addr], false).unwrap();
             wb.seal().unwrap();
-            let (deleted_pages, file_info) = ctx.build_page_file(&wb).await.unwrap();
+            let (deleted_pages, file_info, _) = ctx.build_page_file(&wb).await.unwrap();
             assert!(deleted_pages.is_empty());
             assert!(!file_info.is_page_active(addr));
         }
@@ -301,9 +347,72 @@ mod tests {
             let (addr, header, _) = wb.alloc_page(1, 123, false).unwrap();
             header.set_tombstone();
             wb.seal().unwrap();
-            let (deleted_pages, file_info) = ctx.build_page_file(&wb).await.unwrap();
+            let (deleted_pages, file_info, _) = ctx.build_page_file(&wb).await.unwrap();
             assert!(deleted_pages.is_empty());
             assert!(!file_info.is_page_active(addr));
         }
+    }
+
+    #[test]
+    fn obsolated_files_drain() {
+        // It drains all obsolated files.
+        let mut files = HashMap::new();
+        files.insert(1, make_obsolated_file(1));
+        files.insert(2, make_active_file(2, 32));
+        let obsolated_files = drain_obsolated_files(&mut files, HashSet::default());
+        assert!(obsolated_files.contains(&1));
+        assert!(!obsolated_files.contains(&2));
+        assert!(files.contains_key(&2));
+        assert!(!files.contains_key(&1));
+    }
+
+    fn make_obsolated_file(id: u32) -> FileInfo {
+        let active_pages = roaring::RoaringBitmap::new();
+        let meta = FileMeta::new(id, 0, Vec::default(), BTreeMap::default(), 4096);
+        FileInfo::new(active_pages, 0, id, id, HashSet::default(), Arc::new(meta))
+    }
+
+    fn make_active_file(id: u32, page_addr: u32) -> FileInfo {
+        let mut active_pages = roaring::RoaringBitmap::new();
+        active_pages.insert(page_addr);
+        let meta = FileMeta::new(id, 1, Vec::default(), BTreeMap::default(), 4096);
+        FileInfo::new(active_pages, 1, id, id, HashSet::default(), Arc::new(meta))
+    }
+
+    #[test]
+    fn obsolated_files_skip_refering_files() {
+        let mut files = HashMap::new();
+        files.insert(1, make_active_file(1, 32));
+        files.insert(2, make_obsolated_file_but_refer_others(2, 1));
+        let obsolated_files = drain_obsolated_files(&mut files, HashSet::default());
+        assert!(obsolated_files.is_empty());
+        assert!(files.contains_key(&1));
+        assert!(files.contains_key(&2));
+    }
+
+    fn make_obsolated_file_but_refer_others(id: u32, refer: u32) -> FileInfo {
+        let active_pages = roaring::RoaringBitmap::new();
+        let meta = FileMeta::new(id, 0, Vec::default(), BTreeMap::default(), 4096);
+        let mut refers = HashSet::default();
+        refers.insert(refer);
+        FileInfo::new(active_pages, 0, id, id, refers, Arc::new(meta))
+    }
+
+    #[test]
+    fn obsolated_files_drain_reclaimed() {
+        let mut files = HashMap::new();
+        files.insert(1, make_obsolated_file(1));
+        files.insert(2, make_obsolated_file_but_refer_others(2, 1));
+        files.insert(3, make_active_file(2, 32));
+
+        let mut reclaimed_files = HashSet::new();
+        reclaimed_files.insert(2);
+        let obsolated_files = drain_obsolated_files(&mut files, reclaimed_files);
+        assert!(obsolated_files.contains(&1));
+        assert!(obsolated_files.contains(&2));
+        assert!(!obsolated_files.contains(&3));
+        assert!(!files.contains_key(&1));
+        assert!(!files.contains_key(&2));
+        assert!(files.contains_key(&3));
     }
 }
