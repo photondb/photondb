@@ -15,7 +15,7 @@ use std::{
 
 use clap::Parser;
 use futures::Future;
-use log::{debug, error};
+use log::{debug, error, info, trace};
 use photondb::{
     env::{self, Env},
     Table, TableOptions,
@@ -200,6 +200,14 @@ pub(crate) fn run(args: Args) -> Result<()> {
 }
 
 async fn run_with_args(args: Args) -> Result<()> {
+    if args.key_size <= PREFIX_SIZE {
+        error!(
+            "Key size must large than {PREFIX_SIZE}, but get {}",
+            args.key_size
+        );
+        std::process::exit(-1);
+    }
+
     if args.destory_db && args.db.exists() {
         if let Err(err) = std::fs::remove_dir_all(&args.db) {
             error!("Destory DB {}: {err:?}", args.db.display());
@@ -212,6 +220,9 @@ async fn run_with_args(args: Args) -> Result<()> {
         .spawn_background(Table::open(args.db.clone(), TableOptions::default()))
         .await?;
     debug!("Open DB {} success", args.db.display());
+
+    let base_seed = args.seed.unwrap_or_else(|| OsRng.next_u64());
+    info!("Spawn tasks with base seed {base_seed}");
 
     let key_prefix = [
         AtomicU8::new(b'a'),
@@ -226,9 +237,9 @@ async fn run_with_args(args: Args) -> Result<()> {
         timer: Timer::default(),
     });
     let handles = vec![
-        spawn_write_task(&env, job.clone()),
-        spawn_mutate_task(&env, job.clone()),
-        spawn_read_task(&env, job.clone()),
+        spawn_write_task(&env, job.clone(), base_seed),
+        spawn_mutate_task(&env, job.clone(), base_seed.wrapping_add(1)),
+        spawn_read_task(&env, job.clone(), base_seed.wrapping_add(1)),
     ];
 
     let mut elapsed = 0;
@@ -250,22 +261,21 @@ async fn run_with_args(args: Args) -> Result<()> {
 }
 
 #[inline]
-fn spawn_write_task<E: Env>(env: &E, job: Arc<Job>) -> E::JoinHandle<()> {
-    env.spawn_background(write_task(job))
+fn spawn_write_task<E: Env>(env: &E, job: Arc<Job>, seed: u64) -> E::JoinHandle<()> {
+    env.spawn_background(write_task(job, seed))
 }
 
 #[inline]
-fn spawn_mutate_task<E: Env>(env: &E, job: Arc<Job>) -> E::JoinHandle<()> {
-    env.spawn_background(mutate_task(job))
+fn spawn_mutate_task<E: Env>(env: &E, job: Arc<Job>, seed: u64) -> E::JoinHandle<()> {
+    env.spawn_background(mutate_task(job, seed))
 }
 
 #[inline]
-fn spawn_read_task<E: Env>(env: &E, job: Arc<Job>) -> E::JoinHandle<()> {
-    env.spawn_background(read_task(job))
+fn spawn_read_task<E: Env>(env: &E, job: Arc<Job>, seed: u64) -> E::JoinHandle<()> {
+    env.spawn_background(read_task(job, seed))
 }
 
-async fn write_task(job: Arc<Job>) {
-    let seed = job.args.seed.unwrap_or_else(|| OsRng.next_u64());
+async fn write_task(job: Arc<Job>, seed: u64) {
     let mut rng = SmallRng::seed_from_u64(seed);
     while !job.stop.load(Ordering::Relaxed) {
         let mut key = vec![0u8; job.args.key_size];
@@ -284,27 +294,31 @@ async fn write_task(job: Arc<Job>) {
     }
 }
 
-async fn mutate_task(job: Arc<Job>) {
-    let seed = job.args.seed.unwrap_or_else(|| OsRng.next_u64());
+async fn mutate_task(job: Arc<Job>, seed: u64) {
     let duration = Duration::from_millis((job.args.prefix_mutate_period_seconds * 1000.0) as u64);
     let mut rng = SmallRng::seed_from_u64(seed);
     while !job.stop.load(Ordering::Relaxed) {
         job.timer.sleep(duration).await;
         if rng.gen::<f64>() < job.args.first_char_mutate_probability {
-            job.key_prefix[0].store(rng.gen_range(b'a'..b'z'), Ordering::Relaxed);
+            job.key_prefix[0].store(rng.gen_range(b'a'..=b'z'), Ordering::Relaxed);
         }
         if rng.gen::<f64>() < job.args.second_char_mutate_probability {
-            job.key_prefix[1].store(rng.gen_range(b'a'..b'z'), Ordering::Relaxed);
+            job.key_prefix[1].store(rng.gen_range(b'a'..=b'z'), Ordering::Relaxed);
         }
         if rng.gen::<f64>() < job.args.third_char_mutate_probability {
-            job.key_prefix[2].store(rng.gen_range(b'a'..b'z'), Ordering::Relaxed);
+            job.key_prefix[2].store(rng.gen_range(b'a'..=b'z'), Ordering::Relaxed);
         }
+        trace!(
+            "Switch prefix to '{}{}{}'",
+            job.key_prefix[0].load(Ordering::Relaxed) as char,
+            job.key_prefix[1].load(Ordering::Relaxed) as char,
+            job.key_prefix[2].load(Ordering::Relaxed) as char
+        );
         photonio::task::yield_now().await;
     }
 }
 
-async fn read_task(job: Arc<Job>) {
-    let seed = job.args.seed.unwrap_or_else(|| OsRng.next_u64());
+async fn read_task(job: Arc<Job>, seed: u64) {
     let mut rng = SmallRng::seed_from_u64(seed);
     while !job.stop.load(Ordering::Relaxed) {
         let mut key = vec![0u8; job.args.key_size];
