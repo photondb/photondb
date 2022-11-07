@@ -55,21 +55,12 @@ impl<E: Env> Table<E> {
         Guard::new(self)
     }
 
-    /// Gets the value corresponding to the key and applies a function to it.
-    //
-    /// On success, if the value is found, applies the function to
-    /// [`Option::Some`] with the value; if the value is not found, applies the
-    /// function to [`Option::None`]. Then returns [`Result::Ok`] with the
-    /// output of the function.
-    /// On failure, returns [`Result::Err`] without applying the function.
-    pub async fn get<F, R>(&self, key: &[u8], lsn: u64, f: F) -> Result<R>
-    where
-        F: FnOnce(Option<&[u8]>) -> R,
-    {
+    /// Gets the value corresponding to the key.
+    pub async fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>> {
         let key = Key::new(key, lsn);
         let txn = self.begin();
         let value = txn.get(key).await?;
-        Ok(f(value))
+        Ok(value.map(|v| v.to_vec()))
     }
 
     /// Puts a key-value entry to the table.
@@ -129,9 +120,18 @@ impl<'a, E: Env> Guard<'a, E> {
         self.txn = self.t.begin();
     }
 
+    /// Gets the value corresponding to the key.
+    //
+    /// On success, if the value is found, returns [`Option::Some`] with the
+    /// value; if the value is not found, returns [`Option::None`].
+    pub async fn get(&self, key: &[u8], lsn: u64) -> Result<Option<&[u8]>> {
+        let key = Key::new(key, lsn);
+        Ok(self.txn.get(key).await?)
+    }
+
     /// Returns an iterator over pages in the table.
-    pub fn pages(&self, options: ReadOptions) -> Pages<'_, 'a, E> {
-        Pages::new(&self.txn, options)
+    pub fn pages(&self) -> Pages<'_, 'a, E> {
+        Pages::new(&self.txn)
     }
 }
 
@@ -141,9 +141,9 @@ pub struct Pages<'a, 't: 'a, E: Env> {
 }
 
 impl<'a, 't: 'a, E: Env> Pages<'a, 't, E> {
-    fn new(txn: &'a TreeTxn<'t, E>, options: ReadOptions) -> Self {
+    fn new(txn: &'a TreeTxn<'t, E>) -> Self {
         Self {
-            iter: TreeIter::new(txn, options),
+            iter: TreeIter::new(txn, ReadOptions::default()),
         }
     }
 

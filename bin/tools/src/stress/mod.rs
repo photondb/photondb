@@ -18,7 +18,7 @@ use futures::Future;
 use log::{debug, error};
 use photondb::{
     env::{self, Env},
-    Options, Table,
+    Table, TableOptions,
 };
 use rand::{
     rngs::{OsRng, SmallRng},
@@ -209,7 +209,7 @@ async fn run_with_args(args: Args) -> Result<()> {
 
     let env = env::Photon;
     let table = env
-        .spawn_background(Table::open(args.db.clone(), Options::default()))
+        .spawn_background(Table::open(args.db.clone(), TableOptions::default()))
         .await?;
     debug!("Open DB {} success", args.db.display());
 
@@ -313,11 +313,12 @@ async fn read_task(job: Arc<Job>) {
         key[1] = job.key_prefix[1].load(Ordering::Relaxed);
         key[2] = job.key_prefix[2].load(Ordering::Relaxed);
         fill_bytes(&mut rng, &mut key[3..]);
-        match job.table.get(&key, u64::MAX, |v| v.is_some()).await {
-            Ok(true) => {
+        let guard = job.table.pin();
+        match guard.get(&key, u64::MAX).await {
+            Ok(Some(_)) => {
                 continue;
             }
-            Ok(false) => {
+            Ok(None) => {
                 let mut value = vec![0u8; job.args.value_size];
                 fill_bytes(&mut rng, value.as_mut_slice());
                 if let Err(err) = job.table.put(&key, 0, &value).await {

@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use super::Table;
-use crate::{env::Env, Options, Result};
+use crate::{env::Env, Result, TableOptions};
 
 /// A persistent key-value store that manages multiple tables.
 #[allow(dead_code)]
@@ -29,7 +29,7 @@ impl<E: Env> Store<E> {
     }
 
     /// Creates a table with the given name and options.
-    pub async fn create_table(&self, _name: &str, _options: Options) -> Result<Table<E>> {
+    pub async fn create_table(&self, _name: &str, _options: TableOptions) -> Result<Table<E>> {
         todo!()
     }
 
