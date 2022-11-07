@@ -54,6 +54,7 @@ mod util;
 
 #[cfg(test)]
 mod tests {
+    use log::debug;
     use rand::random;
     use tempdir::TempDir;
 
@@ -78,12 +79,16 @@ mod tests {
         assert_eq!(value, expect.map(|v| v.to_be_bytes().to_vec()));
     }
 
-    #[photonio::test]
+    #[photonio::test(env_logger = true)]
     async fn crud() {
         let path = TempDir::new("crud").unwrap();
         let table = Table::open(&path, OPTIONS).await.unwrap();
+        debug!("fill table");
         const N: u64 = 1 << 10;
         for i in 0..N {
+            if i % 100 == 0 {
+                debug!("progress {}", i);
+            }
             must_put(&table, i, i).await;
             must_get(&table, i, i, Some(i)).await;
         }
@@ -91,6 +96,7 @@ mod tests {
             must_get(&table, i, i, Some(i)).await;
         }
 
+        debug!("iterate table");
         let guard = table.pin();
         let mut pages = guard.pages();
         let mut i = 0u64;
@@ -102,20 +108,28 @@ mod tests {
             }
         }
 
+        debug!("close table");
         table.close().await.unwrap();
+        debug!("done");
     }
 
-    #[photonio::test]
+    #[photonio::test(env_logger = true)]
     async fn random_crud() {
         let path = TempDir::new("random_crud").unwrap();
         let table = Table::open(&path, OPTIONS).await.unwrap();
+        debug!("fill table");
         const N: u64 = 1 << 12;
-        for _ in 0..N {
+        for k in 0..N {
+            if k % 100 == 0 {
+                debug!("progress {}", k);
+            }
             let i = random();
             must_put(&table, i, i).await;
             must_get(&table, i, i, Some(i)).await;
         }
+        debug!("close table");
         table.close().await.unwrap();
+        debug!("done");
     }
 
     #[photonio::test]

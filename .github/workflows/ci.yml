@@ -32,6 +32,8 @@ jobs:
       uses: actions-rs/cargo@v1
       with:
         command: test
+        args: -- --nocapture
+      env: RUST_LOG=debug
 
   tests-on-macos:
     runs-on: macos-latest
