@@ -19,3 +19,4 @@ photonio = { git = "https://github.com/photondb/photonio.git" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 thiserror = "1.0.37"
 chrono = "0.4"
+regex = "1.7.0"

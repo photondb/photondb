@@ -16,6 +16,7 @@ use photondb::{
     TableOptions,
 };
 use rand::{distributions::Uniform, prelude::Distribution, rngs::SmallRng, RngCore, SeedableRng};
+use regex::Regex;
 
 use super::*;
 use crate::bench::Result;
@@ -53,7 +54,7 @@ impl PhotonBench {
     async fn prepare(config: Args, env: Photon) -> Self {
         let config = Self::process_config(config);
         let table = Some(Self::open_table(config.to_owned(), &env).await);
-        let bench_ops = Self::parse_bench_ops(config.benchmarks.as_slice());
+        let bench_ops = Self::parse_bench_ops(&config.benchmarks);
         Self {
             config,
             env,
@@ -101,13 +102,41 @@ impl PhotonBench {
             .expect("open table fail")
     }
 
-    fn parse_bench_ops(benchmark_strs: &[String]) -> Vec<BenchOperation> {
+    fn parse_bench_ops(benchmark_strs: &str) -> Vec<BenchOperation> {
+        let benchmark_strs: Vec<_> = benchmark_strs.split(',').collect();
         let mut benchs = Vec::new();
+        let reg = Regex::new("\\[(?P<ctl>.*)\\]").unwrap();
         for bench_str in benchmark_strs {
+            let mut warmup_count = 0;
+            let mut repeat_count = 0;
+            let mut bench_str = bench_str;
+            if !bench_str.is_empty() {
+                if let Some(start) = bench_str.find('[') {
+                    if let Some(caps) = reg.captures(bench_str) {
+                        if let Some(ctl) = caps.name("ctl") {
+                            let ctl = ctl.as_str();
+                            if let Some(w) = ctl.strip_prefix('W') {
+                                if let Ok(w) = w.parse::<u64>() {
+                                    warmup_count = w;
+                                }
+                            }
+                            if let Some(r) = ctl.strip_prefix('X') {
+                                if let Ok(r) = r.parse::<u64>() {
+                                    repeat_count = r;
+                                }
+                            }
+                        }
+                    }
+                    bench_str = &bench_str[..start];
+                }
+            }
+            if repeat_count == 0 {
+                repeat_count = 1;
+            }
             benchs.push(BenchOperation {
-                benchmark_type: bench_str.as_str().into(),
-                warmup_count: 0, // TODO: support "[X11]" and "[W1231]"
-                repeat_count: 1,
+                benchmark_type: bench_str.into(),
+                warmup_count,
+                repeat_count,
             });
         }
         benchs
@@ -161,10 +190,10 @@ impl PhotonBench {
                 let mut task_ctx = task_ctx;
                 match task_ctx.op.benchmark_type {
                     BenchmarkType::FillRandom => {
-                        Self::do_write(&mut task_ctx, WriteMode::Random).await
+                        Self::do_write(&mut task_ctx, GenMode::Random).await
                     }
                     BenchmarkType::Fillseq => {
-                        Self::do_write(&mut task_ctx, WriteMode::Sequence).await
+                        Self::do_write(&mut task_ctx, GenMode::Sequence).await
                     }
                     BenchmarkType::ReadRandom => Self::do_read_random(&mut task_ctx).await,
                     _ => unimplemented!(),
@@ -199,21 +228,24 @@ impl PhotonBench {
 }
 
 impl PhotonBench {
-    async fn do_write(ctx: &mut TaskCtx, mode: WriteMode) {
+    async fn do_write(ctx: &mut TaskCtx, mode: GenMode) {
         let table = ctx.table.clone();
         let cfg = ctx.config.to_owned();
-        let op_cnt = if cfg.writes > 0 { cfg.writes } else { cfg.num };
+        let op_cnt = if cfg.writes >= 0 {
+            cfg.writes as u64
+        } else {
+            cfg.num
+        };
         let mut key_gen = KeyGenerator::new(mode, ctx.config.key_size, ctx.config.num, ctx.seed);
         let mut value_gen = ValueGenerator::new(
             ctx.config.value_size_distribution_type,
             ctx.config.value_size,
         );
-        let mut lsn = 0;
+        let lsn = 0;
         for _ in 0..op_cnt {
             let mut key = vec![0u8; ctx.config.key_size as usize];
             key_gen.generate_key(&mut key);
             let value = value_gen.generate_value();
-            lsn += 1;
             table.put(&key, lsn, value).await.unwrap();
 
             let bytes = key.len() + value.len() + std::mem::size_of::<u64>();
@@ -224,12 +256,52 @@ impl PhotonBench {
         }
     }
 
-    async fn do_read_random(_ctx: &mut TaskCtx) {
-        todo!()
+    async fn do_read_random(ctx: &mut TaskCtx) {
+        let table = ctx.table.clone();
+        let cfg = ctx.config.to_owned();
+        let op_cnt = if cfg.reads >= 0 {
+            cfg.reads as u64
+        } else {
+            cfg.num
+        };
+
+        let mut key_gen = KeyGenerator::new(
+            GenMode::Random,
+            ctx.config.key_size,
+            ctx.config.num,
+            ctx.seed,
+        );
+
+        let mut reads = 0;
+        let mut founds = 0;
+
+        let lsn = 0;
+        for _ in 0..op_cnt {
+            let mut key = vec![0u8; ctx.config.key_size as usize];
+            key_gen.generate_key(&mut key);
+            reads += 1;
+            if let Some(vlen) = table
+                .get(&key, lsn, |v| v.map(|v| v.len()))
+                .await
+                .expect("get key fail")
+            {
+                founds += 1;
+                let bytes = key.len() + vlen + std::mem::size_of::<u64>();
+                ctx.stats
+                    .borrow_mut()
+                    .finish_operation(OpType::Write, 1, 0, bytes as u64);
+            } else {
+                ctx.stats
+                    .borrow_mut()
+                    .finish_operation(OpType::Write, 0, 1, 0);
+            }
+        }
+        let msg = format!("({founds} of {reads} found)");
+        ctx.stats.borrow_mut().add_msg(&msg);
     }
 }
 
-enum WriteMode {
+enum GenMode {
     Random,
     Sequence,
 }
@@ -262,12 +334,12 @@ pub enum KeyGeneratorState {
 }
 
 impl KeyGenerator {
-    fn new(mode: WriteMode, key_size: u64, key_nums: u64, seed: u64) -> Self {
+    fn new(mode: GenMode, key_size: u64, key_nums: u64, seed: u64) -> Self {
         let state = Some(match mode {
-            WriteMode::Random => KeyGeneratorState::Random {
+            GenMode::Random => KeyGeneratorState::Random {
                 rng: SmallRng::seed_from_u64(seed),
             },
-            WriteMode::Sequence => KeyGeneratorState::Sequence { last: 0 },
+            GenMode::Sequence => KeyGeneratorState::Sequence { last: 0 },
         });
         let key_per_prefix = 0;
         let prefix_size = 0;
@@ -381,6 +453,8 @@ pub struct Stats {
     hist: HashMap<OpType, hdrhistogram::Histogram<u64>>,
 
     table: Table<Photon>,
+
+    msg: String,
 }
 
 impl Stats {
@@ -402,6 +476,7 @@ impl Stats {
             last_report_done_cnt: 0,
             hist: HashMap::new(),
             table,
+            msg: "".to_string(),
         }
     }
 
@@ -468,6 +543,14 @@ impl Stats {
         }
     }
 
+    fn add_msg(&mut self, msg: &str) {
+        if msg.is_empty() {
+            return;
+        }
+        self.msg.push(' ');
+        self.msg.push_str(msg);
+    }
+
     fn stop(&mut self) {
         let now = Instant::now();
         let elapsed = now.duration_since(self.start);
@@ -484,6 +567,9 @@ impl Stats {
         }
         if self.finish > o.finish {
             self.finish = o.finish
+        }
+        if !o.msg.is_empty() {
+            self.msg = o.msg.to_owned();
         }
         if self.config.hist {
             for (typ, histo) in &o.hist {
@@ -507,13 +593,14 @@ impl Stats {
         let elapsed = self.finish.as_ref().unwrap().duration_since(self.start);
         let bytes_rate = ((self.bytes / 1024 / 1024) as f64) / elapsed.as_secs_f64();
         println!(
-            "{:12?} : {:11.3} ms/op {} ops/sec, {} sec, {} ops; {} MiB/s",
+            "{:12?} : {:11.3} ms/op {} ops/sec, {} sec, {} ops; {} MiB/s {}",
             bench,
             (self.total_sec * 1000000) as f64 / (self.done_cnt as f64),
             (self.done_cnt as f64) / (elapsed.as_secs_f64()),
             elapsed.as_secs_f64(),
             self.done_cnt,
             bytes_rate,
+            self.msg,
         );
         let table_stats = self.table.stats();
         println!(

@@ -40,17 +40,21 @@ pub(crate) struct Args {
     num: u64,
 
     /// Number of key/value write op should be taken.
-    #[arg(short, long, default_value_t = 0)]
-    writes: u64,
+    #[arg(short, long, default_value_t = -1)]
+    writes: i64,
+
+    /// Number of key read op should be taken.
+    #[arg(short, long, default_value_t = -1)]
+    reads: i64,
 
     /// Number of concurrent threads to run.
     #[arg(short, long, default_value_t = 1)]
     threads: u64,
 
-    /// The operations to be bench(separate with space).
+    /// The operations to be bench(separate with comma).
     /// example: `fillseq,readseq[W1]` will fillseq then readseq with 1 warmup.
     #[arg(short, long)]
-    benchmarks: Vec<String>,
+    benchmarks: String,
 
     /// The store be used to bench.
     #[arg(short, long, default_value_t = StoreType::Photon)]
