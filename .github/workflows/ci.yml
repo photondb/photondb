@@ -33,7 +33,8 @@ jobs:
       with:
         command: test
         args: -- --nocapture
-      env: RUST_LOG=debug
+      env:
+        RUST_LOG: debug
 
   tests-on-macos:
     runs-on: macos-latest
