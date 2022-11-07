@@ -78,7 +78,7 @@ impl<E: Env> PageStore<E> {
         let table = PageTable::default();
         for file_id in files {
             let meta_reader = page_files.open_meta_reader(file_id).await?;
-            for (page_id, page_addr) in meta_reader.read_page_table().await? {
+            for (page_addr, page_id) in meta_reader.read_page_table().await? {
                 table.set(page_id, page_addr);
             }
         }
