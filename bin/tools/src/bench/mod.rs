@@ -21,7 +21,7 @@ pub(crate) struct Args {
 
     /// Size of each value in fixed distribution // TODO: support unfixed size
     /// value.
-    #[arg(short, long, default_value_t = 1000)]
+    #[arg(short, long, default_value_t = 100)]
     value_size: u64,
 
     /// Number of key/values to place in database.
