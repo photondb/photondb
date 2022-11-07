@@ -71,7 +71,7 @@ where
     }
 
     async fn gc(&mut self, version: &Arc<Version>) {
-        // Reclaimate deleted files in `cleaned_files`.
+        // Reclaim deleted files in `cleaned_files`.
         let cleaned_files = std::mem::take(&mut self.cleaned_files);
 
         // Ignore the strategy, pick and reclaimate empty page files directly.
