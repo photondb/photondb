@@ -95,15 +95,15 @@ impl<E: Env> FlushCtx<E> {
         );
 
         let mut files = self.apply_dealloc_pages(version, file_id, dealloc_pages);
-        let obsolated_files = drain_obsolated_files(&mut files, reclaimed_files);
+        let obsoleted_files = drain_obsoleted_files(&mut files, reclaimed_files);
         files.insert(file_id, file_info);
 
-        self.save_version_edit(version, file_id, &obsolated_files)
+        self.save_version_edit(version, file_id, &obsoleted_files)
             .await?;
 
         let delta = DeltaVersion {
             files,
-            obsolated_files,
+            obsoleted_files,
         };
 
         self.version_owner.install(delta);
@@ -149,9 +149,9 @@ impl<E: Env> FlushCtx<E> {
         &self,
         version: &Version,
         file_id: u32,
-        obsolated_files: &HashSet<u32>,
+        obsoleted_files: &HashSet<u32>,
     ) -> Result<()> {
-        let deleted_files = obsolated_files.iter().cloned().collect();
+        let deleted_files = obsoleted_files.iter().cloned().collect();
         let edit = VersionEdit {
             new_files: vec![NewFile {
                 id: file_id,
@@ -195,13 +195,13 @@ impl std::fmt::Display for FlushPageStats {
     }
 }
 
-/// Drain and return the obsolated files from active files.
+/// Drain and return the obsoleted files from active files.
 ///
-/// There exists two obsolated sources:
+/// There exists two obsoleted sources:
 /// 1. file is reclaimed (no active pages and dealloc pages has been rewritten).
 /// 2. all referenced files (dealloc pages referenced to) is not belongs to
 /// active files.
-fn drain_obsolated_files(
+fn drain_obsoleted_files(
     files: &mut HashMap<u32, FileInfo>,
     reclaimed_files: HashSet<u32>,
 ) -> HashSet<u32> {
@@ -211,14 +211,14 @@ fn drain_obsolated_files(
         .filter(|&id| !reclaimed_files.contains(id))
         .cloned()
         .collect::<HashSet<_>>();
-    let mut obsolated_files = reclaimed_files;
+    let mut obsoleted_files = reclaimed_files;
     for (id, info) in &mut *files {
-        if info.is_obsolated(&active_files) {
-            obsolated_files.insert(*id);
+        if info.is_obsoleted(&active_files) {
+            obsoleted_files.insert(*id);
         }
     }
-    files.drain_filter(|id, _| obsolated_files.contains(id));
-    obsolated_files
+    files.drain_filter(|id, _| obsoleted_files.contains(id));
+    obsoleted_files
 }
 
 fn assert_files_are_deletable(files: &HashMap<u32, FileInfo>, reclaimed_files: &HashSet<u32>) {
@@ -281,7 +281,7 @@ fn version_snapshot(version: &Version) -> VersionEdit {
 
     // FIXME: only the deleted files of the current version are recorded here, and
     // the files of previous versions are not recorded here.
-    let deleted_files = version.obsolated_files();
+    let deleted_files = version.obsoleted_files();
     VersionEdit {
         new_files,
         deleted_files,
@@ -296,7 +296,7 @@ mod tests {
         sync::Arc,
     };
 
-    use super::{drain_obsolated_files, FlushCtx};
+    use super::{drain_obsoleted_files, FlushCtx};
     use crate::{
         env::Photon,
         page_store::{
@@ -354,19 +354,19 @@ mod tests {
     }
 
     #[test]
-    fn obsolated_files_drain() {
-        // It drains all obsolated files.
+    fn obsoleted_files_drain() {
+        // It drains all obsoleted files.
         let mut files = HashMap::new();
-        files.insert(1, make_obsolated_file(1));
+        files.insert(1, make_obsoleted_file(1));
         files.insert(2, make_active_file(2, 32));
-        let obsolated_files = drain_obsolated_files(&mut files, HashSet::default());
-        assert!(obsolated_files.contains(&1));
-        assert!(!obsolated_files.contains(&2));
+        let obsoleted_files = drain_obsoleted_files(&mut files, HashSet::default());
+        assert!(obsoleted_files.contains(&1));
+        assert!(!obsoleted_files.contains(&2));
         assert!(files.contains_key(&2));
         assert!(!files.contains_key(&1));
     }
 
-    fn make_obsolated_file(id: u32) -> FileInfo {
+    fn make_obsoleted_file(id: u32) -> FileInfo {
         let active_pages = roaring::RoaringBitmap::new();
         let meta = FileMeta::new(id, 0, Vec::default(), BTreeMap::default(), 4096);
         FileInfo::new(active_pages, 0, id, id, HashSet::default(), Arc::new(meta))
@@ -380,17 +380,17 @@ mod tests {
     }
 
     #[test]
-    fn obsolated_files_skip_refering_files() {
+    fn obsoleted_files_skip_refering_files() {
         let mut files = HashMap::new();
         files.insert(1, make_active_file(1, 32));
-        files.insert(2, make_obsolated_file_but_refer_others(2, 1));
-        let obsolated_files = drain_obsolated_files(&mut files, HashSet::default());
-        assert!(obsolated_files.is_empty());
+        files.insert(2, make_obsoleted_file_but_refer_others(2, 1));
+        let obsoleted_files = drain_obsoleted_files(&mut files, HashSet::default());
+        assert!(obsoleted_files.is_empty());
         assert!(files.contains_key(&1));
         assert!(files.contains_key(&2));
     }
 
-    fn make_obsolated_file_but_refer_others(id: u32, refer: u32) -> FileInfo {
+    fn make_obsoleted_file_but_refer_others(id: u32, refer: u32) -> FileInfo {
         let active_pages = roaring::RoaringBitmap::new();
         let meta = FileMeta::new(id, 0, Vec::default(), BTreeMap::default(), 4096);
         let mut refers = HashSet::default();
@@ -399,18 +399,18 @@ mod tests {
     }
 
     #[test]
-    fn obsolated_files_drain_reclaimed() {
+    fn obsoleted_files_drain_reclaimed() {
         let mut files = HashMap::new();
-        files.insert(1, make_obsolated_file(1));
-        files.insert(2, make_obsolated_file_but_refer_others(2, 1));
+        files.insert(1, make_obsoleted_file(1));
+        files.insert(2, make_obsoleted_file_but_refer_others(2, 1));
         files.insert(3, make_active_file(2, 32));
 
         let mut reclaimed_files = HashSet::new();
         reclaimed_files.insert(2);
-        let obsolated_files = drain_obsolated_files(&mut files, reclaimed_files);
-        assert!(obsolated_files.contains(&1));
-        assert!(obsolated_files.contains(&2));
-        assert!(!obsolated_files.contains(&3));
+        let obsoleted_files = drain_obsoleted_files(&mut files, reclaimed_files);
+        assert!(obsoleted_files.contains(&1));
+        assert!(obsoleted_files.contains(&2));
+        assert!(!obsoleted_files.contains(&3));
         assert!(!files.contains_key(&1));
         assert!(!files.contains_key(&2));
         assert!(files.contains_key(&3));
