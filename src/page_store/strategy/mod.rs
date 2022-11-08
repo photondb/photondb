@@ -110,15 +110,20 @@ impl StrategyBuilder for MinDeclineRateStrategyBuilder {
 }
 
 pub(crate) fn decline_rate(file_info: &FileInfo, now: u32) -> f64 {
+    let num_active_pages = file_info.num_active_pages();
+    if num_active_pages == 0 {
+        return f64::MAX;
+    }
+
     let file_size = file_info.file_size();
     let free_size = file_size - file_info.effective_size();
     if free_size == 0 || file_info.up2() == now {
         return 0.0;
     }
 
+    let num_active_pages = num_active_pages as f64;
     let file_size = file_size as f64;
     let free_size = free_size as f64;
-    let num_active_pages = file_info.num_active_pages() as f64;
     let up2 = file_info.up2() as f64;
     let now = now as f64;
 
