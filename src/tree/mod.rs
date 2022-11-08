@@ -367,6 +367,10 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
     // Splits the page into two halves.
     async fn split_page(&self, view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
+        // We can only split base data pages.
+        if !view.page.kind().is_data() || view.page.chain_next() != 0 {
+            return Err(Error::InvalidArgument);
+        }
         match view.page.tier() {
             PageTier::Leaf => self.split_page_impl::<Key, Value>(view, parent).await,
             PageTier::Inner => self.split_page_impl::<&[u8], Index>(view, parent).await,
@@ -382,49 +386,100 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         K: SortedPageKey,
         V: SortedPageValue,
     {
-        // We can only split base data pages.
-        if !view.page.kind().is_data() || view.page.chain_next() != 0 {
-            return Err(Error::InvalidArgument);
+        if view.id == ROOT_ID {
+            return self.split_root_impl::<K, V>(view).await;
         }
 
         let page = SortedPageRef::<K, V>::from(view.page);
-        if let Some((split_key, _, right_iter)) = page.into_split_iter() {
-            let mut txn = self.guard.begin();
-            // Build and insert the right page.
-            let right_id = {
-                let builder = SortedPageBuilder::new(view.page.tier(), view.page.kind())
-                    .with_iter(right_iter);
-                let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
-                builder.build(&mut new_page);
-                txn.insert_page(new_addr)
-            };
-            // Build a delta page with the right index.
-            let delta = (split_key.as_raw(), Index::new(right_id, 0));
+        let Some((split_key, _, right_iter)) = page.into_split_iter() else {
+            return Ok(());
+        };
+
+        let mut txn = self.guard.begin();
+        // Build and insert the right page.
+        let right_id = {
             let builder =
-                SortedPageBuilder::new(view.page.tier(), PageKind::Split).with_item(delta);
+                SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(right_iter);
             let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
             builder.build(&mut new_page);
-            // Update the left page with the delta.
-            // The page epoch must be updated to indicate the change of the page range.
-            new_page.set_epoch(view.page.epoch() + 1);
-            new_page.set_chain_len(view.page.chain_len().saturating_add(1));
-            new_page.set_chain_next(view.addr);
-            txn.update_page(view.id, view.addr, new_addr)
-                .map(|_| {
-                    trace!("split page {:?} with delta {:?}", view, delta);
-                    self.tree.stats.success.split_page.inc();
-                    view.addr = new_addr;
-                    view.page = new_page.into();
-                })
-                .map_err(|_| {
-                    self.tree.stats.conflict.split_page.inc();
-                    Error::Again
-                })?;
-        }
+            txn.insert_page(new_addr)
+        };
+        // Build a delta page with the right index.
+        let delta = (split_key.as_raw(), Index::new(right_id, 0));
+        let builder = SortedPageBuilder::new(view.page.tier(), PageKind::Split).with_item(delta);
+        let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+        builder.build(&mut new_page);
+        // Update the left page with the delta.
+        // The page epoch must be updated to indicate the change of the page range.
+        new_page.set_epoch(view.page.epoch() + 1);
+        new_page.set_chain_len(view.page.chain_len().saturating_add(1));
+        new_page.set_chain_next(view.addr);
+        txn.update_page(view.id, view.addr, new_addr)
+            .map(|_| {
+                trace!("split page {:?} with delta {:?}", view, delta);
+                self.tree.stats.success.split_page.inc();
+                view.addr = new_addr;
+                view.page = new_page.into();
+            })
+            .map_err(|_| {
+                self.tree.stats.conflict.split_page.inc();
+                Error::Again
+            })?;
 
         // Try to reconcile the page after a split.
         let _ = self.reconcile_page(view, parent).await;
         Ok(())
+    }
+
+    async fn split_root_impl<K, V>(&self, view: PageView<'_>) -> Result<()>
+    where
+        K: SortedPageKey,
+        V: SortedPageValue,
+    {
+        assert_eq!(view.id, ROOT_ID);
+        assert_eq!(view.page.epoch(), 0);
+        assert_eq!(view.page.chain_len(), 0);
+
+        let page = SortedPageRef::<K, V>::from(view.page);
+        let Some((split_key, left_iter, right_iter)) = page.into_split_iter() else {
+            return Ok(());
+        };
+
+        let mut txn = self.guard.begin();
+        // Build and insert the left page.
+        let left_id = {
+            let builder =
+                SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(left_iter);
+            let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+            builder.build(&mut new_page);
+            txn.insert_page(new_addr)
+        };
+        // Build and insert the right page.
+        let right_id = {
+            let builder =
+                SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(right_iter);
+            let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+            builder.build(&mut new_page);
+            txn.insert_page(new_addr)
+        };
+        // Build a delta page with the right index.
+        let delta = [
+            ([].as_slice(), Index::new(left_id, 0)),
+            (split_key.as_raw(), Index::new(right_id, 0)),
+        ];
+        let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data).with_slice(&delta);
+        let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+        builder.build(&mut new_page);
+        // Replace and deallocate the original root.
+        txn.replace_page(view.id, view.addr, new_addr, &[view.addr])
+            .map(|_| {
+                trace!("split root {:?} with delta {:?}", view, delta);
+                self.tree.stats.success.split_page.inc();
+            })
+            .map_err(|_| {
+                self.tree.stats.conflict.split_page.inc();
+                Error::Again
+            })
     }
 
     /// Reconciles any conflicts on the page.
@@ -434,8 +489,6 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             PageKind::Split => {
                 if let Some(parent) = parent {
                     self.reconcile_split_page(view, parent).await
-                } else if view.id == ROOT_ID {
-                    self.reconcile_split_root(view).await
                 } else {
                     Err(Error::InvalidArgument)
                 }
@@ -501,41 +554,6 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             let _ = self.consolidate_page(parent).await;
         }
         Ok(())
-    }
-
-    // Reconciles a pending split on the root page.
-    async fn reconcile_split_root(&self, view: PageView<'_>) -> Result<()> {
-        assert_eq!(view.id, ROOT_ID);
-        let mut txn = self.guard.begin();
-        // Move the root to another place.
-        let root = view.page;
-        let left_id = {
-            // The transaction requires that inserted pages must be allocated by it.
-            // So we allocates an empty delta page here.
-            let iter: ItemIter<(Key, Value)> = None.into();
-            let builder = SortedPageBuilder::new(root.tier(), PageKind::Data).with_iter(iter);
-            let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
-            builder.build(&mut new_page);
-            new_page.set_epoch(root.epoch());
-            new_page.set_chain_len(root.chain_len().saturating_add(1));
-            new_page.set_chain_next(view.addr);
-            txn.insert_page(new_addr)
-        };
-        let left_key = [].as_slice();
-        let left_index = Index::new(left_id, root.epoch());
-        let (split_key, split_index) = split_delta_from_page(root);
-        // Build a new root with the original root on the left and the new split page on
-        // the right.
-        let delta = [(left_key, left_index), (split_key, split_index)];
-        let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data).with_slice(&delta);
-        let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
-        builder.build(&mut new_page);
-        // Update the original root with the new root.
-        txn.update_page(view.id, view.addr, new_addr)
-            .map(|_| {
-                trace!("reconciled split root {:?} with delta {:?}", view, delta);
-            })
-            .map_err(|_| Error::Again)
     }
 
     /// Rewrites the page to reclaim its space.
