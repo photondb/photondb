@@ -1,13 +1,13 @@
 [package]
 name = "photondb-tools"
-version = "0.0.1"
-edition = "2021"
-license = "MIT"
-authors = ["The PhotonDB Authors"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
 
 [dependencies]
-photondb = { path = "../../", version = "0.0.1" }
-
 async-trait = "0.1.57"
 bitflags = "1.3.2"
 clap = { version = "4.0.18", features = ["derive"] }
@@ -15,7 +15,8 @@ env_logger = "0.9.1"
 futures = "0.3.24"
 log = "0.4.17"
 hdrhistogram = "7.5.2"
-photonio = { git = "https://github.com/photondb/photonio.git", version = "0.0.5" }
+photonio = { workspace = true }
+photondb = { path = "../photondb", version = "0.0.1" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 thiserror = "1.0.37"
 chrono = "0.4"
