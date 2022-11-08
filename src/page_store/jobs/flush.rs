@@ -50,14 +50,7 @@ impl<E: Env> FlushCtx<E> {
     pub(crate) async fn run(mut self) {
         loop {
             let version = self.version_owner.current();
-            let write_buffer = {
-                let current = version.buffer_set.current();
-                let file_id = current.min_file_id();
-                current
-                    .write_buffer(file_id)
-                    .expect("WriteBuffer must exists")
-                    .clone()
-            };
+            let write_buffer = version.min_write_buffer();
 
             // If the [`WriteBuffer`] can be flushed, then it should continue because
             // [`Notify`] is single permits. But this may also lead to [`WriteBuffer`]
