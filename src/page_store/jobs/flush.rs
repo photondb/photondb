@@ -272,7 +272,7 @@ fn collect_dealloc_pages_and_stats(
 fn version_snapshot(version: &Version) -> VersionEdit {
     let new_files: Vec<NewFile> = version.files().values().map(Into::into).collect::<Vec<_>>();
 
-    // FIXME: only the deleted files of the current version are recorded here, and
+    // NOTE: Only the deleted files of the current version are recorded here, and
     // the files of previous versions are not recorded here.
     let deleted_files = version.obsoleted_files();
     VersionEdit {
