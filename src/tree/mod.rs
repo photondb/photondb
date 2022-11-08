@@ -388,7 +388,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
 
         let page = SortedPageRef::<K, V>::from(view.page);
-        if let Some((split_key, right_iter)) = page.into_split_iter() {
+        if let Some((split_key, _, right_iter)) = page.into_split_iter() {
             let mut txn = self.guard.begin();
             // Build and insert the right page.
             let right_id = {
