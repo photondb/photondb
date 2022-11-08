@@ -5,7 +5,7 @@ use clap::{Parser, ValueEnum};
 mod error;
 pub(crate) use error::Result;
 
-mod bench;
+mod benchmark;
 
 #[derive(Parser, Debug, Clone)]
 #[clap(about = "Start bench testing")]
@@ -19,14 +19,37 @@ pub(crate) struct Args {
     #[arg(short, long, default_value_t = 16)]
     key_size: u64,
 
+    // Controls the key num for per prefix, 0 mean no prefix.
+    #[arg(long, default_value_t = 0)]
+    keys_per_prefix: u64,
+
+    // Prefix size of the key, it works with `keys_per_prefix`.
+    #[arg(long, default_value_t = 0)]
+    key_prefix_size: u64,
+
     /// Size of each value in fixed distribution // TODO: support unfixed size
     /// value.
     #[arg(short, long, default_value_t = 100)]
     value_size: u64,
 
+    #[arg(long, default_value_t = ValueSizeDistributionType::Fixed)]
+    value_size_distribution_type: ValueSizeDistributionType,
+
     /// Number of key/values to place in database.
     #[arg(short, long, default_value_t = 1000000)]
     num: u64,
+
+    /// Number of key/value write op should be taken.
+    #[arg(short, long, default_value_t = -1)]
+    writes: i64,
+
+    /// Number of key read op should be taken.
+    #[arg(short, long, default_value_t = -1)]
+    reads: i64,
+
+    /// Number of key read+write paire op should be taken.
+    #[arg(long, default_value_t = -1)]
+    read_writes: i64,
 
     /// Number of concurrent threads to run.
     #[arg(short, long, default_value_t = 1)]
@@ -35,7 +58,7 @@ pub(crate) struct Args {
     /// The operations to be bench(separate with comma).
     /// example: `fillseq,readseq[W1]` will fillseq then readseq with 1 warmup.
     #[arg(short, long)]
-    benchmarks: Vec<String>,
+    benchmarks: String,
 
     /// The store be used to bench.
     #[arg(short, long, default_value_t = StoreType::Photon)]
@@ -46,6 +69,24 @@ pub(crate) struct Args {
     /// will fail. default: false,
     #[arg(long, default_value_t = false)]
     use_existing_db: bool,
+
+    /// Stats are reported every N operations when this is greater than 0.
+    #[arg(long, default_value_t = 0)]
+    stats_interval: u64,
+
+    /// Stats's report interval should not great then every N sec when this is
+    /// greater than 0.
+    #[arg(long, default_value_t = 0)]
+    stats_interval_sec: u64,
+
+    /// Base seed for random.
+    /// derived from the current time when it's 0.
+    #[arg(long, default_value_t = 0)]
+    seed_base: u64,
+
+    // Enable collect histogram.
+    #[arg(long, default_value_t = false)]
+    hist: bool,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -60,7 +101,9 @@ enum BenchmarkType {
     Fillseq,
     FillRandom,
     ReadSeq,
-    WriteRandom,
+    ReadRandom,
+    UpdateRandom,
+    ReadRandomWriteRandom,
 }
 
 impl From<&str> for BenchmarkType {
@@ -69,7 +112,9 @@ impl From<&str> for BenchmarkType {
             "fillseq" => BenchmarkType::Fillseq,
             "fillrandom" => BenchmarkType::FillRandom,
             "readseq" => BenchmarkType::ReadSeq,
-            "writerandom" => BenchmarkType::WriteRandom,
+            "readrandom" => BenchmarkType::ReadRandom,
+            "updaterandom" => BenchmarkType::UpdateRandom,
+            "readrandomwriterandom" => BenchmarkType::ReadRandomWriteRandom,
             _ => panic!("invalid benchmark type"),
         }
     }
@@ -88,7 +133,22 @@ impl fmt::Display for StoreType {
     }
 }
 
+#[derive(ValueEnum, Clone, Debug, Copy)]
+enum ValueSizeDistributionType {
+    Fixed,
+    Uniform,
+}
+
+impl fmt::Display for ValueSizeDistributionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ValueSizeDistributionType::Fixed => "fixed",
+            ValueSizeDistributionType::Uniform => "uniform",
+        })
+    }
+}
+
 pub(crate) async fn run(config: Args) -> Result<()> {
-    let mut bench = bench::Benchmark::new(config);
+    let mut bench = benchmark::Benchmark::new(config);
     bench.run().await
 }
