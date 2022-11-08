@@ -375,6 +375,36 @@ pub(crate) mod facade {
         }
 
         #[photonio::test]
+        fn test_query_page_id_by_addr() {
+            let env = crate::env::Photon;
+            let files = {
+                let base = std::env::temp_dir();
+                PageFiles::new(env, &base, "test_query_id_by_addr").await
+            };
+            let file_id = 1;
+            let page_addr1 = page_addr(file_id, 0);
+            let page_addr2 = page_addr(file_id, 1);
+            let page_addr3 = page_addr(file_id, 2);
+
+            {
+                let mut b = files.new_file_builder(file_id).await.unwrap();
+                b.add_page(1, page_addr1, &[1].repeat(10)).await.unwrap();
+                b.add_page(1, page_addr2, &[2].repeat(10)).await.unwrap();
+                b.add_page(2, page_addr3, &[3].repeat(10)).await.unwrap();
+                let file_info = b.finish().await.unwrap();
+                assert!(file_info.get_page_handle(page_addr1).is_some())
+            }
+
+            {
+                let meta_reader = files.open_meta_reader(file_id).await.unwrap();
+                let page_table = meta_reader.read_page_table().await.unwrap();
+                assert_eq!(*page_table.get(&page_addr1).unwrap(), 1);
+                assert_eq!(*page_table.get(&page_addr2).unwrap(), 1);
+                assert_eq!(*page_table.get(&page_addr3).unwrap(), 2);
+            }
+        }
+
+        #[photonio::test]
         fn test_get_child_page() {
             let env = crate::env::Photon;
             let files = {

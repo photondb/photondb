@@ -66,7 +66,7 @@ impl<'a, E: Env> FileBuilder<'a, E> {
     ) -> Result<()> {
         let file_offset = self.writer.write(page_content).await?;
         self.index.add_data_block(page_addr, file_offset);
-        self.meta.add_page(page_id, page_addr);
+        self.meta.add_page(page_addr, page_id);
         Ok(())
     }
 
@@ -245,8 +245,8 @@ struct MetaBlockBuilder {
 }
 
 impl MetaBlockBuilder {
-    pub(crate) fn add_page(&mut self, page_id: u64, page_addr: u64) {
-        self.page_table.0.insert(page_id, page_addr);
+    pub(crate) fn add_page(&mut self, page_addr: u64, page_id: u64) {
+        self.page_table.0.insert(page_addr, page_id);
     }
 
     pub(crate) fn delete_pages(&mut self, page_addrs: &[u64]) {
@@ -270,7 +270,7 @@ impl MetaBlockBuilder {
 }
 
 #[derive(Default)]
-pub(crate) struct PageTable(BTreeMap<u64, u64>);
+pub(crate) struct PageTable(BTreeMap<u64 /* page addr */, u64 /* page id */>);
 
 impl PageTable {
     fn encode(&self) -> Vec<u8> {
