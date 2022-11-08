@@ -30,8 +30,7 @@ impl<E: Env> PageStore<E> {
         let file_infos = Self::recover_file_infos(&page_files, &summary.active_files).await?;
         let page_table = Self::recover_page_table(&page_files, &summary.active_files).await?;
 
-        let deleted_files = summary.obsoleted_files.into_iter().collect::<Vec<_>>();
-        page_files.remove_files(deleted_files).await?;
+        Self::delete_unreferenced_page_files(&page_files, &summary).await?;
 
         let next_file_id = summary.active_files.keys().cloned().max().unwrap_or(0) + 1;
         Ok((next_file_id, manifest, page_table, page_files, file_infos))
@@ -83,5 +82,20 @@ impl<E: Env> PageStore<E> {
             }
         }
         Ok(table)
+    }
+
+    async fn delete_unreferenced_page_files(
+        page_files: &PageFiles<E>,
+        summary: &FilesSummary,
+    ) -> Result<()> {
+        let mut obsoleted_files = summary.obsoleted_files.clone();
+        for file_id in page_files.list_page_files()? {
+            if !summary.active_files.contains_key(&file_id) {
+                obsoleted_files.insert(file_id);
+            }
+        }
+        let deleted_files = obsoleted_files.into_iter().collect::<Vec<_>>();
+        page_files.remove_files(deleted_files).await?;
+        Ok(())
     }
 }

@@ -152,6 +152,26 @@ pub(crate) mod facade {
                 .expect("remove file failed");
             Ok(())
         }
+
+        pub(crate) fn list_page_files(&self) -> Result<Vec<u32>> {
+            use std::os::unix::ffi::OsStrExt;
+            let prefix = format!("{}_", self.file_prefix).into_bytes();
+            let dir = self.env.read_dir(&self.base)?;
+            let mut files = Vec::default();
+            for entry in dir {
+                let file_name = entry?.file_name();
+                let bytes = file_name.as_bytes();
+                if !bytes.starts_with(&prefix) {
+                    continue;
+                }
+                if let Ok(file_id) = String::from_utf8_lossy(&bytes[prefix.len()..]).parse::<u32>()
+                {
+                    files.push(file_id);
+                }
+            }
+
+            Ok(files)
+        }
     }
 
     #[cfg(test)]
@@ -433,6 +453,31 @@ pub(crate) mod facade {
                 let file1 = recovery_mock_version.get(&1).unwrap();
                 assert!(file1.get_page_handle(page_addr1).is_some())
             }
+        }
+
+        #[photonio::test]
+        async fn test_list_page_files() {
+            async fn new_file(files: &PageFiles<crate::env::Photon>, file_id: u32) {
+                let mut b = files.new_file_builder(file_id).await.unwrap();
+                b.finish().await.unwrap();
+            }
+
+            let env = crate::env::Photon;
+            let files = {
+                let base = std::env::temp_dir();
+                PageFiles::new(env, &base, "test_get_child_page").await
+            };
+            new_file(&files, 0).await;
+            new_file(&files, 1).await;
+            new_file(&files, 3).await;
+            new_file(&files, 5).await;
+            new_file(&files, 7).await;
+            new_file(&files, 9).await;
+            new_file(&files, 123321).await;
+            new_file(&files, u32::MAX).await;
+            let mut files = files.list_page_files().unwrap();
+            files.sort_unstable();
+            assert_eq!(files, vec![0, 1, 3, 5, 7, 9, 123321, u32::MAX]);
         }
 
         fn page_addr(file_id: u32, index: u32) -> u64 {

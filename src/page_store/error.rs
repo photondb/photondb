@@ -8,6 +8,8 @@ pub(crate) enum Error {
     Corrupted,
     #[error("Invalid argument")]
     InvalidArgument,
+    #[error("IO {0}")]
+    Io(#[from] std::io::Error),
 }
 
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
