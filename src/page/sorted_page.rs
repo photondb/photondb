@@ -1,4 +1,11 @@
-use std::{borrow::Borrow, cmp::Ordering, marker::PhantomData, mem, ops::Deref, slice};
+use std::{
+    borrow::Borrow,
+    cmp::Ordering,
+    marker::PhantomData,
+    mem,
+    ops::{Deref, Range},
+    slice,
+};
 
 use super::{
     codec::*, data::*, ItemIter, PageBuf, PageBuilder, PageKind, PageRef, PageTier,
@@ -208,19 +215,28 @@ where
 
     /// Finds a separator to split the page into two halves.
     ///
-    /// If a split separator is found then [`Result::Ok`] is returned,
-    /// containing the separator and an iterator over the items at and after
-    /// the separator.
-    pub(crate) fn into_split_iter(self) -> Option<(K, SortedPageIter<'a, K, V>)> {
-        if let Some((mid, _)) = self.get(self.len() / 2) {
+    /// If a split separator is found, returns [`Option::Some`] with the split
+    /// separator, an iterator over items before the separator, and another
+    /// iterator over items at or after the separator.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn into_split_iter(
+        self,
+    ) -> Option<(
+        K,
+        SortedPageRangeIter<'a, K, V>,
+        SortedPageRangeIter<'a, K, V>,
+    )> {
+        let len = self.len();
+        if let Some((mid, _)) = self.get(len / 2) {
             let sep = mid.as_split_separator();
             let index = match self.rank(&sep) {
                 Ok(i) => i,
                 Err(i) => i,
             };
             if index > 0 {
-                let iter = SortedPageIter::new(self, index);
-                return Some((sep, iter));
+                let left_iter = SortedPageRangeIter::new(self.clone(), 0..index);
+                let right_iter = SortedPageRangeIter::new(self, index..len);
+                return Some((sep, left_iter, right_iter));
             }
         }
         None
@@ -263,19 +279,13 @@ where
 #[derive(Clone)]
 pub(crate) struct SortedPageIter<'a, K, V> {
     page: SortedPageRef<'a, K, V>,
-    init: usize,
     next: usize,
 }
 
 impl<'a, K, V> SortedPageIter<'a, K, V> {
-    /// Creates a [`SortedPageIter`] over items in the given page, starting from
-    /// the initial index.
-    pub(crate) fn new(page: SortedPageRef<'a, K, V>, init: usize) -> Self {
-        Self {
-            page,
-            init,
-            next: init,
-        }
+    /// Creates a [`SortedPageIter`] over items in the given page.
+    pub(crate) fn new(page: SortedPageRef<'a, K, V>) -> Self {
+        Self { page, next: 0 }
     }
 }
 
@@ -286,7 +296,7 @@ where
     T: Into<SortedPageRef<'a, K, V>>,
 {
     fn from(page: T) -> Self {
-        Self::new(page.into(), 0)
+        Self::new(page.into())
     }
 }
 
@@ -313,7 +323,7 @@ where
     V: SortedPageValue,
 {
     fn rewind(&mut self) {
-        self.next = self.init;
+        self.next = 0;
     }
 }
 
@@ -350,6 +360,51 @@ where
                 false
             }
         }
+    }
+}
+
+/// An iterator over a range of items in a sorted page.
+#[derive(Clone)]
+pub(crate) struct SortedPageRangeIter<'a, K, V> {
+    page: SortedPageRef<'a, K, V>,
+    range: Range<usize>,
+    index: usize,
+}
+
+impl<'a, K, V> SortedPageRangeIter<'a, K, V> {
+    /// Creates a [`SortedPageRangeIter`] over a range of items in the given
+    /// page.
+    pub(crate) fn new(page: SortedPageRef<'a, K, V>, range: Range<usize>) -> Self {
+        let index = range.start;
+        Self { page, range, index }
+    }
+}
+
+impl<'a, K, V> Iterator for SortedPageRangeIter<'a, K, V>
+where
+    K: SortedPageKey,
+    V: SortedPageValue,
+{
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index < self.range.end {
+            if let Some(item) = self.page.get(self.index) {
+                self.index += 1;
+                return Some(item);
+            }
+        }
+        None
+    }
+}
+
+impl<'a, K, V> RewindableIterator for SortedPageRangeIter<'a, K, V>
+where
+    K: SortedPageKey,
+    V: SortedPageValue,
+{
+    fn rewind(&mut self) {
+        self.index = self.range.start;
     }
 }
 
@@ -510,17 +565,22 @@ mod tests {
     fn sorted_page_split() {
         // The middle key is ([3], 2), but it should split at ([3], 3).
         let data = key_slice(&[([1], 2), ([1], 1), ([3], 3), ([3], 2), ([3], 1), ([3], 0)]);
-        let split_data = key_slice(&[([3], 3), ([3], 2), ([3], 1), ([3], 0)]);
+        let left_data = key_slice(&[([1], 2), ([1], 1)]);
+        let right_data = key_slice(&[([3], 3), ([3], 2), ([3], 1), ([3], 0)]);
         let owned_page = OwnedSortedPage::from_slice(&data);
 
         let page = owned_page.as_ref();
-        let (split_key, mut split_iter) = page.into_split_iter().unwrap();
+        let (split_key, mut left_iter, mut right_iter) = page.into_split_iter().unwrap();
         assert_eq!(split_key, Key::new(&[3], u64::MAX));
         for _ in 0..2 {
-            for (a, b) in (&mut split_iter).zip(split_data.clone()) {
+            for (a, b) in (&mut left_iter).zip(left_data.clone()) {
                 assert_eq!(a, b);
             }
-            split_iter.rewind();
+            left_iter.rewind();
+            for (a, b) in (&mut right_iter).zip(right_data.clone()) {
+                assert_eq!(a, b);
+            }
+            right_iter.rewind();
         }
     }
 
