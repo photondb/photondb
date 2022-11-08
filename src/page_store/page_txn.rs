@@ -50,6 +50,7 @@ impl<'a, E: Env> Guard<'a, E> {
         PageTxn {
             guard: self,
             file_id,
+            hold_write_guard: false,
             records: HashMap::default(),
             page_ids: Vec::default(),
         }
@@ -120,6 +121,7 @@ where
     guard: &'a Guard<'a, E>,
 
     file_id: u32,
+    hold_write_guard: bool,
     records: HashMap<u64 /* page addr */, &'a mut RecordHeader>,
     page_ids: Vec<u64>,
 }
@@ -242,15 +244,6 @@ impl<'a, E: Env> PageTxn<'a, E> {
         Ok(())
     }
 
-    /// Commits the transaction.
-    pub(crate) fn commit(mut self) {
-        self.page_ids.clear();
-        if !self.records.is_empty() {
-            self.records.clear();
-            self.drop_writer_guard();
-        }
-    }
-
     fn seal_write_buffer(&mut self) {
         let release_state = {
             let buffer_set = self.guard.version.buffer_set.current();
@@ -276,39 +269,37 @@ impl<'a, E: Env> PageTxn<'a, E> {
     }
 
     #[inline]
-    fn is_first_op(&self) -> bool {
-        self.records.is_empty()
-    }
-
-    #[inline]
     fn alloc_page_impl(
         &mut self,
         page_size: u32,
     ) -> Result<(u64, &'a mut RecordHeader, PageBuf<'a>)> {
-        let is_first_op = self.is_first_op();
-        self.with_write_buffer(|write_buffer| unsafe {
+        self.with_write_guard(|buf, is_first_op| unsafe {
             // Safety: [`guard`] guarantees the lifetime of the page reference.
-            write_buffer.alloc_page(NAN_ID, page_size, is_first_op)
+            buf.alloc_page(NAN_ID, page_size, is_first_op)
         })
     }
 
     #[inline]
     fn dealloc_pages_impl(&mut self, page_addrs: &[u64]) -> Result<&'a mut RecordHeader> {
-        let is_first_op = self.is_first_op();
-        self.with_write_buffer(|write_buffer| unsafe {
+        self.with_write_guard(|buf, is_first_op| unsafe {
             // Safety: [`guard`] guarantees the lifetime of the page reference.
-            write_buffer.dealloc_pages(page_addrs, is_first_op)
+            buf.dealloc_pages(page_addrs, is_first_op)
         })
     }
 
     #[inline]
-    fn with_write_buffer<F, O>(&mut self, f: F) -> Result<O>
+    fn with_write_guard<F, O>(&mut self, f: F) -> Result<O>
     where
-        F: FnOnce(&WriteBuffer) -> Result<O>,
+        F: FnOnce(&WriteBuffer, bool) -> Result<O>,
     {
+        let is_first_op = !self.hold_write_guard;
         self.guard
             .version
-            .with_write_buffer(self.file_id, f)
+            .with_write_buffer(self.file_id, |buf| f(buf, is_first_op))
+            .map(|val| {
+                self.hold_write_guard = true;
+                val
+            })
             .map_err(|err| {
                 assert!(matches!(err, Error::Again));
                 self.seal_write_buffer();
@@ -316,15 +307,26 @@ impl<'a, E: Env> PageTxn<'a, E> {
             })
     }
 
+    /// Commits the transaction.
+    pub(crate) fn commit(mut self) {
+        self.page_ids.clear();
+        if self.hold_write_guard {
+            self.records.clear();
+            self.drop_writer_guard();
+            self.hold_write_guard = false;
+        }
+    }
+
     #[inline]
     fn drop_writer_guard(&mut self) {
-        let release_state =
-            self.guard
-                .version
-                .with_write_buffer(self.file_id, |write_buffer| unsafe {
-                    // Safety: all mutable references are released.
-                    write_buffer.release_writer()
-                });
+        assert!(self.hold_write_guard);
+        let release_state = self
+            .guard
+            .version
+            .with_write_buffer(self.file_id, |buf| unsafe {
+                // Safety: all mutable references are released.
+                buf.release_writer()
+            });
         if matches!(release_state, ReleaseState::Flush) {
             self.guard.version.buffer_set.notify_flush_job();
         }
@@ -338,7 +340,7 @@ impl<'a, E: Env> Drop for PageTxn<'a, E> {
             unsafe { self.guard.page_table.dealloc(*id) };
         }
 
-        if !self.records.is_empty() {
+        if self.hold_write_guard {
             for header in self.records.values_mut() {
                 header.set_tombstone();
             }
@@ -369,12 +371,14 @@ mod tests {
 
         let version = new_version(512);
         let page_table = PageTable::default();
-        let guard = Guard::new(version, &page_table, &files);
+        let guard = Guard::new(version.clone(), &page_table, &files);
         let mut page_txn = guard.begin();
         let (addr, _) = page_txn.alloc_page(123).unwrap();
         let id = page_txn.insert_page(addr);
         let (new, _) = page_txn.alloc_page(123).unwrap();
         assert!(page_txn.update_page(id, addr, new).is_ok());
+
+        assert_current_buffer_is_flushable(version);
     }
 
     #[photonio::test]
@@ -387,7 +391,7 @@ mod tests {
 
         let version = new_version(1 << 10);
         let page_table = PageTable::default();
-        let guard = Guard::new(version, &page_table, &files);
+        let guard = Guard::new(version.clone(), &page_table, &files);
 
         // insert old page.
         let mut page_txn = guard.begin();
@@ -400,6 +404,8 @@ mod tests {
         let mut page_txn = guard.begin();
         let (addr, _) = page_txn.alloc_page(123).unwrap();
         assert!(page_txn.update_page(id, 1, addr).is_err());
+
+        assert_current_buffer_is_flushable(version);
     }
 
     #[photonio::test]
@@ -427,12 +433,14 @@ mod tests {
 
         let version = new_version(1 << 10);
         let page_table = PageTable::default();
-        let guard = Guard::new(version, &page_table, &files);
+        let guard = Guard::new(version.clone(), &page_table, &files);
         let mut page_txn = guard.begin();
         let (addr, _) = page_txn.alloc_page(123).unwrap();
         let id = page_txn.insert_page(addr);
         let (new, _) = page_txn.alloc_page(123).unwrap();
         assert!(page_txn.replace_page(id, addr, new, &[1, 2, 3]).is_ok());
+
+        assert_current_buffer_is_flushable(version);
     }
 
     #[photonio::test]
@@ -455,7 +463,7 @@ mod tests {
         let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(env, &base, "test_page_seal_write_buffer").await)
+            Arc::new(PageFiles::new(env, &base, "test_page_seal_write_buffer_twice").await)
         };
 
         let version = new_version(512);
@@ -469,6 +477,7 @@ mod tests {
 
     #[photonio::test]
     async fn page_txn_insert_page() {
+        env_logger::init();
         let env = crate::env::Photon;
         let files = {
             let base = std::env::temp_dir();
@@ -477,12 +486,20 @@ mod tests {
 
         let version = new_version(512);
         let page_table = PageTable::default();
-        let guard = Guard::new(version, &page_table, &files);
+        let guard = Guard::new(version.clone(), &page_table, &files);
         let mut page_txn = guard.begin();
         let (addr, _) = page_txn.alloc_page(123).unwrap();
         let id = page_txn.insert_page(addr);
         page_txn.commit();
 
         assert_eq!(page_table.get(id), addr);
+        assert_current_buffer_is_flushable(version);
+    }
+
+    fn assert_current_buffer_is_flushable(version: Arc<Version>) {
+        let current = version.buffer_set.current();
+        let buf = current.last_writer_buffer().clone();
+        buf.seal().unwrap();
+        assert!(buf.is_flushable());
     }
 }
