@@ -498,7 +498,7 @@ mod tests {
 
     fn assert_current_buffer_is_flushable(version: Arc<Version>) {
         let current = version.buffer_set.current();
-        let buf = current.last_writer_buffer().clone();
+        let buf = current.last_writer_buffer();
         buf.seal().unwrap();
         assert!(buf.is_flushable());
     }
