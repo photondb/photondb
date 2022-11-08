@@ -438,7 +438,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     {
         assert_eq!(view.id, ROOT_ID);
         assert_eq!(view.page.epoch(), 0);
-        assert_eq!(view.page.chain_len(), 0);
+        assert_eq!(view.page.chain_len(), 1);
 
         let page = SortedPageRef::<K, V>::from(view.page);
         let Some((split_key, left_iter, right_iter)) = page.into_split_iter() else {
