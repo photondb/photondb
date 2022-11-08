@@ -313,6 +313,15 @@ impl Version {
         // 2. All references are immutable.
         unsafe { raw.as_ref() }.cloned()
     }
+
+    pub(crate) fn min_write_buffer(&self) -> Arc<WriteBuffer> {
+        let current = self.buffer_set.current();
+        let file_id = current.min_file_id();
+        current
+            .write_buffer(file_id)
+            .expect("WriteBuffer must exists")
+            .clone()
+    }
 }
 
 impl Drop for Version {
