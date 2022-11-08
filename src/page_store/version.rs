@@ -775,7 +775,7 @@ mod tests {
         buffer_set.on_flushed(file_id);
 
         // Advance epoch and reclaim [`BufferSetVersion`].
-        for _ in 0..128 {
+        loop {
             let guard = buffer_set_guard::pin();
             guard.flush();
             if Arc::strong_count(&buf) == 1 {
