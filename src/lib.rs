@@ -44,7 +44,7 @@ mod error;
 pub use error::{Error, Result};
 
 mod tree;
-pub use tree::{Options as TableOptions, NodeIterWithLsn, ReadOptions, Stats, WriteOptions};
+pub use tree::{NodeIterWithLsn, Options as TableOptions, ReadOptions, Stats, WriteOptions};
 
 mod page_store;
 pub use page_store::Options as PageStoreOptions;
