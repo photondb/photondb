@@ -28,10 +28,12 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v2
     - uses: Swatinem/rust-cache@v1
+    - uses: actions-rs/cargo@v1
     - name: Run unit tests
-      uses: actions-rs/cargo@v1
-      with:
-        command: test
+      shell: bash
+      run: |
+        cargo test
+        cargo test -- --ignored
 
   tests-on-macos:
     runs-on: macos-latest
@@ -39,7 +41,9 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v2
     - uses: Swatinem/rust-cache@v1
+    - uses: actions-rs/cargo@v1
     - name: Run unit tests
-      uses: actions-rs/cargo@v1
-      with:
-        command: test
+      shell: bash
+      run: |
+        cargo test
+        cargo test -- --ignored
