@@ -413,7 +413,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Build and insert the right page.
         let right_id = {
             let builder =
-                SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(right_iter);
+                SortedPageBuilder::new(view.page.tier(), PageKind::Data).with_iter(right_iter);
             let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
             builder.build(&mut new_page);
             txn.insert_page(new_addr)
@@ -463,7 +463,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Build and insert the left page.
         let left_id = {
             let builder =
-                SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(left_iter);
+                SortedPageBuilder::new(view.page.tier(), PageKind::Data).with_iter(left_iter);
             let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
             builder.build(&mut new_page);
             txn.insert_page(new_addr)
@@ -471,7 +471,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Build and insert the right page.
         let right_id = {
             let builder =
-                SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(right_iter);
+                SortedPageBuilder::new(view.page.tier(), PageKind::Data).with_iter(right_iter);
             let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
             builder.build(&mut new_page);
             txn.insert_page(new_addr)
@@ -630,7 +630,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Collect information for this consolidation.
         let info = self.collect_consolidation_info(&view, kind).await?;
         let iter = f(info.iter);
-        let builder = SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(iter);
+        let builder = SortedPageBuilder::new(view.page.tier(), PageKind::Data).with_iter(iter);
         let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
         builder.build(&mut new_page);
