@@ -565,7 +565,9 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
         // Try to consolidate the parent page if it is too long.
         if self.should_consolidate_page(parent.page) {
-            let _ = self.consolidate_page(parent).await;
+            let _ = self
+                .consolidate_page(parent, ConsolidationKind::Partial)
+                .await;
         }
         Ok(())
     }
@@ -583,20 +585,31 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
     async fn try_rewrite_page(&self, id: u64) -> Result<()> {
         let view = self.page_view(id, None).await?;
-        self.consolidate_page(view).await?;
+        self.consolidate_page(view, ConsolidationKind::Full).await?;
         Ok(())
     }
 
     /// Consolidates delta pages on the page chain.
-    async fn consolidate_page<'g>(&'g self, view: PageView<'g>) -> Result<PageView<'g>> {
+    ///
+    /// If `kind` is [`ConsolidationKind::Full`], consolidates all delta pages
+    /// on the chain.
+    /// If `kind` is [`ConsolidationKind::Partial`], the implementation may
+    /// choose to consolidate only a subset of delta pages on the chain.
+    async fn consolidate_page<'g>(
+        &'g self,
+        view: PageView<'g>,
+        kind: ConsolidationKind,
+    ) -> Result<PageView<'g>> {
         match view.page.tier() {
             PageTier::Leaf => {
                 let safe_lsn = self.tree.safe_lsn();
-                self.consolidate_page_impl(view, |iter| MergingLeafPageIter::new(iter, safe_lsn))
-                    .await
+                self.consolidate_page_impl(view, kind, |iter| {
+                    MergingLeafPageIter::new(iter, safe_lsn)
+                })
+                .await
             }
             PageTier::Inner => {
-                self.consolidate_page_impl(view, MergingInnerPageIter::new)
+                self.consolidate_page_impl(view, kind, MergingInnerPageIter::new)
                     .await
             }
         }
@@ -605,6 +618,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     async fn consolidate_page_impl<'g, F, I, K, V>(
         &'g self,
         mut view: PageView<'g>,
+        kind: ConsolidationKind,
         f: F,
     ) -> Result<PageView<'g>>
     where
@@ -614,7 +628,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         V: SortedPageValue,
     {
         // Collect information for this consolidation.
-        let info = self.collect_consolidation_info(&view).await?;
+        let info = self.collect_consolidation_info(&view, kind).await?;
         let iter = f(info.iter);
         let builder = SortedPageBuilder::new(view.page.tier(), view.page.kind()).with_iter(iter);
         let mut txn = self.guard.begin();
@@ -642,6 +656,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     async fn collect_consolidation_info<'g, K, V>(
         &'g self,
         view: &PageView<'g>,
+        kind: ConsolidationKind,
     ) -> Result<ConsolidationInfo<'g, K, V>>
     where
         K: SortedPageKey,
@@ -659,7 +674,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                 PageKind::Data => {
                     // Inner pages can not do partial consolidations because of the placeholders.
                     // This is fine since inner pages doesn't consolidate as often as leaf pages.
-                    if page.tier().is_leaf()
+                    if kind == ConsolidationKind::Partial
+                        && page.tier().is_leaf()
                         && builder.len() >= 2
                         && page_size < page.size() / 2
                         && range_limit.is_none()
@@ -697,7 +713,9 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         mut view: PageView<'g>,
         parent: Option<PageView<'g>>,
     ) -> Result<()> {
-        view = self.consolidate_page(view).await?;
+        view = self
+            .consolidate_page(view, ConsolidationKind::Partial)
+            .await?;
         // Try to split the page if it is too large.
         if self.should_split_page(view.page) {
             let _ = self.split_page(view, parent).await;
@@ -787,6 +805,14 @@ impl<'a, 't: 'a, E: Env> TreeIter<'a, 't, E> {
             Ok(None)
         }
     }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ConsolidationKind {
+    /// Consolidates all delta pages on the chain.
+    Full,
+    /// Consolidates two or more delta pages on the chain.
+    Partial,
 }
 
 struct ConsolidationInfo<'a, K, V>
