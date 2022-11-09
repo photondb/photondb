@@ -174,13 +174,17 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                 Err(None) => return Err(Error::Again),
                 Err(Some((_txn, addr))) => {
                     // The page has been updated by other transactions.
-                    // We keep retrying as long as the page epoch remains the same.
-                    txn = _txn;
-                    let page = self.guard.read_page(addr).await?;
-                    if page.epoch() == view.page.epoch() {
-                        view.addr = addr;
-                        view.page = page;
-                        continue;
+                    // We can keep retrying as long as the page epoch remains
+                    // the same. However, this doesn't work for the root
+                    // because we split the root without updating its epoch.
+                    if view.id != ROOT_ID {
+                        let page = self.guard.read_page(addr).await?;
+                        if page.epoch() == view.page.epoch() {
+                            txn = _txn;
+                            view.addr = addr;
+                            view.page = page;
+                            continue;
+                        }
                     }
                     return Err(Error::Again);
                 }

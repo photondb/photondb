@@ -15,17 +15,15 @@ use crate::{
 pub(crate) struct FileInfoBuilder<E: Env> {
     env: E,
     base: PathBuf,
-    file_prefix: String,
 }
 
 impl<E: Env> FileInfoBuilder<E> {
     /// Create file info builder.
     /// it need base dir and page file name prefix.
-    pub(crate) fn new(env: E, base: impl Into<PathBuf>, file_prefix: &str) -> Self {
+    pub(crate) fn new(env: E, base: impl Into<PathBuf>) -> Self {
         Self {
             env,
             base: base.into(),
-            file_prefix: file_prefix.into(),
         }
     }
 
@@ -116,7 +114,9 @@ impl<E: Env> FileInfoBuilder<E> {
 
     #[inline]
     async fn open_meta_reader(&self, file_id: &u32) -> MetaReader<E::PositionalReader> {
-        let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
+        let path = self
+            .base
+            .join(format!("{}_{file_id}", super::facade::PAGE_FILE_FILE_NAME));
         let raw_metadata = self
             .env
             .metadata(path.to_owned())

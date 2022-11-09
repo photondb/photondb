@@ -35,6 +35,8 @@ pub(crate) mod facade {
         page_store::Result,
     };
 
+    pub(crate) const PAGE_FILE_FILE_NAME: &str = "dat";
+
     /// The facade for page_file module.
     /// it hides the detail about disk location for caller(after it be created).
     pub(crate) struct PageFiles<E: Env> {
@@ -42,7 +44,6 @@ pub(crate) mod facade {
         base: PathBuf,
         base_dir: E::Directory,
 
-        file_prefix: String,
         use_direct: bool,
 
         reader_cache: file_reader::ReaderCache<E>,
@@ -51,7 +52,7 @@ pub(crate) mod facade {
     impl<E: Env> PageFiles<E> {
         /// Create page file facade.
         /// It should be a singleton in the page_store.
-        pub(crate) async fn new(env: E, base: impl Into<PathBuf>, file_prefile: &str) -> Self {
+        pub(crate) async fn new(env: E, base: impl Into<PathBuf>) -> Self {
             let base = base.into();
             let base_dir = env.open_dir(&base).await.expect("open base dir fail");
             let reader_cache = ReaderCache::new(MAX_OPEN_READER_FD_NUM);
@@ -59,7 +60,6 @@ pub(crate) mod facade {
                 env,
                 base,
                 base_dir,
-                file_prefix: file_prefile.into(),
                 use_direct: true,
                 reader_cache,
             }
@@ -68,12 +68,12 @@ pub(crate) mod facade {
         /// Create file_builder to write a new page_file.
         pub(crate) async fn new_file_builder(&self, file_id: u32) -> Result<FileBuilder<E>> {
             // TODO: switch to env in suitable time.
-            let path = self.base.join(format!("{}_{file_id}", self.file_prefix));
+            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_FILE_NAME));
             let writer = self
                 .env
                 .open_sequential_writer(path.to_owned())
                 .await
-                .expect("open reader for file_id: {file_id} fail");
+                .expect("open writer for file_id: {file_id} fail");
             let use_direct = self.use_direct && writer.direct_io_ify().is_ok();
             Ok(FileBuilder::new(
                 file_id,
@@ -95,7 +95,7 @@ pub(crate) mod facade {
             let r = self
                 .reader_cache
                 .get_with(file_id, async move {
-                    let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
+                    let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_FILE_NAME));
 
                     let file = self
                         .env
@@ -112,14 +112,14 @@ pub(crate) mod facade {
 
         // Create info_builder to help recovery & mantains version's file_info.
         pub(crate) fn new_info_builder(&self) -> FileInfoBuilder<E> {
-            FileInfoBuilder::new(self.env.to_owned(), self.base.to_owned(), &self.file_prefix)
+            FileInfoBuilder::new(self.env.to_owned(), self.base.to_owned())
         }
 
         pub(crate) async fn open_meta_reader(
             &self,
             file_id: u32,
         ) -> Result<MetaReader<<E as Env>::PositionalReader>> {
-            let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
+            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_FILE_NAME));
             let file_size = self
                 .env
                 .metadata(&path)
@@ -145,7 +145,7 @@ pub(crate) mod facade {
         }
 
         async fn remove_file(&self, file_id: u32) -> Result<()> {
-            let path = self.base.join(format!("{}_{}", self.file_prefix, file_id));
+            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_FILE_NAME));
             self.env
                 .remove_file(&path)
                 .await
@@ -155,7 +155,7 @@ pub(crate) mod facade {
 
         pub(crate) fn list_page_files(&self) -> Result<Vec<u32>> {
             use std::os::unix::ffi::OsStrExt;
-            let prefix = format!("{}_", self.file_prefix).into_bytes();
+            let prefix = format!("{}_", PAGE_FILE_FILE_NAME).into_bytes();
             let dir = self.env.read_dir(&self.base)?;
             let mut files = Vec::default();
             for entry in dir {
@@ -178,13 +178,15 @@ pub(crate) mod facade {
     mod tests {
         use std::collections::HashMap;
 
+        use tempdir::TempDir;
+
         use super::*;
 
         #[photonio::test]
         fn test_file_builder() {
             let env = crate::env::Photon;
-            let base = std::env::temp_dir();
-            let files = PageFiles::new(env, &base, "test_builder").await;
+            let base = TempDir::new("test_builder").unwrap();
+            let files = PageFiles::new(env, base.path()).await;
             let mut builder = files.new_file_builder(11233).await.unwrap();
             builder.add_delete_pages(&[1, 2]);
             builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
@@ -194,10 +196,8 @@ pub(crate) mod facade {
         #[photonio::test]
         fn test_read_page() {
             let env = crate::env::Photon;
-            let files = {
-                let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_dread").await
-            };
+            let base = TempDir::new("test_dread").unwrap();
+            let files = PageFiles::new(env, base.path()).await;
             let file_id = 2;
             let info = {
                 let mut b = files.new_file_builder(file_id).await.unwrap();
@@ -255,10 +255,8 @@ pub(crate) mod facade {
         #[photonio::test]
         fn test_test_simple_write_reader() {
             let env = crate::env::Photon;
-            let files = {
-                let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_simple_rw").await
-            };
+            let base = TempDir::new("test_simple_rw").unwrap();
+            let files = PageFiles::new(env, base.path()).await;
 
             let file_id = 2;
             let ret_info = {
@@ -315,10 +313,8 @@ pub(crate) mod facade {
         #[photonio::test]
         fn test_file_info_recovery_and_add_new_file() {
             let env = crate::env::Photon;
-            let files = {
-                let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_recovery").await
-            };
+            let base = TempDir::new("test_recovery").unwrap();
+            let files = PageFiles::new(env, base.path()).await;
 
             let info_builder = files.new_info_builder();
             {
@@ -397,10 +393,8 @@ pub(crate) mod facade {
         #[photonio::test]
         fn test_query_page_id_by_addr() {
             let env = crate::env::Photon;
-            let files = {
-                let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_query_id_by_addr").await
-            };
+            let base = TempDir::new("test_query_id_by_addr").unwrap();
+            let files = PageFiles::new(env, base.path()).await;
             let file_id = 1;
             let page_addr1 = page_addr(file_id, 0);
             let page_addr2 = page_addr(file_id, 1);
@@ -427,10 +421,8 @@ pub(crate) mod facade {
         #[photonio::test]
         fn test_get_child_page() {
             let env = crate::env::Photon;
-            let files = {
-                let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_get_child_page").await
-            };
+            let base = TempDir::new("test_get_child_page").unwrap();
+            let files = PageFiles::new(env, base.path()).await;
             let info_builder = files.new_info_builder();
 
             let file_id = 1;
@@ -463,10 +455,8 @@ pub(crate) mod facade {
             }
 
             let env = crate::env::Photon;
-            let files = {
-                let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_get_child_page").await
-            };
+            let base = TempDir::new("test_get_child_page").unwrap();
+            let files = PageFiles::new(env, base.path()).await;
             new_file(&files, 0).await;
             new_file(&files, 1).await;
             new_file(&files, 3).await;

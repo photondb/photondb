@@ -627,14 +627,16 @@ mod tests {
     #[cfg(unix)]
     #[photonio::test]
     async fn test_buffered_writer() {
+        use tempdir::TempDir;
+
         use crate::env::PositionalReaderExt;
 
         let env = crate::env::Photon;
 
         let use_direct = true;
-        let base = std::env::temp_dir();
-        let path1 = base.join("buf_test1");
-        let base = env.open_dir(base).await.unwrap();
+        let base_dir = TempDir::new("buffer_writer").unwrap();
+        let path1 = base_dir.path().join("buf_test1");
+        let base = env.open_dir(base_dir.path()).await.unwrap();
         {
             let file1 = env
                 .open_sequential_writer(path1.to_owned())

@@ -95,12 +95,11 @@ impl<E: Env> FlushCtx<E> {
             .await?;
 
         let delta = DeltaVersion {
+            file_id,
             files,
             obsoleted_files,
         };
-
         self.version_owner.install(delta);
-        version.buffer_set.on_flushed(file_id);
         Ok(())
     }
 
@@ -309,7 +308,7 @@ mod tests {
         FlushCtx {
             shutdown,
             version_owner,
-            page_files: Arc::new(PageFiles::new(Photon, base, "prefix").await),
+            page_files: Arc::new(PageFiles::new(Photon, base).await),
             manifest: Arc::new(futures::lock::Mutex::new(
                 Manifest::open(Photon, base).await.unwrap(),
             )),
@@ -318,8 +317,8 @@ mod tests {
 
     #[photonio::test]
     async fn flush_write_buffer_local_pages_ignore() {
-        let base = std::env::temp_dir().join("flush_ignore_local_pages");
-        let ctx = new_flush_ctx(&base).await;
+        let base = tempdir::TempDir::new("flush_ignore_local_pages").unwrap();
+        let ctx = new_flush_ctx(base.path()).await;
         let wb = WriteBuffer::with_capacity(1, 1 << 16);
         unsafe {
             let (addr, _, _) = wb.alloc_page(1, 123, false).unwrap();
@@ -333,8 +332,8 @@ mod tests {
 
     #[photonio::test]
     async fn flush_write_buffer_local_pages_aborted_skip() {
-        let base = std::env::temp_dir().join("flush_ignore_local_pages");
-        let ctx = new_flush_ctx(&base).await;
+        let base = tempdir::TempDir::new("flush_ignore_local_pages").unwrap();
+        let ctx = new_flush_ctx(base.path()).await;
         let wb = WriteBuffer::with_capacity(1, 1 << 16);
         unsafe {
             let (addr, header, _) = wb.alloc_page(1, 123, false).unwrap();
