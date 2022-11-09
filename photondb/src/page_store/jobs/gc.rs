@@ -109,15 +109,18 @@ where
         version: &Version,
         cleaned_files: &HashSet<u32>,
     ) -> Vec<u32> {
-        let now = version.buffer_set.current().next_buffer_id();
+        let files = version.files();
+        let now = files.keys().cloned().max().unwrap_or(1);
         let mut strategy = self.strategy_builder.build(now);
-        for (id, file) in version.files() {
+        for (id, file) in files {
             if cleaned_files.contains(id) {
                 self.cleaned_files.insert(*id);
                 continue;
             }
 
-            strategy.collect(file);
+            if !file.is_empty() {
+                strategy.collect(file);
+            }
         }
 
         let mut files = Vec::default();
@@ -129,7 +132,7 @@ where
 
     async fn rewrite_files(&mut self, files: Vec<u32>, version: &Arc<Version>) {
         for file_id in files {
-            if self.shutdown.is_terminated() {
+            if self.shutdown.is_terminated() || version.has_next_version() {
                 break;
             }
 
