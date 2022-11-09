@@ -95,12 +95,11 @@ impl<E: Env> FlushCtx<E> {
             .await?;
 
         let delta = DeltaVersion {
+            file_id,
             files,
             obsoleted_files,
         };
-
         self.version_owner.install(delta);
-        version.buffer_set.on_flushed(file_id);
         Ok(())
     }
 

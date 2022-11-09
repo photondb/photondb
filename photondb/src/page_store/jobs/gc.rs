@@ -109,7 +109,7 @@ where
         version: &Version,
         cleaned_files: &HashSet<u32>,
     ) -> Vec<u32> {
-        let now = version.next_file_id();
+        let now = version.buffer_set.current().next_buffer_id();
         let mut strategy = self.strategy_builder.build(now);
         for (id, file) in version.files() {
             if cleaned_files.contains(id) {
