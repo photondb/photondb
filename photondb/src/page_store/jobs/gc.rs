@@ -306,7 +306,7 @@ mod tests {
             rewriter,
             strategy_builder,
             page_table: PageTable::default(),
-            page_files: Arc::new(PageFiles::new(Photon, dir, "db").await),
+            page_files: Arc::new(PageFiles::new(Photon, dir).await),
             cleaned_files: HashSet::default(),
         }
     }

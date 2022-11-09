@@ -362,11 +362,8 @@ mod tests {
     #[photonio::test]
     async fn page_txn_update_page() {
         let env = crate::env::Photon;
-        let files = {
-            let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(env, &base, "test_page_txn_update_page").await)
-        };
-
+        let base = tempdir::TempDir::new("test_page_txn_update_page").unwrap();
+        let files = Arc::new(PageFiles::new(env, base.path()).await);
         let version = new_version(512);
         let page_table = PageTable::default();
         let guard = Guard::new(version.clone(), &page_table, &files);
@@ -382,10 +379,8 @@ mod tests {
     #[photonio::test]
     async fn page_txn_failed_update_page() {
         let env = crate::env::Photon;
-        let files = {
-            let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(env, &base, "test_page_txn_failed_update_page").await)
-        };
+        let base = tempdir::TempDir::new("test_page_txn_failed_update_page").unwrap();
+        let files = Arc::new(PageFiles::new(env, base.path()).await);
 
         let version = new_version(1 << 10);
         let page_table = PageTable::default();
@@ -409,10 +404,8 @@ mod tests {
     #[photonio::test]
     async fn page_txn_increment_page_addr_update() {
         let env = crate::env::Photon;
-        let files = {
-            let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(env, &base, "test_page_increment_page_addr_update").await)
-        };
+        let base = tempdir::TempDir::new("test_page_increment_page_addr_update").unwrap();
+        let files = Arc::new(PageFiles::new(env, base.path()).await);
 
         let version = new_version(512);
         let page_table = PageTable::default();
@@ -424,10 +417,8 @@ mod tests {
     #[photonio::test]
     async fn page_txn_replace_page() {
         let env = crate::env::Photon;
-        let files = {
-            let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(env, &base, "test_page_txn_replace_page").await)
-        };
+        let base = tempdir::TempDir::new("test_page_txn_replace_page").unwrap();
+        let files = Arc::new(PageFiles::new(env, base.path()).await);
 
         let version = new_version(1 << 10);
         let page_table = PageTable::default();
@@ -444,10 +435,8 @@ mod tests {
     #[photonio::test]
     async fn page_txn_seal_write_buffer() {
         let env = crate::env::Photon;
-        let files = {
-            let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(env, &base, "test_page_seal_write_buffer").await)
-        };
+        let base = tempdir::TempDir::new("test_page_seal_write_buffer").unwrap();
+        let files = Arc::new(PageFiles::new(env, base.path()).await);
 
         let version = new_version(512);
         let page_table = PageTable::default();
@@ -459,10 +448,8 @@ mod tests {
     #[photonio::test]
     async fn page_txn_seal_write_buffer_twice() {
         let env = crate::env::Photon;
-        let files = {
-            let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(env, &base, "test_page_seal_write_buffer_twice").await)
-        };
+        let base = tempdir::TempDir::new("test_page_seal_write_buffer_twice").unwrap();
+        let files = Arc::new(PageFiles::new(env, base.path()).await);
 
         let version = new_version(512);
         let page_table = PageTable::default();
@@ -477,10 +464,8 @@ mod tests {
     async fn page_txn_insert_page() {
         env_logger::init();
         let env = crate::env::Photon;
-        let files = {
-            let base = std::env::temp_dir();
-            Arc::new(PageFiles::new(env, &base, "test_page_insert_page").await)
-        };
+        let base = tempdir::TempDir::new("test_page_insert_page").unwrap();
+        let files = Arc::new(PageFiles::new(env, base.path()).await);
 
         let version = new_version(512);
         let page_table = PageTable::default();
