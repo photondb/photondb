@@ -37,6 +37,10 @@ impl<E: Env> CleanupCtx<E> {
                 break;
             }
 
+            // Since all previous versions are invisible, releasing the former buffer is
+            // safety.
+            version.release_previous_buffers();
+
             // Now it is safety to cleanup the version.
             self.clean_obsoleted_files(files).await;
         }

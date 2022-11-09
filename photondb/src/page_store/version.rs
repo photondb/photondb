@@ -9,7 +9,7 @@ use std::{
 
 use crossbeam_epoch::Guard;
 use futures::channel::oneshot;
-use log::{debug, trace};
+use log::debug;
 
 use super::{FileInfo, WriteBuffer};
 use crate::util::notify::Notify;
@@ -19,22 +19,12 @@ pub(crate) struct VersionOwner {
 }
 
 pub(crate) struct Version {
-    pub(crate) id: usize,
-
     pub(crate) buffer_set: Arc<BufferSet>,
 
-    buffers_range: std::ops::Range<u32>,
-
-    /// Holds a reference to all [`WriteBuffer`]s at the time of the version
-    /// creation.
-    ///
-    /// The difference with [`BufferSet`] is that the [`WriteBuffer`] held by
-    /// [`VersionInner`] may have been flushed and [`BufferSet`] has lost access
-    /// to these [`WriteBuffers`]. The advantage of this is that
-    /// implementation don't have to hold the [`BufferSetRef`] for a long time
-    /// throughout the lifetime of the [`Version`].
-    write_buffers: Vec<Arc<WriteBuffer>>,
     files: HashMap<u32, FileInfo>,
+
+    // The id of the first buffer this version could access.
+    first_buffer_id: u32,
 
     /// Records the ID of the file that can be deleted.
     obsoleted_files: HashSet<u32>,
@@ -47,6 +37,7 @@ pub(crate) struct Version {
 }
 
 pub(crate) struct DeltaVersion {
+    pub(crate) file_id: u32,
     pub(crate) files: HashMap<u32, FileInfo>,
     pub(crate) obsoleted_files: HashSet<u32>,
 }
@@ -72,6 +63,11 @@ pub(crate) struct BufferSetVersion {
 pub(crate) struct BufferSetRef<'a> {
     version: &'a BufferSetVersion,
     // `guard` is used to ensure that the referenced `BufferSetVersion` will not be released early.
+    _guard: Guard,
+}
+
+pub(crate) struct BufferRef<'a> {
+    buffer: &'a Arc<WriteBuffer>,
     _guard: Guard,
 }
 
@@ -113,19 +109,23 @@ impl VersionOwner {
 
         // Safety: guard by `buffer_set_guard::pin`.
         let current = unsafe { self.current_without_guard() };
-        let (buffers_range, write_buffers) = {
-            let buffers_ref = current.buffer_set.current();
-            (buffers_ref.buffers_range.clone(), buffers_ref.snapshot())
-        };
+        if current.first_buffer_id != delta.file_id {
+            panic!(
+                "Version should be installed in the order of write buffers, expect {}, but got {}",
+                current.first_buffer_id, delta.file_id
+            );
+        }
 
+        debug!("Install new version with file {}", delta.file_id);
+
+        let buffer_set = current.buffer_set.clone();
+        let first_buffer_id = current.first_buffer_id + 1;
         let (sender, receiver) = oneshot::channel();
         let new = Box::new(Arc::new(Version {
-            id: current.id + 1,
-            buffers_range,
-            write_buffers,
+            first_buffer_id,
             files: delta.files,
             obsoleted_files: delta.obsoleted_files,
-            buffer_set: current.buffer_set.clone(),
+            buffer_set,
 
             next_version: AtomicPtr::default(),
             new_version_notify: Notify::default(),
@@ -152,7 +152,6 @@ impl VersionOwner {
         // 1. Obtained from `Box::new`, so it is aligned and not null.
         // 2. There is not mutable references pointer to it.
         let former = unsafe { &*raw_former };
-        debug!("Switch version from {} to {}", former.id, next.id);
 
         former
             .next_version
@@ -198,16 +197,10 @@ impl Version {
         obsoleted_files: HashSet<u32>,
     ) -> Self {
         let buffer_set = Arc::new(BufferSet::new(next_file_id, write_buffer_capacity));
-        let (buffers_range, write_buffers) = {
-            let current = buffer_set.current();
-            (current.buffers_range.clone(), current.snapshot())
-        };
-
+        let first_buffer_id = next_file_id;
         let (sender, receiver) = oneshot::channel();
         Version {
-            id: next_file_id as usize,
-            buffers_range,
-            write_buffers,
+            first_buffer_id,
             files,
             obsoleted_files,
             buffer_set,
@@ -252,37 +245,21 @@ impl Version {
     }
 
     #[inline]
-    pub(crate) fn next_file_id(&self) -> u32 {
-        self.buffers_range.end
+    pub(crate) fn get(&self, file_id: u32) -> Option<BufferRef> {
+        self.buffer_set.get(file_id)
     }
 
-    /// Invoke `f` with the specified [`WriteBuffer`].
-    ///
-    /// # Panic
-    ///
-    /// This function panics if the [`WriteBuffer`] of the specified `file_id`
-    /// is not exists.
-    pub(crate) fn with_write_buffer<F, O>(&self, file_id: u32, f: F) -> O
-    where
-        F: FnOnce(&WriteBuffer) -> O,
-    {
-        if self.buffers_range.contains(&file_id) {
-            let index = (file_id - self.buffers_range.start) as usize;
-            if index >= self.write_buffers.len() {
-                panic!("buffers_range is invalid");
-            }
-            return f(self.write_buffers[index].as_ref());
-        }
-
+    pub(crate) fn min_write_buffer(&self) -> Arc<WriteBuffer> {
         let current = self.buffer_set.current();
-        let write_buffer = current.write_buffer(file_id).expect("No such write buffer");
-        f(write_buffer.as_ref())
+        current
+            .get(self.first_buffer_id)
+            .expect("First WriteBuffer referenced by this version must exists")
+            .clone()
     }
 
-    #[inline]
-    pub(crate) fn contains_write_buffer(&self, file_id: u32) -> bool {
-        self.buffers_range.contains(&file_id)
-            || self.buffer_set.current().write_buffer(file_id).is_some()
+    /// Release all previous writer buffers which is invisible.
+    pub(crate) fn release_previous_buffers(&self) {
+        self.buffer_set.release_until(self.first_buffer_id);
     }
 
     #[inline]
@@ -312,15 +289,6 @@ impl Version {
         // 1. It is valid and initialized since obtained from [`Box::into_raw`].
         // 2. All references are immutable.
         unsafe { raw.as_ref() }.cloned()
-    }
-
-    pub(crate) fn min_write_buffer(&self) -> Arc<WriteBuffer> {
-        let current = self.buffer_set.current();
-        let file_id = current.min_file_id();
-        current
-            .write_buffer(file_id)
-            .expect("WriteBuffer must exists")
-            .clone()
     }
 }
 
@@ -369,6 +337,18 @@ impl BufferSet {
         }
     }
 
+    /// Returns a reference to the write buffer corresponding to the `file_id`.
+    pub(crate) fn get<'a>(&self, file_id: u32) -> Option<BufferRef<'a>> {
+        let guard = buffer_set_guard::pin();
+        // Safety: guard by `buffer_set_guard::pin`.
+        let current = unsafe { self.current_without_guard() };
+        let buffer = current.get(file_id)?;
+        Some(BufferRef {
+            buffer,
+            _guard: guard,
+        })
+    }
+
     /// Install new [`BufferSetVersion`] by replacing `current_buffer` to new
     /// [`WriteBuffer`].
     ///
@@ -409,31 +389,32 @@ impl BufferSet {
         }
     }
 
-    pub(crate) fn on_flushed(&self, file_id: u32) {
-        trace!("Release write buffer {file_id}");
+    pub(crate) fn release_until(&self, first_buffer_id: u32) {
+        debug!("Release write buffer until {first_buffer_id}");
 
         let mut guard = buffer_set_guard::pin();
         // Safety: guarded by `buffer_set_guard::pin`.
         let mut current = unsafe { self.current_without_guard() };
         loop {
-            if current.min_file_id() != file_id {
+            // Because versions are released one by one, should not be a gap in theory here.
+            if current.min_buffer_id() + 1 != first_buffer_id {
                 panic!(
-                    "expect file {} but got {file_id}, current range {:?}",
-                    current.min_file_id(),
-                    current.buffers_range,
+                    "Release buffers not in order, current min is {}, but release until {}",
+                    current.min_buffer_id(),
+                    first_buffer_id
                 );
             }
-            assert_eq!(current.min_file_id(), file_id);
 
-            let sealed_buffers = {
-                let mut buffers = current.sealed_buffers.clone();
-                let buffer = buffers.remove(0);
-                assert_eq!(buffer.file_id(), file_id);
-                buffers
-            };
+            let sealed_buffers = current
+                .sealed_buffers
+                .iter()
+                .filter(|v| v.file_id() >= first_buffer_id)
+                .cloned()
+                .collect();
             let current_buffer = current.current_buffer.clone();
+            let buffers_range = first_buffer_id..current.buffers_range.end;
             let new = Box::new(BufferSetVersion {
-                buffers_range: (file_id + 1)..current.buffers_range.end,
+                buffers_range,
                 sealed_buffers,
                 current_buffer,
             });
@@ -452,6 +433,7 @@ impl BufferSet {
 
     #[inline]
     pub(crate) fn notify_flush_job(&self) {
+        log::info!("notify one flush job");
         self.flush_notify.notify_one();
     }
 
@@ -535,7 +517,7 @@ impl BufferSetVersion {
     ///
     /// If the user needs to access the [`WriteBuffer`] for a long time, use
     /// `clone` to make a copy.
-    pub(crate) fn write_buffer(&self, file_id: u32) -> Option<&Arc<WriteBuffer>> {
+    pub(crate) fn get(&self, file_id: u32) -> Option<&Arc<WriteBuffer>> {
         use std::cmp::Ordering;
 
         if !self.buffers_range.contains(&file_id) {
@@ -551,13 +533,12 @@ impl BufferSetVersion {
     }
 
     #[inline]
-    pub(crate) fn min_file_id(&self) -> u32 {
+    pub(crate) fn min_buffer_id(&self) -> u32 {
         self.buffers_range.start
     }
 
-    #[cfg(test)]
     #[inline]
-    pub(crate) fn next_file_id(&self) -> u32 {
+    pub(crate) fn next_buffer_id(&self) -> u32 {
         self.buffers_range.end
     }
 
@@ -573,6 +554,14 @@ impl<'a> Deref for BufferSetRef<'a> {
 
     fn deref(&self) -> &Self::Target {
         self.version
+    }
+}
+
+impl<'a> Deref for BufferRef<'a> {
+    type Target = Arc<WriteBuffer>;
+
+    fn deref(&self) -> &Self::Target {
+        self.buffer
     }
 }
 
@@ -658,7 +647,7 @@ mod tests {
     #[test]
     fn buffer_set_write_buffer_install() {
         let buffer_set = BufferSet::new(1, 1 << 10);
-        let file_id = buffer_set.current().next_file_id();
+        let file_id = buffer_set.current().next_buffer_id();
         let buf = WriteBuffer::with_capacity(file_id, buffer_set.write_buffer_capacity());
         buffer_set.install(Arc::new(buf));
     }
@@ -685,10 +674,10 @@ mod tests {
         }
 
         // 4. release former buffer.
-        buffer_set.on_flushed(file_id);
+        buffer_set.release_until(file_id + 1);
 
-        assert!(buffer_set.current().write_buffer(file_id).is_none());
-        assert!(buffer_set.current().write_buffer(file_id + 1).is_some());
+        assert!(buffer_set.current().get(file_id).is_none());
+        assert!(buffer_set.current().get(file_id + 1).is_some());
     }
 
     #[photonio::test]
@@ -723,11 +712,11 @@ mod tests {
 
                 let buf = buffer_set
                     .current()
-                    .write_buffer(file_id)
+                    .get(file_id)
                     .cloned()
                     .expect("WriteBuffer must exists");
                 assert!(buf.is_flushable());
-                buffer_set.on_flushed(file_id);
+                buffer_set.release_until(file_id + 1);
                 file_id += 1;
             }
         });
@@ -746,7 +735,7 @@ mod tests {
         // 1. seal previous buffer.
         buffer_set.current().current_buffer.seal().unwrap();
 
-        let file_id = buffer_set.current().next_file_id();
+        let file_id = buffer_set.current().next_buffer_id();
         let buf = WriteBuffer::with_capacity(file_id, buffer_set.write_buffer_capacity());
         buffer_set.install(Arc::new(buf));
 
@@ -761,7 +750,7 @@ mod tests {
             let current = buffer_set.current();
             let buf = current.last_writer_buffer();
             let file_id = buf.file_id();
-            (file_id, current.write_buffer(file_id).unwrap().clone())
+            (file_id, current.get(file_id).unwrap().clone())
         };
         assert_eq!(Arc::strong_count(&buf), 2);
 
@@ -772,7 +761,7 @@ mod tests {
             file_id + 1,
             buffer_set.write_buffer_capacity(),
         )));
-        buffer_set.on_flushed(file_id);
+        buffer_set.release_until(file_id + 1);
 
         // Advance epoch and reclaim [`BufferSetVersion`].
         loop {
@@ -788,5 +777,20 @@ mod tests {
         }
 
         assert_eq!(Arc::strong_count(&buf), 1);
+    }
+
+    #[test]
+    fn version_access_newly_buffers() {
+        let version = Version::new(1 << 10, 1, HashMap::default(), HashSet::new());
+        let buffer_id = version.first_buffer_id;
+        for i in 1..100 {
+            let buf = Arc::new(WriteBuffer::with_capacity(buffer_id + i, 1 << 10));
+            version.buffer_set.install(buf);
+        }
+
+        // All buffers are accessable from this version.
+        for i in 0..100 {
+            assert!(version.get(buffer_id + i).is_some());
+        }
     }
 }
