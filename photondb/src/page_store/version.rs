@@ -410,7 +410,7 @@ impl BufferSet {
                 .iter()
                 .filter(|v| v.file_id() >= first_buffer_id)
                 .cloned()
-                .collect();
+                .collect::<Vec<_>>();
             let current_buffer = current.current_buffer.clone();
             let buffers_range = first_buffer_id..current.buffers_range.end;
             let new = Box::new(BufferSetVersion {
@@ -680,10 +680,9 @@ mod tests {
         assert!(buffer_set.current().get(file_id + 1).is_some());
     }
 
-    #[ignore]
     #[photonio::test]
     async fn buffer_set_concurrent_update() {
-        let buffer_set = Arc::new(BufferSet::new(1, 1 << 10));
+        let buffer_set = Arc::new(BufferSet::new(1, 32));
         let file_id = buffer_set.current().last_writer_buffer().file_id();
         let first_active_buffer_id = Arc::new(AtomicU32::new(file_id));
         let cloned_first_active_buffer_id = first_active_buffer_id.clone();
@@ -698,7 +697,12 @@ mod tests {
                     .unwrap();
 
                 file_id += 1;
-                let buf = WriteBuffer::with_capacity(file_id, 1 << 10);
+
+                // Avoid contention.
+                while file_id - cloned_buffer_set.current().min_buffer_id() > 100 {
+                    photonio::task::yield_now().await;
+                }
+                let buf = WriteBuffer::with_capacity(file_id, 32);
                 cloned_buffer_set.install(Arc::new(buf));
                 cloned_first_active_buffer_id.store(file_id, Ordering::Release);
                 photonio::task::yield_now().await;
@@ -717,8 +721,9 @@ mod tests {
                     .cloned()
                     .expect("WriteBuffer must exists");
                 assert!(buf.is_flushable());
-                buffer_set.release_until(file_id + 1);
                 file_id += 1;
+                buffer_set.release_until(file_id);
+                photonio::task::yield_now().await;
             }
         });
         handle_1.await.unwrap_or_default();
