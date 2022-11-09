@@ -369,10 +369,7 @@ mod tests {
     fn test_cleanup_when_restart() {
         let env = crate::env::Photon;
 
-        let base = std::env::temp_dir().join("curr_test_restart");
-        if base.try_exists().unwrap_or(false) {
-            env.remove_dir_all(base.to_owned()).await.unwrap();
-        }
+        let base = tempdir::TempDir::new("curr_test_restart").unwrap();
 
         fn version_snapshot() -> VersionEdit {
             VersionEdit {
@@ -381,9 +378,7 @@ mod tests {
             }
         }
         {
-            let mut manifest = Manifest::open(env.to_owned(), base.to_owned())
-                .await
-                .unwrap();
+            let mut manifest = Manifest::open(env.to_owned(), base.as_ref()).await.unwrap();
             manifest.max_file_size = 1;
 
             manifest
@@ -418,7 +413,9 @@ mod tests {
                 .await
                 .unwrap();
 
-            let tmp_path = base.join(format!("curr.{}.{}", 999, TEMPFILE_SUFFIX));
+            let tmp_path = base
+                .as_ref()
+                .join(format!("curr.{}.{}", 999, TEMPFILE_SUFFIX));
 
             let _ = env.open_sequential_writer(&tmp_path).await.unwrap();
             let files = env
@@ -429,7 +426,7 @@ mod tests {
             assert_eq!(files, 5); // 3 data + 1 current + 1 tmp
         }
         {
-            let _ = Manifest::open(env.clone(), base.to_owned()).await.unwrap();
+            let _ = Manifest::open(env.clone(), base.as_ref()).await.unwrap();
 
             let files = env
                 .read_dir(&base)
@@ -444,10 +441,7 @@ mod tests {
     fn test_roll_manifest() {
         let env = crate::env::Photon;
 
-        let base = std::env::temp_dir().join("curr_test_roll");
-        if base.try_exists().unwrap_or(false) {
-            env.remove_dir_all(base.to_owned()).await.unwrap();
-        }
+        let base = tempdir::TempDir::new("curr_test_roll").unwrap();
 
         let ver = std::sync::Arc::new(std::sync::Mutex::new(VersionEdit {
             new_files: vec![],
@@ -467,9 +461,7 @@ mod tests {
         };
 
         {
-            let mut manifest = Manifest::open(env.to_owned(), base.to_owned())
-                .await
-                .unwrap();
+            let mut manifest = Manifest::open(env.to_owned(), base.as_ref()).await.unwrap();
             manifest.max_file_size = 100; // set a small threshold value to trigger roll
             assert_eq!(manifest.current_file_num, None);
 
@@ -500,7 +492,7 @@ mod tests {
         }
 
         {
-            let mut manifest2 = Manifest::open(env, base.to_owned()).await.unwrap();
+            let mut manifest2 = Manifest::open(env, base.as_ref()).await.unwrap();
             let versions = manifest2.list_versions().await.unwrap();
             assert_eq!(manifest2.current_file_num, Some(35));
 
@@ -540,15 +532,10 @@ mod tests {
 
         let env = crate::env::Photon;
 
-        let base = std::env::temp_dir().join("curr_test2");
-        if base.try_exists().unwrap_or(false) {
-            env.remove_dir_all(base.to_owned()).await.unwrap();
-        }
+        let base = tempdir::TempDir::new("curr_test2").unwrap();
 
         {
-            let mut manifest = Manifest::open(env.to_owned(), base.to_owned())
-                .await
-                .unwrap();
+            let mut manifest = Manifest::open(env.to_owned(), base.as_ref()).await.unwrap();
             manifest
                 .record_version_edit(
                     VersionEdit {
@@ -582,7 +569,7 @@ mod tests {
         }
 
         {
-            let manifest2 = Manifest::open(env, base.to_owned()).await.unwrap();
+            let manifest2 = Manifest::open(env, base.as_ref()).await.unwrap();
             let versions = manifest2.list_versions().await.unwrap();
             assert_eq!(versions.len(), 4);
         }

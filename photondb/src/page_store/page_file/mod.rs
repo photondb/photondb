@@ -73,7 +73,7 @@ pub(crate) mod facade {
                 .env
                 .open_sequential_writer(path.to_owned())
                 .await
-                .expect("open reader for file_id: {file_id} fail");
+                .expect("open writer for file_id: {file_id} fail");
             let use_direct = self.use_direct && writer.direct_io_ify().is_ok();
             Ok(FileBuilder::new(
                 file_id,
@@ -178,13 +178,15 @@ pub(crate) mod facade {
     mod tests {
         use std::collections::HashMap;
 
+        use tempdir::TempDir;
+
         use super::*;
 
         #[photonio::test]
         fn test_file_builder() {
             let env = crate::env::Photon;
-            let base = std::env::temp_dir();
-            let files = PageFiles::new(env, &base, "test_builder").await;
+            let base = TempDir::new("test_builder").unwrap();
+            let files = PageFiles::new(env, base.path(), "test_builder").await;
             let mut builder = files.new_file_builder(11233).await.unwrap();
             builder.add_delete_pages(&[1, 2]);
             builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
@@ -194,10 +196,8 @@ pub(crate) mod facade {
         #[photonio::test]
         fn test_read_page() {
             let env = crate::env::Photon;
-            let files = {
-                let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_dread").await
-            };
+            let base = TempDir::new("test_dread").unwrap();
+            let files = PageFiles::new(env, base.path(), "test_dread").await;
             let file_id = 2;
             let info = {
                 let mut b = files.new_file_builder(file_id).await.unwrap();
@@ -255,10 +255,8 @@ pub(crate) mod facade {
         #[photonio::test]
         fn test_test_simple_write_reader() {
             let env = crate::env::Photon;
-            let files = {
-                let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_simple_rw").await
-            };
+            let base = TempDir::new("test_simple_rw").unwrap();
+            let files = PageFiles::new(env, base.path(), "test_simple_rw").await;
 
             let file_id = 2;
             let ret_info = {
@@ -315,10 +313,8 @@ pub(crate) mod facade {
         #[photonio::test]
         fn test_file_info_recovery_and_add_new_file() {
             let env = crate::env::Photon;
-            let files = {
-                let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_recovery").await
-            };
+            let base = TempDir::new("test_recovery").unwrap();
+            let files = PageFiles::new(env, base.path(), "test_recovery").await;
 
             let info_builder = files.new_info_builder();
             {
@@ -397,10 +393,8 @@ pub(crate) mod facade {
         #[photonio::test]
         fn test_query_page_id_by_addr() {
             let env = crate::env::Photon;
-            let files = {
-                let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_query_id_by_addr").await
-            };
+            let base = TempDir::new("test_query_id_by_addr").unwrap();
+            let files = PageFiles::new(env, base.path(), "test_query_id_by_addr").await;
             let file_id = 1;
             let page_addr1 = page_addr(file_id, 0);
             let page_addr2 = page_addr(file_id, 1);
@@ -427,10 +421,8 @@ pub(crate) mod facade {
         #[photonio::test]
         fn test_get_child_page() {
             let env = crate::env::Photon;
-            let files = {
-                let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_get_child_page").await
-            };
+            let base = TempDir::new("test_get_child_page").unwrap();
+            let files = PageFiles::new(env, base.path(), "test_get_child_page").await;
             let info_builder = files.new_info_builder();
 
             let file_id = 1;
@@ -463,10 +455,8 @@ pub(crate) mod facade {
             }
 
             let env = crate::env::Photon;
-            let files = {
-                let base = std::env::temp_dir();
-                PageFiles::new(env, &base, "test_get_child_page").await
-            };
+            let base = TempDir::new("test_get_child_page").unwrap();
+            let files = PageFiles::new(env, base.path(), "test_get_child_page").await;
             new_file(&files, 0).await;
             new_file(&files, 1).await;
             new_file(&files, 3).await;
