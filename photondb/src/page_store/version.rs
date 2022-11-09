@@ -246,7 +246,11 @@ impl Version {
 
     #[inline]
     pub(crate) fn get(&self, file_id: u32) -> Option<BufferRef> {
-        self.buffer_set.get(file_id)
+        if self.first_buffer_id <= file_id {
+            self.buffer_set.get(file_id)
+        } else {
+            None
+        }
     }
 
     pub(crate) fn min_write_buffer(&self) -> Arc<WriteBuffer> {
@@ -798,5 +802,37 @@ mod tests {
         for i in 0..100 {
             assert!(version.get(buffer_id + i).is_some());
         }
+    }
+
+    #[test]
+    fn version_access_unguarded_buffers() {
+        let version = Version::new(1 << 10, 1, HashMap::default(), HashSet::new());
+        let owner = VersionOwner::new(version);
+        let version = owner.current();
+        let buffer_id = {
+            let current = version.buffer_set.current();
+            let buf = current.last_writer_buffer();
+            buf.seal().unwrap();
+            buf.file_id()
+        };
+
+        // install new buffer.
+        {
+            let buf = Arc::new(WriteBuffer::with_capacity(buffer_id + 1, 32));
+            version.buffer_set.install(buf);
+        }
+        drop(version);
+
+        // install new version
+        owner.install(DeltaVersion {
+            file_id: buffer_id,
+            files: HashMap::default(),
+            obsoleted_files: HashSet::new(),
+        });
+
+        // now latest version could not access former buffer since no guard held.
+        let version = owner.current();
+        assert!(version.get(buffer_id).is_none());
+        assert!(version.get(buffer_id + 1).is_some());
     }
 }
