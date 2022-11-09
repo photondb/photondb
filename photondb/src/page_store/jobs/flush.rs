@@ -111,9 +111,10 @@ impl<E: Env> FlushCtx<E> {
     ) -> Result<(Vec<u64>, FileInfo, HashSet<u32>)> {
         assert!(write_buffer.is_flushable());
 
+        let version = self.version_owner.current();
         let mut flush_stats = FlushPageStats::default();
         let (dealloc_pages, skip_pages, reclaimed_files) =
-            collect_dealloc_pages_and_stats(write_buffer, &mut flush_stats);
+            collect_dealloc_pages_and_stats(write_buffer, &mut flush_stats, version);
 
         let file_id = write_buffer.file_id();
         info!("Flush write buffer {file_id} to page file, {flush_stats}");
@@ -232,6 +233,7 @@ fn assert_files_are_deletable(files: &HashMap<u32, FileInfo>, reclaimed_files: &
 fn collect_dealloc_pages_and_stats(
     write_buffer: &WriteBuffer,
     flush_stats: &mut FlushPageStats,
+    version: Arc<Version>,
 ) -> (Vec<u64>, HashSet<u64>, HashSet<u32>) {
     let file_id = write_buffer.file_id();
     let mut dealloc_pages = Vec::new();
@@ -243,23 +245,20 @@ fn collect_dealloc_pages_and_stats(
             flush_stats.num_tombstone_records += 1;
         }
 
+        let active_files = version.files();
         flush_stats.data_size += header.page_size();
         if let RecordRef::DeallocPages(pages) = record_ref {
             if header.former_file_id() as u64 != NAN_ID {
                 reclaimed_files.insert(header.former_file_id());
             }
-            dealloc_pages.extend(
-                pages
-                    .as_slice()
-                    .iter()
-                    .filter(|&&v| (v >> 32) as u32 != file_id),
-            );
-            skip_pages.extend(
-                pages
-                    .as_slice()
-                    .iter()
-                    .filter(|&&v| (v >> 32) as u32 == file_id),
-            );
+            dealloc_pages.extend(pages.as_slice().iter().filter(|&&v| {
+                let page_file_id = (v >> 32) as u32;
+                page_file_id != file_id && active_files.contains_key(&page_file_id)
+            }));
+            skip_pages.extend(pages.as_slice().iter().filter(|&&v| {
+                let page_file_id = (v >> 32) as u32;
+                page_file_id == file_id || !active_files.contains_key(&page_file_id)
+            }));
         }
     }
 
