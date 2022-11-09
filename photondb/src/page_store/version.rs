@@ -680,6 +680,7 @@ mod tests {
         assert!(buffer_set.current().get(file_id + 1).is_some());
     }
 
+    #[ignore]
     #[photonio::test]
     async fn buffer_set_concurrent_update() {
         let buffer_set = Arc::new(BufferSet::new(1, 1 << 10));
