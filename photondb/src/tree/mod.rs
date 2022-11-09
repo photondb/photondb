@@ -144,12 +144,22 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
     async fn try_write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
         let (mut view, parent) = self.find_leaf(key.raw).await?;
+
+        // Try to split the page before every write to avoid starving the split
+        // operation due to contentions.
+        if self.should_split_page(view.page)
+            && self.split_page(view.clone(), parent.clone()).await.is_ok()
+        {
+            return Err(Error::Again);
+        }
+
         // Build a delta page with the given key-value pair.
         let delta = (key, value);
         let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_item(delta);
         let mut txn = self.guard.begin();
         let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
         builder.build(&mut new_page);
+
         // Update the corresponding leaf page with the delta.
         loop {
             new_page.set_epoch(view.page.epoch());
@@ -649,6 +659,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                         && builder.len() >= 2
                         && page_size < page.size() / 2
                         && range_limit.is_none()
+                        && !self.should_consolidate_page(page)
                     {
                         return true;
                     }
@@ -697,7 +708,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             // Adjust the page size for inner pages.
             max_size /= 2;
         }
-        page.size() > max_size
+        page.size() > max_size && page.chain_next() == 0
     }
 
     // Returns true if the page should be consolidated.
