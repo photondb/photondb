@@ -30,6 +30,7 @@ pub(crate) struct MinDeclineRateStrategy {
     used_high: usize,
     used: usize,
 
+    sorted: bool,
     scores: Vec<FileScore>,
 }
 
@@ -40,6 +41,7 @@ impl MinDeclineRateStrategy {
             used_low: low,
             used_high: high,
             used: 0,
+            sorted: false,
             scores: Vec::default(),
         }
     }
@@ -53,6 +55,7 @@ impl GcPickStrategy for MinDeclineRateStrategy {
         let write_amplify = write_amplification(file_info);
         assert!(!score.is_nan());
         assert!(!effective_rate.is_nan());
+        assert!(!effective_rate.is_infinite());
         self.used += file_info.file_size();
         self.scores.push(FileScore {
             file_id,
@@ -63,14 +66,17 @@ impl GcPickStrategy for MinDeclineRateStrategy {
     }
 
     fn apply(&mut self) -> Option<u32> {
+        if !self.sorted {
+            self.sorted = true;
+            self.scores.sort_unstable_by(|a, b| {
+                b.partial_cmp(a)
+                    .unwrap_or_else(|| b.file_id.cmp(&a.file_id))
+            });
+        }
+
         if self.used < self.used_low || self.scores.len() < 2 {
             return None;
         }
-
-        self.scores.sort_by(|a, b| {
-            a.partial_cmp(b)
-                .unwrap_or_else(|| a.file_id.cmp(&b.file_id))
-        });
 
         if let Some(file) = self.scores.pop() {
             // FIXME: magic numbers.
@@ -116,29 +122,33 @@ pub(crate) fn decline_rate(file_info: &FileInfo, now: u32) -> f64 {
     }
 
     let file_size = file_info.file_size();
-    let free_size = file_size - file_info.effective_size();
+    let effective_size = file_info.effective_size();
+    let free_size = file_size - effective_size;
     if free_size == 0 || file_info.up2() == now {
         return 0.0;
     }
 
     let num_active_pages = num_active_pages as f64;
-    let file_size = file_size as f64;
+    let effective_size = effective_size as f64;
     let free_size = free_size as f64;
     let up2 = file_info.up2() as f64;
     let now = now as f64;
 
     // See "Efficiently Reclaiming Space in a Log Structured Store" section 5.1.3
     // "Transformed Declining Cost Equation" for details.
-    ((file_size - free_size) / free_size).powi(2) / (num_active_pages * (now - up2))
+    -(effective_size / free_size).powi(2) / (num_active_pages * (now - up2))
 }
 
 #[allow(unused)]
 pub(crate) fn total_write_amplification(file_infos: &HashMap<u32, FileInfo>) -> f64 {
-    let empty_rate: f64 = file_infos.values().map(|i| i.empty_pages_rate()).sum();
+    let empty_rate: f64 = file_infos
+        .values()
+        .filter(|i| !i.is_empty())
+        .map(|i| i.empty_pages_rate())
+        .sum();
     (1.0 / empty_rate) * (1.0 - empty_rate)
 }
 
-#[allow(unused)]
 pub(crate) fn write_amplification(file_info: &FileInfo) -> f64 {
     let empty_rate = file_info.empty_pages_rate();
 

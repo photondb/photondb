@@ -71,7 +71,7 @@ impl FileInfo {
                 self.active_size -= page_size;
             }
         }
-        if self.up1 <= now {
+        if self.up1 < now {
             self.up2 = self.up1;
             self.up1 = now;
         }
@@ -119,8 +119,9 @@ impl FileInfo {
     #[inline]
     pub(crate) fn empty_pages_rate(&self) -> f64 {
         let active_pages = self.active_pages.len() as f64;
-        let total_pages = self.meta.total_page_size() as f64 + 0.1;
-        active_pages / total_pages
+        let total_pages = self.meta.total_pages() as f64 + 0.1;
+        debug_assert!(active_pages <= total_pages);
+        1.0 - (active_pages / total_pages)
     }
 
     #[inline]
@@ -199,6 +200,12 @@ impl FileMeta {
                                                     * end val. */
         };
         Some((start_offset, (end_offset - start_offset) as usize))
+    }
+
+    // Return the total page (include inactive page).
+    #[inline]
+    pub(crate) fn total_pages(&self) -> usize {
+        self.data_offsets.len()
     }
 
     // Return the total page size(include inactive page).

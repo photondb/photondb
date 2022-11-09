@@ -267,6 +267,11 @@ impl Version {
     }
 
     #[inline]
+    pub(crate) fn has_next_version(&self) -> bool {
+        !self.next_version.load(Ordering::Acquire).is_null()
+    }
+
+    #[inline]
     pub(crate) fn try_next(&self) -> Option<Arc<Version>> {
         Self::try_next_impl(self.next_version.load(Ordering::Acquire))
     }
@@ -541,6 +546,7 @@ impl BufferSetVersion {
         self.buffers_range.start
     }
 
+    #[cfg(test)]
     #[inline]
     pub(crate) fn next_buffer_id(&self) -> u32 {
         self.buffers_range.end
