@@ -308,7 +308,7 @@ mod tests {
         FlushCtx {
             shutdown,
             version_owner,
-            page_files: Arc::new(PageFiles::new(Photon, base, "prefix").await),
+            page_files: Arc::new(PageFiles::new(Photon, base).await),
             manifest: Arc::new(futures::lock::Mutex::new(
                 Manifest::open(Photon, base).await.unwrap(),
             )),
