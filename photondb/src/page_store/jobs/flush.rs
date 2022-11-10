@@ -411,7 +411,6 @@ mod tests {
 
     #[photonio::test]
     async fn flush_dealloc_pages_rewritten_pointer_obsoleted_file() {
-        env_logger::init();
         let root = TempDir::new("flush_apply_dealloc_pages").unwrap();
         let ctx = new_flush_ctx(root.path()).await;
 
