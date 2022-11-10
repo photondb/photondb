@@ -15,6 +15,11 @@ pub(crate) struct Args {
     #[arg(long, required = true)]
     db: PathBuf,
 
+    /// Time in seconds for the random-ops tests to run.
+    /// When 0 then num & reads determine the test duration
+    #[arg(short, long, default_value_t = 0)]
+    duration: u64,
+
     /// Size of each key.
     #[arg(short, long, default_value_t = 16)]
     key_size: u64,

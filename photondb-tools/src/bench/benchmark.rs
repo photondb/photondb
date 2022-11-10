@@ -5,7 +5,7 @@ use std::{
     rc::Rc,
     sync::{Arc, Mutex},
     task::{Poll, Waker},
-    time::{self, Instant, SystemTime, UNIX_EPOCH},
+    time::{self, Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::Utc;
@@ -243,7 +243,7 @@ impl PhotonBench {
             ctx.config.value_size,
         );
         let lsn = 0;
-        for _ in 0..op_cnt {
+        for _ in Until::new(op_cnt, cfg.duration) {
             let mut key = vec![0u8; ctx.config.key_size as usize];
             key_gen.generate_key(&mut key);
             let value = value_gen.generate_value();
@@ -279,7 +279,7 @@ impl PhotonBench {
         let mut founds = 0;
 
         let lsn = 0;
-        for _ in 0..op_cnt {
+        for _ in Until::new(op_cnt, cfg.duration) {
             let mut key = vec![0u8; ctx.config.key_size as usize];
             key_gen.generate_key(&mut key);
             reads += 1;
@@ -325,7 +325,7 @@ impl PhotonBench {
 
         let rlsn = 0;
         let wlsn = 1;
-        for _ in 0..op_cnt {
+        for _ in Until::new(op_cnt, cfg.duration) {
             let mut bytes = 0;
             let mut key = vec![0u8; ctx.config.key_size as usize];
             key_gen.generate_key(&mut key);
@@ -377,7 +377,7 @@ impl PhotonBench {
 
         let mut read_weight = 0;
         let mut write_weight = 0;
-        for _ in 0..op_cnt {
+        for _ in Until::new(op_cnt, cfg.duration) {
             if read_weight == 0 && write_weight == 0 {
                 read_weight = cfg.read_write_percent;
                 write_weight = 100 - read_weight;
@@ -423,7 +423,7 @@ impl PhotonBench {
         }
         let msg = format!(
             "(reads:{reads} writes:{writes} total:{} founds:{founds})",
-            op_cnt
+            reads + writes
         );
         ctx.stats.borrow_mut().add_msg(&msg);
     }
@@ -820,6 +820,53 @@ impl Future for Barrier {
             } else {
                 core.wakers.insert(id, cx.waker().clone());
                 Poll::Pending
+            }
+        }
+    }
+}
+
+struct Until {
+    want_cnt: u64,
+    done_cnt: u64,
+    duration: Option<Duration>,
+    start: Instant,
+}
+
+impl Until {
+    fn new(cnt: u64, duration_sec: u64) -> Self {
+        let duration = if duration_sec > 0 {
+            Some(Duration::from_secs(duration_sec))
+        } else {
+            None
+        };
+        let start = Instant::now();
+        Self {
+            want_cnt: cnt,
+            done_cnt: 0,
+            duration,
+            start,
+        }
+    }
+}
+
+impl Iterator for Until {
+    type Item = ();
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(duration) = self.duration {
+            self.done_cnt += 1;
+            if self.done_cnt % 1000 == 0 {
+                if self.start.elapsed() >= duration {
+                    return None;
+                }
+            }
+            Some(())
+        } else {
+            if self.done_cnt < self.want_cnt {
+                self.done_cnt += 1;
+                Some(())
+            } else {
+                None
             }
         }
     }
