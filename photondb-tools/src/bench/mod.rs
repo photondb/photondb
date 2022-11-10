@@ -51,6 +51,11 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = -1)]
     read_writes: i64,
 
+    /// Ratio of reads to reads/writes for the ReadRandomWriteRandom workload.
+    /// Default value 90 means "9 gets for every 1 put".
+    #[arg(long, default_value_t = 90)]
+    read_write_percent: u32,
+
     /// Number of concurrent threads to run.
     #[arg(short, long, default_value_t = 1)]
     threads: u64,

@@ -194,7 +194,9 @@ impl PhotonBench {
                     }
                     BenchmarkType::ReadRandom => Self::do_read_random(&mut task_ctx).await,
                     BenchmarkType::UpdateRandom => Self::do_update_random(&mut task_ctx).await,
-                    BenchmarkType::ReadRandomWriteRandom => {}
+                    BenchmarkType::ReadRandomWriteRandom => {
+                        Self::do_read_random_write_random(&mut task_ctx).await
+                    }
                     _ => unimplemented!(),
                 }
                 task_ctx.stats.as_ref().borrow_mut().stop();
@@ -349,6 +351,80 @@ impl PhotonBench {
                 .finish_operation(OpType::Update, 1, 0, bytes as u64);
         }
         let msg = format!("(updates:{updates} founds:{founds})");
+        ctx.stats.borrow_mut().add_msg(&msg);
+    }
+
+    async fn do_read_random_write_random(ctx: &mut TaskCtx) {
+        let table = ctx.table.clone();
+        let cfg = ctx.config.to_owned();
+        let op_cnt = cfg.num;
+
+        let mut key_gen = KeyGenerator::new(
+            GenMode::Random,
+            ctx.config.key_size,
+            ctx.config.num,
+            ctx.seed,
+        );
+        let mut val_gen = ValueGenerator::new(
+            ctx.config.value_size_distribution_type,
+            ctx.config.value_size,
+        );
+        let lsn = 0;
+
+        let mut reads = 0;
+        let mut writes = 0;
+        let mut founds = 0;
+
+        let mut read_weight = 0;
+        let mut write_weight = 0;
+        for _ in 0..op_cnt {
+            if read_weight == 0 && write_weight == 0 {
+                read_weight = cfg.read_write_percent;
+                write_weight = 100 - read_weight;
+            }
+
+            let mut key = vec![0u8; ctx.config.key_size as usize];
+            key_gen.generate_key(&mut key);
+
+            if read_weight > 0 {
+                if let Some(v) = table.get(&key, lsn).await.expect("get key fail") {
+                    founds += 1;
+                    let bytes = key.len() + v.len() + std::mem::size_of::<u64>();
+                    ctx.stats
+                        .borrow_mut()
+                        .finish_operation(OpType::Read, 1, 0, bytes as u64);
+                } else {
+                    ctx.stats
+                        .borrow_mut()
+                        .finish_operation(OpType::Read, 0, 1, 0);
+                }
+
+                read_weight -= 1;
+                reads += 1;
+                continue;
+            }
+
+            if write_weight > 0 {
+                let value = val_gen.generate_value();
+
+                table.put(&key, lsn, value).await.unwrap();
+
+                photonio::task::yield_now().await;
+
+                let bytes = key.len() + value.len() + std::mem::size_of::<u64>();
+
+                ctx.stats
+                    .borrow_mut()
+                    .finish_operation(OpType::Write, 1, 0, bytes as u64);
+
+                write_weight -= 1;
+                writes += 1;
+            }
+        }
+        let msg = format!(
+            "(reads:{reads} writes:{writes} total:{} founds:{founds})",
+            op_cnt
+        );
         ctx.stats.borrow_mut().add_msg(&msg);
     }
 }
