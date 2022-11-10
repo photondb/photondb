@@ -53,7 +53,7 @@ pub(crate) struct Args {
     runtime_seconds: u64,
 
     /// Destory the existsing DB before running the test
-    #[clap(long, default_value_t = true)]
+    #[clap(long, default_value_t = true, action = clap::ArgAction::Set)]
     destory_db: bool,
 
     /// How offten are we going to mutate the prefix
