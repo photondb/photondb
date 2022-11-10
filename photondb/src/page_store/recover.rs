@@ -90,7 +90,12 @@ impl<E: Env> PageStore<E> {
         summary: &FilesSummary,
     ) -> Result<()> {
         let mut obsoleted_files = summary.obsoleted_files.clone();
-        for file_id in page_files.list_page_files()? {
+        let exist_files = page_files
+            .list_page_files()?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        obsoleted_files.retain(|fid| exist_files.contains(fid));
+        for file_id in exist_files {
             if !summary.active_files.contains_key(&file_id) {
                 obsoleted_files.insert(file_id);
             }
