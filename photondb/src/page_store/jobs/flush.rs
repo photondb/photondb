@@ -168,10 +168,9 @@ impl<E: Env> FlushCtx<E> {
         let mut files = version.files().clone();
         for page_addr in dealloc_pages {
             let file_id = (page_addr >> 32) as u32;
-            let Some(file_info) = files.get_mut(&file_id) else {
-                panic!("file {file_id} is missing");
+            if let Some(file_info) = files.get_mut(&file_id) {
+                file_info.deactivate_page(new_file_id, page_addr);
             };
-            file_info.deactivate_page(new_file_id, page_addr);
         }
         files
     }
@@ -245,7 +244,7 @@ fn collect_dealloc_pages_and_stats(
         flush_stats.data_size += header.page_size();
         if let RecordRef::DeallocPages(pages) = record_ref {
             if header.former_file_id() as u64 != NAN_ID {
-                reclaimed_files.insert(header.former_file_id());
+                assert!(reclaimed_files.insert(header.former_file_id()));
             }
             dealloc_pages.extend(
                 pages
@@ -287,6 +286,8 @@ mod tests {
         path::Path,
         sync::Arc,
     };
+
+    use tempdir::TempDir;
 
     use super::{drain_obsoleted_files, FlushCtx};
     use crate::{
@@ -346,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn obsoleted_files_drain() {
+    fn flush_obsoleted_files_drain() {
         // It drains all obsoleted files.
         let mut files = HashMap::new();
         files.insert(1, make_obsoleted_file(1));
@@ -372,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn obsoleted_files_skip_refering_files() {
+    fn flush_obsoleted_files_skip_refering_files() {
         let mut files = HashMap::new();
         files.insert(1, make_active_file(1, 32));
         files.insert(2, make_obsoleted_file_but_refer_others(2, 1));
@@ -391,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn obsoleted_files_drain_reclaimed() {
+    fn flush_obsoleted_files_drain_reclaimed() {
         let mut files = HashMap::new();
         files.insert(1, make_obsoleted_file(1));
         files.insert(2, make_obsoleted_file_but_refer_others(2, 1));
@@ -406,5 +407,79 @@ mod tests {
         assert!(!files.contains_key(&1));
         assert!(!files.contains_key(&2));
         assert!(files.contains_key(&3));
+    }
+
+    #[photonio::test]
+    async fn flush_dealloc_pages_rewritten_pointer_obsoleted_file() {
+        env_logger::init();
+        let root = TempDir::new("flush_apply_dealloc_pages").unwrap();
+        let ctx = new_flush_ctx(root.path()).await;
+
+        // Insert two pages in current buffer.
+        let (addr1, addr2, file_1) = {
+            let version = ctx.version_owner.current();
+            let buf = version.min_write_buffer();
+            let (addr1, _, _) = unsafe { buf.alloc_page(1, 32, false) }.unwrap();
+            let (addr2, _, _) = unsafe { buf.alloc_page(2, 32, false) }.unwrap();
+            seal_and_install_new_buffer(&version, &buf);
+            ctx.flush(&version, &buf).await.unwrap();
+            (addr1, addr2, buf.file_id())
+        };
+        println!("Alloc two pages {addr1} {addr2} at file {file_1}");
+
+        // Dealloc page with addr1, install new buffer.
+        let file_2 = {
+            let version = ctx.version_owner.current();
+            let buf = version.min_write_buffer();
+            unsafe { buf.dealloc_pages(&[addr1], false) }.unwrap();
+            seal_and_install_new_buffer(&version, &buf);
+            ctx.flush(&version, &buf).await.unwrap();
+            buf.file_id()
+        };
+        println!("Dealloc page {addr1} at file {file_2}");
+
+        // Dealloc page with addr2, install new buffer without flush.
+        let buffer_2 = {
+            let version = ctx.version_owner.current();
+            let buf = version.min_write_buffer();
+            unsafe { buf.dealloc_pages(&[addr2], false) }.unwrap();
+            seal_and_install_new_buffer(&version, &buf);
+            buf.file_id()
+        };
+        println!("Dealloc page {addr2} at file {buffer_2}");
+
+        // Rewrite file 2, likes gc, and install new buffer without flush.
+        let buffer_3 = {
+            let version = ctx.version_owner.current();
+            let buffer_3 = version.buffer_set.current().next_buffer_id() - 1;
+            let buf = version.get(buffer_3).unwrap(); // in last buffer.
+            let header = unsafe { buf.dealloc_pages(&[addr1], false) }.unwrap();
+            header.set_former_file_id(file_2);
+            seal_and_install_new_buffer(&version, &buf);
+            buffer_3
+        };
+        println!("Rewrite file {file_2}, so it will re-dealloc page {addr1}");
+
+        // Flush buffer_2, so file_1 is empty.
+        {
+            let version = ctx.version_owner.current();
+            let buf = version.get(buffer_2).unwrap().clone();
+            ctx.flush(&version, &buf).await.unwrap();
+        }
+        println!("Flush write buffer {buffer_2}, it make file {file_1} become empty");
+
+        // Flush buffer_3, it will dealloc pages 2 but file_1 is already cleaned.
+        {
+            let version = ctx.version_owner.current();
+            let buf = version.get(buffer_3).unwrap().clone();
+            ctx.flush(&version, &buf).await.unwrap();
+        }
+    }
+
+    fn seal_and_install_new_buffer(version: &Version, buf: &WriteBuffer) {
+        buf.seal().unwrap();
+        let file_id = buf.file_id() + 1;
+        let buf = WriteBuffer::with_capacity(file_id, 1 << 16);
+        version.buffer_set.install(Arc::new(buf));
     }
 }
