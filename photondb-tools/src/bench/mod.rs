@@ -84,9 +84,13 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = 0)]
     seed_base: u64,
 
-    // Enable collect histogram.
+    /// Enable collect histogram.
     #[arg(long, default_value_t = false)]
     hist: bool,
+
+    /// Enable collect photondb table tree stats.
+    #[arg(long, default_value_t = false)]
+    table_stats: bool,
 }
 
 #[derive(Debug, Copy, Clone)]

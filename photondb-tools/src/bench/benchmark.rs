@@ -10,6 +10,7 @@ use std::{
 
 use chrono::Utc;
 use futures::Future;
+use hdrhistogram::Histogram;
 use photondb::{
     env::{Env, Photon},
     raw::Table,
@@ -540,7 +541,7 @@ impl Stats {
         self.last_op_finish = Some(now);
 
         if self.config.hist {
-            let t = op_elapsed.as_millis() as u64;
+            let t = op_elapsed.as_micros() as u64;
             self.hist
                 .entry(typ)
                 .or_insert_with(|| {
@@ -653,23 +654,41 @@ impl Stats {
             bytes_rate,
             self.msg,
         );
-        let table_stats = self.table.stats();
-        println!(
-            "table stats: conflict: {:?}, success: {:?}",
-            table_stats.conflict, table_stats.success
-        );
         if self.config.hist {
-            for (op, hist) in &self.hist {
-                print!(
-                    "{:12?} : p50: {} ms, p95: {} ms, p99: {} ms, p100: {} ms",
-                    op,
-                    hist.value_at_quantile(50.0),
-                    hist.value_at_quantile(95.0),
-                    hist.value_at_quantile(99.0),
-                    hist.value_at_quantile(100.0),
-                )
+            display_hist(&self.hist);
+        }
+        if self.config.table_stats {
+            self.display_table_stats();
+        }
+    }
+
+    fn display_table_stats(&self) {
+        let stats = self.table.stats();
+        macro_rules! display_txn_stats {
+            ($expression:expr, $name:ident) => {
+                {
+                    let s = $expression;
+                    println!("TableStats_{}: read: {}, write: {}, split_page: {}, reconcile_page: {}, consolidate_page: {}",
+                        stringify!($name), s.read, s.write, s.split_page, s.reconcile_page, s.consolidate_page)
+                }
             }
         }
+        display_txn_stats!(stats.conflict, conflict);
+        display_txn_stats!(stats.success, success);
+    }
+}
+
+fn display_hist(hists: &HashMap<OpType, Histogram<u64>>) {
+    for (op, hist) in hists {
+        println!(
+            "Percentiles_{:12?} : P50: {} ms, P75: {} ms, P99: {} ms, P99.9: {} ms, P99.99: {} ms",
+            op,
+            hist.value_at_quantile(0.50),
+            hist.value_at_quantile(0.75),
+            hist.value_at_quantile(0.99),
+            hist.value_at_quantile(0.999),
+            hist.value_at_quantile(0.9999),
+        )
     }
 }
 
