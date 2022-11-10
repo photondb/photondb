@@ -92,6 +92,7 @@ struct Timer {
 }
 
 struct TimerCore {
+    close: bool,
     next_id: u64,
     heap: BinaryHeap<Reverse<TimerEvent>>,
     waiters: HashMap<u64, Option<Waker>>,
@@ -109,6 +110,14 @@ struct Sleep {
 }
 
 impl Timer {
+    fn close(&self) {
+        let mut timer = self.inner.lock().expect("Poisoned");
+        timer.close = true;
+        for waker in std::mem::take(&mut timer.waiters).into_values().flatten() {
+            waker.wake();
+        }
+    }
+
     fn sleep(&self, duration: Duration) -> Sleep {
         let deadline = self.timestamp() + duration.as_millis() as u64;
         let timer_id = {
@@ -127,6 +136,9 @@ impl Timer {
 
     fn poll_elapsed(&self, timer_id: u64, cx: &mut Context<'_>) -> Poll<()> {
         let mut timer = self.inner.lock().expect("Poisoned");
+        if timer.close {
+            return Poll::Ready(());
+        }
         match timer.waiters.get_mut(&timer_id) {
             Some(waker) => {
                 *waker = Some(cx.waker().clone());
@@ -178,6 +190,7 @@ impl Default for Timer {
             baseline: Instant::now(),
             inner: Arc::new(Mutex::new(TimerCore {
                 next_id: 0,
+                close: false,
                 heap: BinaryHeap::default(),
                 waiters: HashMap::default(),
             })),
@@ -194,12 +207,7 @@ impl Future for Sleep {
     }
 }
 
-pub(crate) fn run(args: Args) -> Result<()> {
-    use futures::executor::block_on;
-    block_on(run_with_args(args))
-}
-
-async fn run_with_args(args: Args) -> Result<()> {
+pub(crate) async fn run(args: Args) -> Result<()> {
     if args.key_size <= PREFIX_SIZE {
         error!(
             "Key size must large than {PREFIX_SIZE}, but get {}",
@@ -249,6 +257,8 @@ async fn run_with_args(args: Args) -> Result<()> {
         elapsed += 1;
     }
 
+    info!("Now past {} seconds, exit ...", args.runtime_seconds);
+    job.timer.close();
     job.stop.store(true, Ordering::SeqCst);
     env.spawn_background(async move {
         for handle in handles {

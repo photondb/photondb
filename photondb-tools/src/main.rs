@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     match args.cmd {
-        Commands::Stress(args) => stress::run(args)?,
+        Commands::Stress(args) => stress::run(args).await?,
         Commands::Bench(args) => bench::run(args).await.unwrap(),
     }
     Ok(())
