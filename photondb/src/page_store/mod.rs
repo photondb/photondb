@@ -44,12 +44,18 @@ pub struct Options {
     ///
     /// Default: 128MB
     pub write_buffer_capacity: u32,
+
+    /// If true, use O_DIRECT to read/write page files.
+    ///
+    /// Default: false
+    pub use_direct_io: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
             write_buffer_capacity: 128 << 20,
+            use_direct_io: false,
         }
     }
 }
@@ -77,7 +83,7 @@ impl<E: Env> PageStore<E> {
         R: RewritePage<E>,
     {
         let (next_file_id, manifest, table, page_files, file_infos) =
-            Self::recover(env.to_owned(), path).await?;
+            Self::recover(env.to_owned(), path, &options).await?;
 
         let version = Version::new(
             options.write_buffer_capacity,
