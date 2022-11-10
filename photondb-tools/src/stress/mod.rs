@@ -113,10 +113,8 @@ impl Timer {
     fn close(&self) {
         let mut timer = self.inner.lock().expect("Poisoned");
         timer.close = true;
-        for waker in std::mem::take(&mut timer.waiters).into_values() {
-            if let Some(waker) = waker {
-                waker.wake();
-            }
+        for waker in std::mem::take(&mut timer.waiters).into_values().flatten() {
+            waker.wake();
         }
     }
 
