@@ -855,19 +855,15 @@ impl Iterator for Until {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(duration) = self.duration {
             self.done_cnt += 1;
-            if self.done_cnt % 1000 == 0 {
-                if self.start.elapsed() >= duration {
-                    return None;
-                }
+            if self.done_cnt % 1000 == 0 && self.start.elapsed() >= duration {
+                return None;
             }
             Some(())
+        } else if self.done_cnt < self.want_cnt {
+            self.done_cnt += 1;
+            Some(())
         } else {
-            if self.done_cnt < self.want_cnt {
-                self.done_cnt += 1;
-                Some(())
-            } else {
-                None
-            }
+            None
         }
     }
 }
