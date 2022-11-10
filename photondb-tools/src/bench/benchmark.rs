@@ -294,7 +294,6 @@ impl PhotonBench {
                     .borrow_mut()
                     .finish_operation(OpType::Read, 0, 1, 0);
             }
-            photonio::task::yield_now().await;
         }
         let msg = format!("(reads:{reads} founds:{founds})");
         ctx.stats.borrow_mut().add_msg(&msg);
