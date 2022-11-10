@@ -15,6 +15,7 @@ impl<E: Env> PageStore<E> {
     pub(super) async fn recover<P: AsRef<Path>>(
         env: E,
         path: P,
+        options: &crate::PageStoreOptions,
     ) -> Result<(
         u32, /* next file id */
         Manifest<E>,
@@ -26,7 +27,7 @@ impl<E: Env> PageStore<E> {
         let versions = manifest.list_versions().await?;
         let summary = Self::apply_version_edits(versions);
 
-        let page_files = PageFiles::new(env, path.as_ref()).await;
+        let page_files = PageFiles::new(env, path.as_ref(), options.use_direct_io).await;
         let file_infos = Self::recover_file_infos(&page_files, &summary.active_files).await?;
         let page_table = Self::recover_page_table(&page_files, &summary.active_files).await?;
 
