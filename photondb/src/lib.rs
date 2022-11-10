@@ -64,6 +64,7 @@ mod tests {
         page_chain_length: 2,
         page_store: PageStoreOptions {
             write_buffer_capacity: 1 << 20,
+            use_direct_io: false,
         },
     };
 
