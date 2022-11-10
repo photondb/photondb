@@ -1,4 +1,5 @@
 use core::fmt;
+use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
 
@@ -11,9 +12,8 @@ mod benchmark;
 #[clap(about = "Start bench testing")]
 pub(crate) struct Args {
     /// Path of db data folder.
-    /// default Env::tempdir.
-    #[arg(short, long)]
-    path: Option<String>,
+    #[arg(long, required = true)]
+    db: PathBuf,
 
     /// Size of each key.
     #[arg(short, long, default_value_t = 16)]

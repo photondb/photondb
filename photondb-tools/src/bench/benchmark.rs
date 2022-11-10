@@ -91,13 +91,9 @@ impl PhotonBench {
     }
 
     async fn open_table(config: Arc<Args>, env: &Photon) -> Table<Photon> {
-        let options = TableOptions::default();
-        let path = config
-            .path
-            .as_ref()
-            .map(Into::into)
-            .unwrap_or_else(std::env::temp_dir);
-        Table::open(env.to_owned(), path, options)
+        let mut options = TableOptions::default();
+        options.page_store.write_buffer_capacity = 128 << 20;
+        Table::open(env.to_owned(), &config.db, options)
             .await
             .expect("open table fail")
     }
@@ -250,6 +246,8 @@ impl PhotonBench {
             let value = value_gen.generate_value();
             table.put(&key, lsn, value).await.unwrap();
 
+            photonio::task::yield_now().await;
+
             let bytes = key.len() + value.len() + std::mem::size_of::<u64>();
 
             ctx.stats
@@ -293,6 +291,7 @@ impl PhotonBench {
                     .borrow_mut()
                     .finish_operation(OpType::Read, 0, 1, 0);
             }
+            photonio::task::yield_now().await;
         }
         let msg = format!("(reads:{reads} founds:{founds})");
         ctx.stats.borrow_mut().add_msg(&msg);
@@ -339,6 +338,8 @@ impl PhotonBench {
                 .put(&key, wlsn, value)
                 .await
                 .expect("put of update fail");
+
+            photonio::task::yield_now().await;
 
             bytes += key.len() + value.len() + std::mem::size_of::<u64>();
 
@@ -404,9 +405,9 @@ impl KeyGenerator {
 
     fn generate_key(&mut self, buf: &mut [u8]) {
         let rand_num = match self.state.as_mut().unwrap() {
-            KeyGeneratorState::Random { rng } => rng.next_u64(),
+            KeyGeneratorState::Random { rng } => rng.next_u64() % self.key_nums,
             KeyGeneratorState::Sequence { last } => {
-                *last += 1;
+                *last = last.saturating_add(1);
                 *last
             }
         };
