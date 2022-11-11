@@ -69,8 +69,8 @@ impl GcPickStrategy for MinDeclineRateStrategy {
         if !self.sorted {
             self.sorted = true;
             self.scores.sort_unstable_by(|a, b| {
-                b.partial_cmp(a)
-                    .unwrap_or_else(|| b.file_id.cmp(&a.file_id))
+                a.partial_cmp(b)
+                    .unwrap_or_else(|| a.file_id.cmp(&b.file_id))
             });
         }
 
@@ -80,7 +80,7 @@ impl GcPickStrategy for MinDeclineRateStrategy {
 
         if let Some(file) = self.scores.pop() {
             // FIXME: magic numbers.
-            if file.effective_rate < 0.9 && file.write_amplify < 2.5 {
+            if file.effective_rate < 0.9 && file.write_amplify < 3.0 {
                 return Some(file.file_id);
             }
         }
@@ -118,14 +118,14 @@ impl StrategyBuilder for MinDeclineRateStrategyBuilder {
 pub(crate) fn decline_rate(file_info: &FileInfo, now: u32) -> f64 {
     let num_active_pages = file_info.num_active_pages();
     if num_active_pages == 0 {
-        return f64::MAX;
+        return 0.0;
     }
 
     let file_size = file_info.file_size();
     let effective_size = file_info.effective_size();
     let free_size = file_size - effective_size;
     if free_size == 0 || file_info.up2() == now {
-        return 0.0;
+        return f64::MIN;
     }
 
     let num_active_pages = num_active_pages as f64;
