@@ -3,7 +3,10 @@ use std::{
     path::Path,
 };
 
-use super::{page_table::PageTable, FileInfo, NewFile, PageFiles, PageStore, Result, VersionEdit};
+use super::{
+    page_table::{PageTable, PageTableBuilder},
+    FileInfo, NewFile, PageFiles, PageStore, Result, VersionEdit,
+};
 use crate::{env::Env, page_store::Manifest};
 
 struct FilesSummary {
@@ -75,14 +78,14 @@ impl<E: Env> PageStore<E> {
         let mut files = active_files.keys().cloned().collect::<Vec<_>>();
         files.sort_unstable();
 
-        let table = PageTable::default();
+        let mut table = PageTableBuilder::default();
         for file_id in files {
             let meta_reader = page_files.open_meta_reader(file_id).await?;
             for (page_addr, page_id) in meta_reader.read_page_table().await? {
                 table.set(page_id, page_addr);
             }
         }
-        Ok(table)
+        Ok(table.build())
     }
 
     async fn delete_unreferenced_page_files(

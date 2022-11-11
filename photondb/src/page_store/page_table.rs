@@ -2,7 +2,7 @@ use std::{
     mem::MaybeUninit,
     ptr::null_mut,
     sync::{
-        atomic::{AtomicPtr, AtomicU64, Ordering},
+        atomic::{fence, AtomicPtr, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -10,6 +10,38 @@ use std::{
 pub(crate) const NAN_ID: u64 = 0;
 pub(crate) const MIN_ID: u64 = 1;
 pub(crate) const MAX_ID: u64 = L2_FANOUT - 1;
+
+/// Builds a new [`PageTable`] from existing mappings.
+#[derive(Default)]
+pub(crate) struct PageTableBuilder {
+    inner: Inner,
+    max_id: u64,
+}
+
+impl PageTableBuilder {
+    pub(crate) fn set(&mut self, id: u64, addr: u64) {
+        self.inner.index(id).store(addr, Ordering::Relaxed);
+        self.max_id = self.max_id.max(id);
+    }
+
+    pub(crate) fn build(mut self) -> PageTable {
+        let mut free = NAN_ID;
+        // We prefer smaller ids so we scan backward to build the free list.
+        for id in (MIN_ID..=self.max_id).rev() {
+            if self.inner.index(id).load(Ordering::Relaxed) == 0 {
+                self.inner.index(id).store(free, Ordering::Relaxed);
+                free = id;
+            }
+        }
+        self.inner.free = AtomicU64::new(free);
+        self.inner.next = AtomicU64::new(self.max_id + 1);
+        // Make sure all writes are visible before we publish the table.
+        fence(Ordering::SeqCst);
+        PageTable {
+            inner: Arc::new(self.inner),
+        }
+    }
+}
 
 /// A table that maps page ids to page addresses.
 #[derive(Clone, Default)]
@@ -232,6 +264,25 @@ mod tests {
         ] {
             table.set(i, i);
             assert_eq!(table.get(i), i);
+        }
+    }
+
+    #[test]
+    fn recover() {
+        let mut builder = PageTableBuilder::default();
+        builder.set(1, 1);
+        builder.set(3, 3);
+        builder.set(5, 5);
+        let table = builder.build();
+        assert_eq!(table.get(1), 1);
+        assert_eq!(table.get(3), 3);
+        assert_eq!(table.get(5), 5);
+        unsafe {
+            assert_eq!(table.alloc(), Some(2));
+            assert_eq!(table.alloc(), Some(4));
+            assert_eq!(table.alloc(), Some(6));
+            table.dealloc(2);
+            assert_eq!(table.alloc(), Some(2));
         }
     }
 }
