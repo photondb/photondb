@@ -1,4 +1,5 @@
 use core::fmt;
+use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
 
@@ -11,9 +12,13 @@ mod benchmark;
 #[clap(about = "Start bench testing")]
 pub(crate) struct Args {
     /// Path of db data folder.
-    /// default Env::tempdir.
-    #[arg(short, long)]
-    path: Option<String>,
+    #[arg(long, required = true)]
+    db: PathBuf,
+
+    /// Time in seconds for the random-ops tests to run.
+    /// When 0 then num & reads determine the test duration
+    #[arg(short, long, default_value_t = 0)]
+    duration: u64,
 
     /// Size of each key.
     #[arg(short, long, default_value_t = 16)]
@@ -51,6 +56,11 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = -1)]
     read_writes: i64,
 
+    /// Ratio of reads to reads/writes for the ReadRandomWriteRandom workload.
+    /// Default value 90 means "9 gets for every 1 put".
+    #[arg(long, default_value_t = 90)]
+    read_write_percent: u32,
+
     /// Number of concurrent threads to run.
     #[arg(short, long, default_value_t = 1)]
     threads: u64,
@@ -84,9 +94,13 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = 0)]
     seed_base: u64,
 
-    // Enable collect histogram.
+    /// Enable collect histogram.
     #[arg(long, default_value_t = false)]
     hist: bool,
+
+    /// Enable collect photondb table tree stats.
+    #[arg(long, default_value_t = false)]
+    table_stats: bool,
 }
 
 #[derive(Debug, Copy, Clone)]

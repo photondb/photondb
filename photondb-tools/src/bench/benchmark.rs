@@ -5,11 +5,12 @@ use std::{
     rc::Rc,
     sync::{Arc, Mutex},
     task::{Poll, Waker},
-    time::{self, Instant, SystemTime, UNIX_EPOCH},
+    time::{self, Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::Utc;
 use futures::Future;
+use hdrhistogram::Histogram;
 use photondb::{
     env::{Env, Photon},
     raw::Table,
@@ -91,13 +92,9 @@ impl PhotonBench {
     }
 
     async fn open_table(config: Arc<Args>, env: &Photon) -> Table<Photon> {
-        let options = TableOptions::default();
-        let path = config
-            .path
-            .as_ref()
-            .map(Into::into)
-            .unwrap_or_else(std::env::temp_dir);
-        Table::open(env.to_owned(), path, options)
+        let mut options = TableOptions::default();
+        options.page_store.write_buffer_capacity = 128 << 20;
+        Table::open(env.to_owned(), &config.db, options)
             .await
             .expect("open table fail")
     }
@@ -197,7 +194,9 @@ impl PhotonBench {
                     }
                     BenchmarkType::ReadRandom => Self::do_read_random(&mut task_ctx).await,
                     BenchmarkType::UpdateRandom => Self::do_update_random(&mut task_ctx).await,
-                    BenchmarkType::ReadRandomWriteRandom => {}
+                    BenchmarkType::ReadRandomWriteRandom => {
+                        Self::do_read_random_write_random(&mut task_ctx).await
+                    }
                     _ => unimplemented!(),
                 }
                 task_ctx.stats.as_ref().borrow_mut().stop();
@@ -244,11 +243,13 @@ impl PhotonBench {
             ctx.config.value_size,
         );
         let lsn = 0;
-        for _ in 0..op_cnt {
+        for _ in Until::new(op_cnt, cfg.duration) {
             let mut key = vec![0u8; ctx.config.key_size as usize];
             key_gen.generate_key(&mut key);
             let value = value_gen.generate_value();
             table.put(&key, lsn, value).await.unwrap();
+
+            photonio::task::yield_now().await;
 
             let bytes = key.len() + value.len() + std::mem::size_of::<u64>();
 
@@ -278,7 +279,7 @@ impl PhotonBench {
         let mut founds = 0;
 
         let lsn = 0;
-        for _ in 0..op_cnt {
+        for _ in Until::new(op_cnt, cfg.duration) {
             let mut key = vec![0u8; ctx.config.key_size as usize];
             key_gen.generate_key(&mut key);
             reads += 1;
@@ -323,7 +324,7 @@ impl PhotonBench {
 
         let rlsn = 0;
         let wlsn = 1;
-        for _ in 0..op_cnt {
+        for _ in Until::new(op_cnt, cfg.duration) {
             let mut bytes = 0;
             let mut key = vec![0u8; ctx.config.key_size as usize];
             key_gen.generate_key(&mut key);
@@ -340,6 +341,8 @@ impl PhotonBench {
                 .await
                 .expect("put of update fail");
 
+            photonio::task::yield_now().await;
+
             bytes += key.len() + value.len() + std::mem::size_of::<u64>();
 
             ctx.stats
@@ -347,6 +350,80 @@ impl PhotonBench {
                 .finish_operation(OpType::Update, 1, 0, bytes as u64);
         }
         let msg = format!("(updates:{updates} founds:{founds})");
+        ctx.stats.borrow_mut().add_msg(&msg);
+    }
+
+    async fn do_read_random_write_random(ctx: &mut TaskCtx) {
+        let table = ctx.table.clone();
+        let cfg = ctx.config.to_owned();
+        let op_cnt = cfg.num;
+
+        let mut key_gen = KeyGenerator::new(
+            GenMode::Random,
+            ctx.config.key_size,
+            ctx.config.num,
+            ctx.seed,
+        );
+        let mut val_gen = ValueGenerator::new(
+            ctx.config.value_size_distribution_type,
+            ctx.config.value_size,
+        );
+        let lsn = 0;
+
+        let mut reads = 0;
+        let mut writes = 0;
+        let mut founds = 0;
+
+        let mut read_weight = 0;
+        let mut write_weight = 0;
+        for _ in Until::new(op_cnt, cfg.duration) {
+            if read_weight == 0 && write_weight == 0 {
+                read_weight = cfg.read_write_percent;
+                write_weight = 100 - read_weight;
+            }
+
+            let mut key = vec![0u8; ctx.config.key_size as usize];
+            key_gen.generate_key(&mut key);
+
+            if read_weight > 0 {
+                if let Some(v) = table.get(&key, lsn).await.expect("get key fail") {
+                    founds += 1;
+                    let bytes = key.len() + v.len() + std::mem::size_of::<u64>();
+                    ctx.stats
+                        .borrow_mut()
+                        .finish_operation(OpType::Read, 1, 0, bytes as u64);
+                } else {
+                    ctx.stats
+                        .borrow_mut()
+                        .finish_operation(OpType::Read, 0, 1, 0);
+                }
+
+                read_weight -= 1;
+                reads += 1;
+                continue;
+            }
+
+            if write_weight > 0 {
+                let value = val_gen.generate_value();
+
+                table.put(&key, lsn, value).await.unwrap();
+
+                photonio::task::yield_now().await;
+
+                let bytes = key.len() + value.len() + std::mem::size_of::<u64>();
+
+                ctx.stats
+                    .borrow_mut()
+                    .finish_operation(OpType::Write, 1, 0, bytes as u64);
+
+                write_weight -= 1;
+                writes += 1;
+            }
+        }
+        let msg = format!(
+            "(reads:{reads} writes:{writes} total:{} founds:{founds})",
+            reads + writes
+        );
         ctx.stats.borrow_mut().add_msg(&msg);
     }
 }
@@ -404,9 +481,9 @@ impl KeyGenerator {
 
     fn generate_key(&mut self, buf: &mut [u8]) {
         let rand_num = match self.state.as_mut().unwrap() {
-            KeyGeneratorState::Random { rng } => rng.next_u64(),
+            KeyGeneratorState::Random { rng } => rng.next_u64() % self.key_nums,
             KeyGeneratorState::Sequence { last } => {
-                *last += 1;
+                *last = last.saturating_add(1);
                 *last
             }
         };
@@ -539,7 +616,7 @@ impl Stats {
         self.last_op_finish = Some(now);
 
         if self.config.hist {
-            let t = op_elapsed.as_millis() as u64;
+            let t = op_elapsed.as_micros() as u64;
             self.hist
                 .entry(typ)
                 .or_insert_with(|| {
@@ -652,23 +729,41 @@ impl Stats {
             bytes_rate,
             self.msg,
         );
-        let table_stats = self.table.stats();
-        println!(
-            "table stats: conflict: {:?}, success: {:?}",
-            table_stats.conflict, table_stats.success
-        );
         if self.config.hist {
-            for (op, hist) in &self.hist {
-                print!(
-                    "{:12?} : p50: {} ms, p95: {} ms, p99: {} ms, p100: {} ms",
-                    op,
-                    hist.value_at_quantile(50.0),
-                    hist.value_at_quantile(95.0),
-                    hist.value_at_quantile(99.0),
-                    hist.value_at_quantile(100.0),
-                )
+            display_hist(&self.hist);
+        }
+        if self.config.table_stats {
+            self.display_table_stats();
+        }
+    }
+
+    fn display_table_stats(&self) {
+        let stats = self.table.stats();
+        macro_rules! display_txn_stats {
+            ($expression:expr, $name:ident) => {
+                {
+                    let s = $expression;
+                    println!("TableStats_{}: read: {}, write: {}, split_page: {}, reconcile_page: {}, consolidate_page: {}",
+                        stringify!($name), s.read, s.write, s.split_page, s.reconcile_page, s.consolidate_page)
+                }
             }
         }
+        display_txn_stats!(stats.conflict, conflict);
+        display_txn_stats!(stats.success, success);
+    }
+}
+
+fn display_hist(hists: &HashMap<OpType, Histogram<u64>>) {
+    for (op, hist) in hists {
+        println!(
+            "Percentiles_{:12?} : P50: {} ms, P75: {} ms, P99: {} ms, P99.9: {} ms, P99.99: {} ms",
+            op,
+            hist.value_at_quantile(0.50),
+            hist.value_at_quantile(0.75),
+            hist.value_at_quantile(0.99),
+            hist.value_at_quantile(0.999),
+            hist.value_at_quantile(0.9999),
+        )
     }
 }
 
@@ -725,6 +820,49 @@ impl Future for Barrier {
                 core.wakers.insert(id, cx.waker().clone());
                 Poll::Pending
             }
+        }
+    }
+}
+
+struct Until {
+    want_cnt: u64,
+    done_cnt: u64,
+    duration: Option<Duration>,
+    start: Instant,
+}
+
+impl Until {
+    fn new(cnt: u64, duration_sec: u64) -> Self {
+        let duration = if duration_sec > 0 {
+            Some(Duration::from_secs(duration_sec))
+        } else {
+            None
+        };
+        let start = Instant::now();
+        Self {
+            want_cnt: cnt,
+            done_cnt: 0,
+            duration,
+            start,
+        }
+    }
+}
+
+impl Iterator for Until {
+    type Item = ();
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(duration) = self.duration {
+            self.done_cnt += 1;
+            if self.done_cnt % 1000 == 0 && self.start.elapsed() >= duration {
+                return None;
+            }
+            Some(())
+        } else if self.done_cnt < self.want_cnt {
+            self.done_cnt += 1;
+            Some(())
+        } else {
+            None
         }
     }
 }
