@@ -24,51 +24,84 @@ Features:
 
 ## Progress
 
-The in-memory part of the storage engine is almost done at the moment. We have published the `photondb-engine` crate v0.0.1.
+We have published the `photondb` crate v0.0.2. You can try some examples to see what it can do so far. It is important to note that the current version is still too young to be used for anything serious.
 
-Example:
+Use the synchronous APIs:
 
 ```toml
 [dependencies]
-photondb-engine = "0.0.1"
+photondb = "0.0.2"
 ```
 
 ```rust
-use photondb_engine::tree::{Error, Map, Options};
+use photondb::{std::Table, Result, TableOptions};
 
-fn main() -> Result<(), Error> {
-    let map = Map::open(Options::default())?;
-    map.put(b"hello", b"world")?;
-    map.get(b"hello", |value| {
-        assert_eq!(value.unwrap(), b"world");
-    })?;
-    map.delete(b"hello")?;
-    map.get(b"hello", |value| assert_eq!(value, None))?;
+fn main() -> Result<()> {
+    let table = Table::open("/tmp/photondb", TableOptions::default())?;
+    let key = vec![1];
+    let val1 = vec![2];
+    let val2 = vec![3];
+    // Simple CRUD operations.
+    table.put(&key, 1, &val1)?;
+    table.delete(&key, 2)?;
+    table.put(&key, 3, &val2)?;
+    assert_eq!(table.get(&key, 1)?, Some(val1));
+    assert_eq!(table.get(&key, 2)?, None);
+    assert_eq!(table.get(&key, 3)?, Some(val2.clone()));
+    let guard = table.pin();
+    // Get the value without copy.
+    assert_eq!(guard.get(&key, 3)?, Some(val2.as_slice()));
+    // Iterate the tree page by page.
+    let mut pages = guard.pages();
+    while let Some(page) = pages.next()? {
+        for (k, v) in page {
+            println!("{:?} {:?}", k, v);
+        }
+    }
     Ok(())
 }
 ```
 
-## Benchmark
+Use the asynchronous APIs:
 
-Some rough benchmarks on the in-memory storage engine with 100M keys:
+```toml
+[dependencies]
+photondb = "0.0.2"
+photonio = "0.0.5"
+```
 
-| #threads |   get   |   put   | get:put = 4:1 |
-|----------|---------|---------|---------------|
-| 1        | 638468  | 521065  | 444558  |
-| 2        | 1245346 | 1010584 | 938936  |
-| 4        | 2371893 | 1897404 | 1768171 |
-| 6        | 3317791 | 2622060 | 2489307 |
-| 8        | 4099652 | 3240738 | 3102952 |
-| 10       | 4738312 | 3681498 | 3418918 |
-| 12       | 5281951 | 4148568 | 3801134 |
-| 14       | 5826484 | 4636580 | 4309976 |
-| 16       | 6364404 | 5114875 | 4812409 |
+```rust
+use photondb::{Result, Table, TableOptions};
 
-## References
+#[photonio::main]
+async fn main() -> Result<()> {
+    let table = Table::open("/tmp/photondb", TableOptions::default()).await?;
+    let key = vec![1];
+    let val1 = vec![2];
+    let val2 = vec![3];
+    // Simple CRUD operations.
+    table.put(&key, 1, &val1).await?;
+    table.delete(&key, 2).await?;
+    table.put(&key, 3, &val2).await?;
+    assert_eq!(table.get(&key, 1).await?, Some(val1.clone()));
+    assert_eq!(table.get(&key, 2).await?, None);
+    assert_eq!(table.get(&key, 3).await?, Some(val2.clone()));
+    let guard = table.pin();
+    // Get the value without copy.
+    assert_eq!(guard.get(&key, 3).await?, Some(val2.as_slice()));
+    // Iterate the tree page by page.
+    let mut pages = guard.pages();
+    while let Some(page) = pages.next().await? {
+        for (k, v) in page {
+            println!("{:?} {:?}", k, v);
+        }
+    }
+    Ok(())
+}
+```
 
-- [The Bw-Tree: A B-tree for New Hardware Platforms](https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/bw-tree-icde2013-final.pdf)
-- [Building a Bw-Tree Takes More Than Just Buzz Words](https://www.cs.cmu.edu/~huanche1/publications/open_bwtree.pdf)
-- [LLAMA: A Cache/Storage Subsystem for Modern Hardware](http://www.vldb.org/pvldb/vol6/p877-levandoski.pdf)
-- [Efficiently Reclaiming Space in a Log Structured Store](https://arxiv.org/abs/2005.00044)
-- [The Design and Implementation of a Log-Structured File System](https://people.eecs.berkeley.edu/~brewer/cs262/LFS.pdf)
-- [TinyLFU: A Highly Efficient Cache Admission Policy](https://arxiv.org/abs/1512.00727)
+Run the example with:
+
+```
+cargo +nightly-2022-10-01 run
+```
