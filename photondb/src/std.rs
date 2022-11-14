@@ -45,6 +45,11 @@ impl Table {
         poll(self.0.close()).map_err(Self)
     }
 
+    /// Returns a [`Guard`] that pins the table for user operations.
+    pub fn pin(&self) -> Guard<'_> {
+        Guard(self.0.pin())
+    }
+
     /// Gets the value corresponding to the key.
     ///
     /// This is a synchronous version of [`raw::Table::get`].
@@ -84,6 +89,11 @@ impl<'a> Guard<'a> {
     /// This is a synchronous version of [`raw::Guard::get`].
     pub fn get(&self, key: &[u8], lsn: u64) -> Result<Option<&[u8]>> {
         poll(self.0.get(key, lsn))
+    }
+
+    /// Returns an iterator over pages in the table.
+    pub fn pages(&self) -> Pages<'_, 'a> {
+        Pages(self.0.pages())
     }
 }
 
