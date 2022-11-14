@@ -11,7 +11,7 @@ fn main() -> Result<()> {
     table.put(&key, 1, &val1)?;
     table.delete(&key, 2)?;
     table.put(&key, 3, &val2)?;
-    assert_eq!(table.get(&key, 1)?, Some(val1.clone()));
+    assert_eq!(table.get(&key, 1)?, Some(val1));
     assert_eq!(table.get(&key, 2)?, None);
     assert_eq!(table.get(&key, 3)?, Some(val2.clone()));
     let guard = table.pin();
