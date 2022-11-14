@@ -40,7 +40,7 @@ pub(crate) use strategy::{MinDeclineRateStrategyBuilder, StrategyBuilder};
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct Options {
-    /// The capacity of [`WriteBuffer`]. It should be power of two.
+    /// The capacity of the write buffer. It should be power of two.
     ///
     /// Default: 128MB
     pub write_buffer_capacity: u32,

@@ -1,7 +1,7 @@
 //! A high-performance storage engine for modern hardware and platforms.
 //!
 //! PhotonDB is designed from scratch to leverage the power of modern multi-core
-//! chips, storage devices, operating systems, and programming languages.
+//! chips, storage devices, and operating systems.
 //!
 //! Features:
 //!
@@ -12,13 +12,13 @@
 //! This crate provides three sets of APIs:
 //!
 //! - [`Raw`]: a set of low-level APIs that can run with different environments.
-//! - [`Std`]: a set of synchronous APIs based on the raw APIs that doesn't
+//! - [`Std`]: a set of synchronous APIs based on the raw one that doesn't
 //!   require a runtime to run.
-//! - [`Photon`]: a set of asynchronous APIs based on the raw APIs that must run
+//! - [`Photon`]: a set of asynchronous APIs based on the raw one that must run
 //!   with the [PhotonIO] runtime.
 //!
-//! The [`Photon`] APIs are the default APIs that are re-exported to the
-//! top-level module.
+//! The [`Photon`] APIs are the default and are re-exported to the top-level
+//! module for convenience.
 //!
 //! [`Raw`]: crate::raw
 //! [`Std`]: crate::std
@@ -55,7 +55,7 @@ mod util;
 #[cfg(test)]
 mod tests {
     use rand::random;
-    use tempdir::TempDir;
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -81,7 +81,7 @@ mod tests {
 
     #[photonio::test]
     async fn crud() {
-        let path = TempDir::new("crud").unwrap();
+        let path = tempdir().unwrap();
         let table = Table::open(&path, OPTIONS).await.unwrap();
         const N: u64 = 1 << 10;
         for i in 0..N {
@@ -109,7 +109,7 @@ mod tests {
 
     #[photonio::test]
     async fn random_crud() {
-        let path = TempDir::new("random_crud").unwrap();
+        let path = tempdir().unwrap();
         let table = Table::open(&path, OPTIONS).await.unwrap();
         const N: u64 = 1 << 12;
         for _ in 0..N {
@@ -122,7 +122,7 @@ mod tests {
 
     #[photonio::test]
     async fn concurrent_crud() {
-        let path = TempDir::new("concurrent_crud").unwrap();
+        let path = tempdir().unwrap();
         let table = Table::open(&path, OPTIONS).await.unwrap();
         let mut tasks = Vec::new();
         for _ in 0..4 {

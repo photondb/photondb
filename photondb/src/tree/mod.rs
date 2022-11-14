@@ -783,7 +783,7 @@ impl<'a, 't: 'a, E: Env> TreeIter<'a, 't, E> {
     }
 
     pub(crate) async fn next_page(&mut self) -> Result<Option<PageIter<'_>>> {
-        let mut inner_next = self.inner_next;
+        let mut inner_next = self.inner_next.take();
         if let Some(inner_iter) = self.inner_iter.as_mut() {
             if let Some((start, index)) = inner_iter.next() {
                 let view = self.txn.page_view(index.id, None).await?;
