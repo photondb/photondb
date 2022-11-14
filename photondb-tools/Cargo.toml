@@ -16,7 +16,7 @@ futures = "0.3.24"
 log = "0.4.17"
 hdrhistogram = "7.5.2"
 photonio = { workspace = true }
-photondb = { path = "../photondb", version = "0.0.1" }
+photondb = { path = "../photondb", version = "0.0.2" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 thiserror = "1.0.37"
 chrono = "0.4"
