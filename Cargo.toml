@@ -2,7 +2,7 @@
 members = ["photondb", "photondb-tools"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 license = "MIT"
 authors = ["The PhotonDB Authors"]
@@ -10,7 +10,7 @@ homepage = "https://photondb.io"
 repository = "https://github.com/photondb/photondb"
 
 [workspace.dependencies]
-photonio = { git = "https://github.com/photondb/photonio.git" }
+photonio = "0.0.5"
 
 [profile.bench]
 debug = true
