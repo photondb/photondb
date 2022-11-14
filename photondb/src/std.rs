@@ -102,7 +102,9 @@ impl<'a, 't> Pages<'a, 't> {
     /// Returns the next page in the table.
     ///
     /// This is a synchronous version of [`raw::Pages::next`].
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<PageIter<'_>>> {
+        // TODO: should we implement the [`std::iter::Iterator`] trait?
         poll(self.0.next())
     }
 }
