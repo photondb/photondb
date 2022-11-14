@@ -7,13 +7,6 @@ use std::{ops::Deref, path::Path};
 
 use crate::{env::Photon, raw, Result, TableOptions};
 
-/// A persistent key-value store that manages multiple tables.
-///
-/// This is the same as [`raw::Store`] with the [`Photon`] environment.
-#[doc(hidden)]
-#[derive(Clone, Debug)]
-pub struct Store(raw::Store<Photon>);
-
 /// A reference to a latch-free, log-structured table that stores sorted
 /// key-value entries.
 ///
