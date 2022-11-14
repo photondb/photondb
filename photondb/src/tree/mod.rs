@@ -758,7 +758,7 @@ impl<'a, 't: 'a, E: Env> TreeIter<'a, 't, E> {
             txn,
             options,
             inner_iter: None,
-            inner_next: None,
+            inner_next: Some(&[]),
         }
     }
 
@@ -783,18 +783,17 @@ impl<'a, 't: 'a, E: Env> TreeIter<'a, 't, E> {
     }
 
     pub(crate) async fn next_page(&mut self) -> Result<Option<PageIter<'_>>> {
-        let Some(inner_iter) = self.inner_iter.as_mut() else {
-            return Ok(None);
-        };
         let mut inner_next = self.inner_next;
-        if let Some((start, index)) = inner_iter.next() {
-            let view = self.txn.page_view(index.id, None).await?;
-            if view.page.epoch() == index.epoch {
-                let iter = self.txn.iter_page(&view).await?;
-                return Ok(Some(PageIter::new(iter, self.options.max_lsn)));
-            } else {
-                // The page epoch has changed, we need to restart from this.
-                inner_next = Some(start);
+        if let Some(inner_iter) = self.inner_iter.as_mut() {
+            if let Some((start, index)) = inner_iter.next() {
+                let view = self.txn.page_view(index.id, None).await?;
+                if view.page.epoch() == index.epoch {
+                    let iter = self.txn.iter_page(&view).await?;
+                    return Ok(Some(PageIter::new(iter, self.options.max_lsn)));
+                } else {
+                    // The page epoch has changed, we need to restart from this.
+                    inner_next = Some(start);
+                }
             }
         }
         if let Some(next) = inner_next {
