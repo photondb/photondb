@@ -102,6 +102,7 @@ mod tests {
                 i += 1;
             }
         }
+        assert_eq!(i, N);
 
         table.close().await.unwrap();
     }
