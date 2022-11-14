@@ -21,13 +21,6 @@ use futures::task::noop_waker_ref;
 
 use crate::{env::Std, raw, Result, TableOptions};
 
-/// A persistent key-value store that manages multiple tables.
-///
-/// This is the same as [`raw::Store`] with the [`Std`] environment.
-#[doc(hidden)]
-#[derive(Clone, Debug)]
-pub struct Store(raw::Store<Std>);
-
 /// A reference to a latch-free, log-structured table that stores sorted
 /// key-value entries.
 ///
