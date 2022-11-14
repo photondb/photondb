@@ -19,7 +19,7 @@ use std::{
 
 use futures::task::noop_waker_ref;
 
-use crate::{env::Std, raw, Result, TableOptions};
+use crate::{env::Std, raw, PageIter, Result, TableOptions};
 
 /// A reference to a latch-free, log-structured table that stores sorted
 /// key-value entries.
@@ -76,10 +76,46 @@ impl Deref for Table {
 }
 
 /// A handle that holds some resources of a table for user operations.
-pub type Guard<'a> = raw::Guard<'a, Std>;
+pub struct Guard<'a>(raw::Guard<'a, Std>);
+
+impl<'a> Guard<'a> {
+    /// Gets the value corresponding to the key.
+    ///
+    /// This is a synchronous version of [`raw::Guard::get`].
+    pub fn get(&self, key: &[u8], lsn: u64) -> Result<Option<&[u8]>> {
+        poll(self.0.get(key, lsn))
+    }
+}
+
+impl<'a> Deref for Guard<'a> {
+    type Target = raw::Guard<'a, Std>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 /// An iterator over pages in a table.
-pub type Pages<'a, 't> = raw::Pages<'a, 't, Std>;
+pub struct Pages<'a, 't>(raw::Pages<'a, 't, Std>);
+
+impl<'a, 't> Pages<'a, 't> {
+    /// Returns the next page in the table.
+    ///
+    /// This is a synchronous version of [`raw::Pages::next`].
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Result<Option<PageIter<'_>>> {
+        // TODO: should we implement the [`std::iter::Iterator`] trait?
+        poll(self.0.next())
+    }
+}
+
+impl<'a, 't> Deref for Pages<'a, 't> {
+    type Target = raw::Pages<'a, 't, Std>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 fn poll<F: Future>(mut future: F) -> F::Output {
     let cx = &mut Context::from_waker(noop_waker_ref());
