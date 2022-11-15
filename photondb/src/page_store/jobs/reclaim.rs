@@ -25,7 +25,7 @@ pub(crate) trait RewritePage<E: Env>: Send + Sync + 'static {
     fn rewrite<'a>(&'a self, page_id: u64, guard: Guard<'a, E>) -> Self::Rewrite<'a>;
 }
 
-pub(crate) struct GcCtx<E, R>
+pub(crate) struct ReclaimCtx<E, R>
 where
     E: Env,
     R: RewritePage<E>,
@@ -41,7 +41,7 @@ where
     cleaned_files: HashSet<u32>,
 }
 
-impl<E, R> GcCtx<E, R>
+impl<E, R> ReclaimCtx<E, R>
 where
     E: Env,
     R: RewritePage<E>,
@@ -53,7 +53,7 @@ where
         page_table: PageTable,
         page_files: Arc<PageFiles<E>>,
     ) -> Self {
-        GcCtx {
+        ReclaimCtx {
             shutdown,
             rewriter,
             strategy_builder,
@@ -65,7 +65,7 @@ where
 
     pub(crate) async fn run(mut self, mut version: Arc<Version>) {
         loop {
-            self.gc(&version).await;
+            self.reclaim(&version).await;
             match with_shutdown(&mut self.shutdown, version.wait_next_version()).await {
                 Some(next_version) => version = next_version.refresh().unwrap_or(next_version),
                 None => break,
@@ -73,7 +73,7 @@ where
         }
     }
 
-    async fn gc(&mut self, version: &Arc<Version>) {
+    async fn reclaim(&mut self, version: &Arc<Version>) {
         // Reclaim deleted files in `cleaned_files`.
         let cleaned_files = std::mem::take(&mut self.cleaned_files);
 
@@ -300,11 +300,14 @@ mod tests {
         builder.finish().await.unwrap()
     }
 
-    async fn build_gc_ctx(dir: &Path, rewriter: PageRewriter) -> GcCtx<Photon, PageRewriter> {
+    async fn build_reclaim_ctx(
+        dir: &Path,
+        rewriter: PageRewriter,
+    ) -> ReclaimCtx<Photon, PageRewriter> {
         let notifier = ShutdownNotifier::new();
         let shutdown = notifier.subscribe();
         let strategy_builder = Box::new(MinDeclineRateStrategyBuilder::new(1 << 30, usize::MAX));
-        GcCtx {
+        ReclaimCtx {
             shutdown,
             rewriter,
             strategy_builder,
@@ -315,12 +318,12 @@ mod tests {
     }
 
     #[photonio::test]
-    async fn gc_rewrite_page() {
-        let root = TempDir::new("gc_rewrite_page").unwrap();
+    async fn reclaim_rewrite_page() {
+        let root = TempDir::new("reclaim_rewrite_page").unwrap();
         let root = root.into_path();
 
         let rewriter = PageRewriter::default();
-        let ctx = build_gc_ctx(&root, rewriter.clone()).await;
+        let ctx = build_reclaim_ctx(&root, rewriter.clone()).await;
         let mut file_info = build_page_file(
             &ctx.page_files,
             2,

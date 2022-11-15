@@ -447,7 +447,7 @@ mod tests {
         };
         println!("Dealloc page {addr2} at file {buffer_2}");
 
-        // Rewrite file 2, likes gc, and install new buffer without flush.
+        // Rewrite file 2, likes reclaiming, and install new buffer without flush.
         let buffer_3 = {
             let version = ctx.version_owner.current();
             let buffer_3 = version.buffer_set.current().next_buffer_id() - 1;

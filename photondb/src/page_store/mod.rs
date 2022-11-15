@@ -21,7 +21,7 @@ use version::{Version, VersionOwner};
 
 mod jobs;
 pub(crate) use jobs::RewritePage;
-use jobs::{cleanup::CleanupCtx, flush::FlushCtx, gc::GcCtx};
+use jobs::{cleanup::CleanupCtx, flush::FlushCtx, reclaim::ReclaimCtx};
 
 mod write_buffer;
 pub(crate) use write_buffer::{RecordRef, WriteBuffer};
@@ -111,7 +111,7 @@ impl<E: Env> PageStore<E> {
         // Spawn background jobs.
         store.spawn_flush_job();
         store.spawn_cleanup_job();
-        store.spawn_gc_job(rewriter);
+        store.spawn_reclaim_job(rewriter);
 
         Ok(store)
     }
@@ -151,12 +151,12 @@ impl<E: Env> PageStore<E> {
         self.jobs.push(handle);
     }
 
-    fn spawn_gc_job<R>(&mut self, rewriter: R)
+    fn spawn_reclaim_job<R>(&mut self, rewriter: R)
     where
         R: RewritePage<E>,
     {
         let strategy_builder = Box::new(MinDeclineRateStrategyBuilder::new(1 << 30, usize::MAX));
-        let job = GcCtx::new(
+        let job = ReclaimCtx::new(
             self.shutdown.subscribe(),
             rewriter,
             strategy_builder,
