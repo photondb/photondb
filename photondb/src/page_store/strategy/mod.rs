@@ -3,15 +3,15 @@ use std::collections::HashMap;
 use super::FileInfo;
 
 pub(crate) trait StrategyBuilder: Send + Sync {
-    fn build(&self, now: u32) -> Box<dyn GcPickStrategy>;
+    fn build(&self, now: u32) -> Box<dyn ReclaimPickStrategy>;
 }
 
-/// An abstraction describes the strategy of page files gc.
-pub(crate) trait GcPickStrategy: Send + Sync {
-    /// Collect file info and compute gc score.
+/// An abstraction describes the strategy of page files reclaiming.
+pub(crate) trait ReclaimPickStrategy: Send + Sync {
+    /// Collect file info and compute reclamation score.
     fn collect(&mut self, file_info: &FileInfo);
 
-    /// Return the most suitable files for GC under the strategy.
+    /// Return the most suitable files for reclaiming under the strategy.
     fn apply(&mut self) -> Option<u32>;
 }
 
@@ -47,7 +47,7 @@ impl MinDeclineRateStrategy {
     }
 }
 
-impl GcPickStrategy for MinDeclineRateStrategy {
+impl ReclaimPickStrategy for MinDeclineRateStrategy {
     fn collect(&mut self, file_info: &FileInfo) {
         let file_id = file_info.get_file_id();
         let score = decline_rate(file_info, self.now);
@@ -89,7 +89,7 @@ impl GcPickStrategy for MinDeclineRateStrategy {
 }
 
 pub(crate) struct MinDeclineRateStrategyBuilder {
-    // The min number of bytes required to start GC.
+    // The min number of bytes required to start reclaiming.
     used_low: usize,
     // The max number of bytes required to control write amplification.
     used_high: usize,
@@ -106,7 +106,7 @@ impl MinDeclineRateStrategyBuilder {
 
 impl StrategyBuilder for MinDeclineRateStrategyBuilder {
     #[inline]
-    fn build(&self, now: u32) -> Box<dyn GcPickStrategy> {
+    fn build(&self, now: u32) -> Box<dyn ReclaimPickStrategy> {
         Box::new(MinDeclineRateStrategy::new(
             now,
             self.used_low,
