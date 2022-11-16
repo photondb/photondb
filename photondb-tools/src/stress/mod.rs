@@ -71,6 +71,10 @@ pub(crate) struct Args {
     /// How likely are we to mutate the third char every period
     #[clap(long, default_value_t = 0.5)]
     third_char_mutate_probability: f64,
+
+    /// The space watermark which the DB needed to reclaim
+    #[clap(long, default_value_t = 107374182400)]
+    space_used_high: u64,
 }
 
 struct Job
@@ -224,8 +228,10 @@ pub(crate) async fn run(args: Args) -> Result<()> {
     }
 
     let env = env::Photon;
+    let mut options = TableOptions::default();
+    options.page_store.space_used_high = args.space_used_high;
     let table = env
-        .spawn_background(Table::open(args.db.clone(), TableOptions::default()))
+        .spawn_background(Table::open(args.db.clone(), options))
         .await?;
     debug!("Open DB {} success", args.db.display());
 
