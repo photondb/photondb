@@ -66,6 +66,7 @@ mod tests {
             write_buffer_capacity: 1 << 20,
             use_direct_io: false,
             max_space_amplification_percent: 10,
+            space_used_high: u64::MAX,
         },
     };
 
