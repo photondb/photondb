@@ -10,8 +10,8 @@ use log::info;
 use crate::{
     env::Env,
     page_store::{
-        page_table::PageTable, Error, FileInfo, Guard, Options, PageFiles, Result, StrategyBuilder,
-        Version,
+        page_table::PageTable, strategy::ReclaimPickStrategy, Error, FileInfo, Guard, Options,
+        PageFiles, Result, StrategyBuilder, Version,
     },
     util::shutdown::{with_shutdown, Shutdown},
 };
@@ -85,16 +85,12 @@ where
         let empty_files = self.pick_empty_page_files(version, &cleaned_files);
         self.rewrite_files(empty_files, version).await;
 
-        if !exceed_space_amp(
-            version.files(),
-            &cleaned_files,
-            self.options.max_space_amplification_percent,
-        ) {
+        if !self.is_reclaimable(version, &cleaned_files) {
             return;
         }
 
-        let picked_files = self.pick_page_file_by_strategy(version, &cleaned_files);
-        self.rewrite_files(picked_files, version).await;
+        self.reclaim_files_by_strategy(version, &cleaned_files)
+            .await;
     }
 
     fn pick_empty_page_files(
@@ -116,35 +112,37 @@ where
         empty_files
     }
 
-    fn pick_page_file_by_strategy(
-        &mut self,
-        version: &Version,
-        cleaned_files: &HashSet<u32>,
-    ) -> Vec<u32> {
-        let files = version.files();
-        let now = files.keys().cloned().max().unwrap_or(1);
-        let mut strategy = self.strategy_builder.build(now);
-        for (id, file) in files {
-            if cleaned_files.contains(id) {
-                self.cleaned_files.insert(*id);
-                continue;
-            }
-
-            if !file.is_empty() {
-                strategy.collect(file);
-            }
-        }
-
-        let mut files = Vec::default();
-        while let Some(file_id) = strategy.apply() {
-            files.push(file_id);
-        }
-        files
-    }
-
     async fn rewrite_files(&mut self, files: Vec<u32>, version: &Arc<Version>) {
         for file_id in files {
             if self.shutdown.is_terminated() || version.has_next_version() {
+                break;
+            }
+
+            if self.cleaned_files.contains(&file_id) {
+                // This file has been rewritten.
+                continue;
+            }
+
+            let file = version.files().get(&file_id).expect("File must exists");
+            if let Err(err) = self.rewrite_file(file, version).await {
+                todo!("do_recycle: {err:?}");
+            }
+            self.cleaned_files.insert(file_id);
+        }
+    }
+
+    async fn reclaim_files_by_strategy(
+        &mut self,
+        version: &Arc<Version>,
+        cleaned_files: &HashSet<u32>,
+    ) {
+        let mut strategy = self.build_strategy(version, cleaned_files);
+        while let Some(file_id) = strategy.apply() {
+            if self.shutdown.is_terminated() || version.has_next_version() {
+                break;
+            }
+
+            if !self.is_reclaimable(version, &self.cleaned_files) {
                 break;
             }
 
@@ -257,6 +255,36 @@ where
             }
         }
     }
+
+    fn build_strategy(
+        &mut self,
+        version: &Version,
+        cleaned_files: &HashSet<u32>,
+    ) -> Box<dyn ReclaimPickStrategy> {
+        let files = version.files();
+        let now = files.keys().cloned().max().unwrap_or(1);
+        let mut strategy = self.strategy_builder.build(now);
+        for (id, file) in files {
+            if cleaned_files.contains(id) {
+                self.cleaned_files.insert(*id);
+                continue;
+            }
+
+            if !file.is_empty() {
+                strategy.collect(file);
+            }
+        }
+        strategy
+    }
+
+    fn is_reclaimable(&self, version: &Version, cleaned_files: &HashSet<u32>) -> bool {
+        self.options.space_used_high < compute_used_space(version.files(), cleaned_files)
+            || exceed_space_amp(
+                version.files(),
+                cleaned_files,
+                self.options.max_space_amplification_percent,
+            )
+    }
 }
 
 fn exceed_space_amp(
@@ -279,6 +307,17 @@ fn exceed_space_amp(
         .sum::<usize>();
     let additional_size = space_consumed.saturating_sub(base_size);
     additional_size * 100 >= target_space_amp * base_size
+}
+
+fn compute_used_space(files: &HashMap<u32, FileInfo>, cleaned_files: &HashSet<u32>) -> u64 {
+    // skip files that are already being cleaned.
+    let allow_file =
+        |info: &&FileInfo| !info.is_empty() && !cleaned_files.contains(&info.get_file_id());
+    files
+        .values()
+        .filter(allow_file)
+        .map(FileInfo::file_size)
+        .sum::<usize>() as u64
 }
 
 #[cfg(test)]
@@ -340,7 +379,7 @@ mod tests {
     ) -> ReclaimCtx<Photon, PageRewriter> {
         let notifier = ShutdownNotifier::new();
         let shutdown = notifier.subscribe();
-        let strategy_builder = Box::new(MinDeclineRateStrategyBuilder::new(1 << 30, usize::MAX));
+        let strategy_builder = Box::new(MinDeclineRateStrategyBuilder);
         let options = Options::default();
         ReclaimCtx {
             options,

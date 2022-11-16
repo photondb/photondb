@@ -25,9 +25,6 @@ struct FileScore {
 
 pub(crate) struct MinDeclineRateStrategy {
     now: u32,
-    used_low: usize,
-    #[allow(unused)]
-    used_high: usize,
     used: usize,
 
     sorted: bool,
@@ -35,11 +32,9 @@ pub(crate) struct MinDeclineRateStrategy {
 }
 
 impl MinDeclineRateStrategy {
-    fn new(now: u32, low: usize, high: usize) -> Self {
+    fn new(now: u32) -> Self {
         MinDeclineRateStrategy {
             now,
-            used_low: low,
-            used_high: high,
             used: 0,
             sorted: false,
             scores: Vec::default(),
@@ -74,7 +69,7 @@ impl ReclaimPickStrategy for MinDeclineRateStrategy {
             });
         }
 
-        if self.used < self.used_low || self.scores.len() < 2 {
+        if self.scores.len() < 2 {
             return None;
         }
 
@@ -88,30 +83,12 @@ impl ReclaimPickStrategy for MinDeclineRateStrategy {
     }
 }
 
-pub(crate) struct MinDeclineRateStrategyBuilder {
-    // The min number of bytes required to start reclaiming.
-    used_low: usize,
-    // The max number of bytes required to control write amplification.
-    used_high: usize,
-}
-
-impl MinDeclineRateStrategyBuilder {
-    pub(crate) fn new(low: usize, high: usize) -> Self {
-        MinDeclineRateStrategyBuilder {
-            used_low: low,
-            used_high: high,
-        }
-    }
-}
+pub(crate) struct MinDeclineRateStrategyBuilder;
 
 impl StrategyBuilder for MinDeclineRateStrategyBuilder {
     #[inline]
     fn build(&self, now: u32) -> Box<dyn ReclaimPickStrategy> {
-        Box::new(MinDeclineRateStrategy::new(
-            now,
-            self.used_low,
-            self.used_high,
-        ))
+        Box::new(MinDeclineRateStrategy::new(now))
     }
 }
 
