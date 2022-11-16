@@ -85,10 +85,10 @@ where
         let empty_files = self.pick_empty_page_files(version, &cleaned_files);
         self.rewrite_files(empty_files, version).await;
 
-        if !exceed_size_amp(
+        if !exceed_space_amp(
             version.files(),
             &cleaned_files,
-            self.options.max_size_amplification_percent,
+            self.options.max_space_amplification_percent,
         ) {
             return;
         }
@@ -259,10 +259,10 @@ where
     }
 }
 
-fn exceed_size_amp(
+fn exceed_space_amp(
     files: &HashMap<u32, FileInfo>,
     cleaned_files: &HashSet<u32>,
-    target_size_amp: usize,
+    target_space_amp: usize,
 ) -> bool {
     // skip files that are already being cleaned.
     let allow_file =
@@ -278,7 +278,7 @@ fn exceed_size_amp(
         .map(FileInfo::effective_size)
         .sum::<usize>();
     let additional_size = space_consumed.saturating_sub(base_size);
-    additional_size * 100 >= target_size_amp * base_size
+    additional_size * 100 >= target_space_amp * base_size
 }
 
 #[cfg(test)]
