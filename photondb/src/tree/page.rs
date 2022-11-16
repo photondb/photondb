@@ -192,6 +192,7 @@ impl<'a> RewindableIterator for MergingLeafPageIter<'a> {
     fn rewind(&mut self) {
         self.iter.rewind();
         self.last_raw = None;
+        self.skip_same_raw = false;
     }
 }
 
