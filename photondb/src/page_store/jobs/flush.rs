@@ -214,14 +214,9 @@ fn drain_obsoleted_files(
 
 fn assert_files_are_deletable(files: &HashMap<u32, FileInfo>, reclaimed_files: &HashSet<u32>) {
     for file_id in reclaimed_files {
-        match files.get(file_id) {
-            None => {
-                panic!("The reclaimed file {file_id} is not a active file");
-            }
-            Some(info) => {
-                if !info.is_empty() {
-                    panic!("The reclamied file {file_id} has active pages");
-                }
+        if let Some(info) = files.get(file_id) {
+            if !info.is_empty() {
+                panic!("The reclamied file {file_id} has active pages");
             }
         }
     }
@@ -453,7 +448,7 @@ mod tests {
             let buffer_3 = version.buffer_set.current().next_buffer_id() - 1;
             let buf = version.get(buffer_3).unwrap(); // in last buffer.
             let header = unsafe { buf.dealloc_pages(&[addr1], false) }.unwrap();
-            header.set_former_file_id(file_2);
+            header.set_former_file_id(file_1);
             seal_and_install_new_buffer(&version, &buf);
             buffer_3
         };
