@@ -191,6 +191,8 @@ impl<'a> Iterator for MergingLeafPageIter<'a> {
 impl<'a> RewindableIterator for MergingLeafPageIter<'a> {
     fn rewind(&mut self) {
         self.iter.rewind();
+        self.last_raw = None;
+        self.skip_same_raw = false;
     }
 }
 
@@ -242,6 +244,7 @@ impl<'a> Iterator for MergingInnerPageIter<'a> {
 impl<'a> RewindableIterator for MergingInnerPageIter<'a> {
     fn rewind(&mut self) {
         self.iter.rewind();
+        self.last_raw = None;
     }
 }
 
@@ -385,6 +388,17 @@ mod tests {
             iter.seek(&Key::new(&[6], 1));
             assert_eq!(iter.next(), None);
         }
+
+        {
+            let merging_iter = build_merging_iter([owned_page.as_iter()], None);
+            let mut iter = MergingLeafPageIter::new(merging_iter, 2);
+            assert_eq!(iter.next(), Some(data[0]));
+            assert_eq!(iter.next(), Some(data[1]));
+
+            iter.rewind();
+            assert_eq!(iter.next(), Some(data[0]));
+            assert_eq!(iter.next(), Some(data[1]));
+        }
     }
 
     #[test]
@@ -430,6 +444,16 @@ mod tests {
             assert_eq!(iter.next(), Some(([5].as_slice(), Index::new(5, 5))));
             iter.seek([6].as_slice());
             assert_eq!(iter.next(), None);
+        }
+
+        {
+            let merging_iter =
+                build_merging_iter([owned_page1.as_iter(), owned_page2.as_iter()], None);
+            let mut iter = MergingInnerPageIter::new(merging_iter);
+            assert_eq!(iter.next(), Some(([1].as_slice(), Index::new(1, 1))));
+
+            iter.rewind();
+            assert_eq!(iter.next(), Some(([1].as_slice(), Index::new(1, 1))));
         }
     }
 }
