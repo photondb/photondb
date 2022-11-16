@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     future::Future,
     sync::Arc,
     time::Instant,
@@ -10,7 +10,8 @@ use log::info;
 use crate::{
     env::Env,
     page_store::{
-        page_table::PageTable, Error, FileInfo, Guard, PageFiles, Result, StrategyBuilder, Version,
+        page_table::PageTable, Error, FileInfo, Guard, Options, PageFiles, Result, StrategyBuilder,
+        Version,
     },
     util::shutdown::{with_shutdown, Shutdown},
 };
@@ -30,6 +31,7 @@ where
     E: Env,
     R: RewritePage<E>,
 {
+    options: Options,
     shutdown: Shutdown,
 
     rewriter: R,
@@ -47,6 +49,7 @@ where
     R: RewritePage<E>,
 {
     pub(crate) fn new(
+        options: Options,
         shutdown: Shutdown,
         rewriter: R,
         strategy_builder: Box<dyn StrategyBuilder>,
@@ -54,6 +57,7 @@ where
         page_files: Arc<PageFiles<E>>,
     ) -> Self {
         ReclaimCtx {
+            options,
             shutdown,
             rewriter,
             strategy_builder,
@@ -80,6 +84,14 @@ where
         // Ignore the strategy, pick and reclaimate empty page files directly.
         let empty_files = self.pick_empty_page_files(version, &cleaned_files);
         self.rewrite_files(empty_files, version).await;
+
+        if !exceed_space_amp(
+            version.files(),
+            &cleaned_files,
+            self.options.max_space_amplification_percent,
+        ) {
+            return;
+        }
 
         let picked_files = self.pick_page_file_by_strategy(version, &cleaned_files);
         self.rewrite_files(picked_files, version).await;
@@ -247,6 +259,28 @@ where
     }
 }
 
+fn exceed_space_amp(
+    files: &HashMap<u32, FileInfo>,
+    cleaned_files: &HashSet<u32>,
+    target_space_amp: usize,
+) -> bool {
+    // skip files that are already being cleaned.
+    let allow_file =
+        |info: &&FileInfo| !info.is_empty() && !cleaned_files.contains(&info.get_file_id());
+    let space_consumed = files
+        .values()
+        .filter(allow_file)
+        .map(FileInfo::file_size)
+        .sum::<usize>();
+    let base_size = files
+        .values()
+        .filter(allow_file)
+        .map(FileInfo::effective_size)
+        .sum::<usize>();
+    let additional_size = space_consumed.saturating_sub(base_size);
+    additional_size * 100 >= target_space_amp * base_size
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -307,7 +341,9 @@ mod tests {
         let notifier = ShutdownNotifier::new();
         let shutdown = notifier.subscribe();
         let strategy_builder = Box::new(MinDeclineRateStrategyBuilder::new(1 << 30, usize::MAX));
+        let options = Options::default();
         ReclaimCtx {
+            options,
             shutdown,
             rewriter,
             strategy_builder,

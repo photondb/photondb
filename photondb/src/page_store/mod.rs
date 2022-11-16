@@ -49,6 +49,15 @@ pub struct Options {
     ///
     /// Default: false
     pub use_direct_io: bool,
+
+    /// The max percentage of the space amplification.
+    ///
+    /// The space amplification is defined as the amount (in percentage) of
+    /// additional storage needed to store a single byte of data in the
+    /// database.
+    ///
+    /// Default: 200
+    pub max_space_amplification_percent: usize,
 }
 
 impl Default for Options {
@@ -56,6 +65,7 @@ impl Default for Options {
         Self {
             write_buffer_capacity: 128 << 20,
             use_direct_io: false,
+            max_space_amplification_percent: 200,
         }
     }
 }
@@ -157,6 +167,7 @@ impl<E: Env> PageStore<E> {
     {
         let strategy_builder = Box::new(MinDeclineRateStrategyBuilder::new(1 << 30, usize::MAX));
         let job = ReclaimCtx::new(
+            self.options.clone(),
             self.shutdown.subscribe(),
             rewriter,
             strategy_builder,

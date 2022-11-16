@@ -65,6 +65,7 @@ mod tests {
         page_store: PageStoreOptions {
             write_buffer_capacity: 1 << 20,
             use_direct_io: false,
+            max_space_amplification_percent: 10,
         },
     };
 
