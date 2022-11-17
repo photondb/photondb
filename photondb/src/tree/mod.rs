@@ -37,7 +37,7 @@ impl Tree {
         }
     }
 
-    pub(crate) fn begin<'a, E: Env>(&'a self, guard: Guard<'a, E>) -> TreeTxn<'a, E> {
+    pub(crate) fn begin<E: Env>(&self, guard: Guard<E>) -> TreeTxn<E> {
         TreeTxn::new(self, guard)
     }
 
@@ -81,7 +81,7 @@ impl<E: Env> RewritePage<E> for Arc<Tree> {
         where
             Self: 'a;
 
-    fn rewrite<'a>(&'a self, id: u64, guard: Guard<'a, E>) -> Self::Rewrite<'a> {
+    fn rewrite(&'_ self, id: u64, guard: Guard<E>) -> Self::Rewrite<'_> {
         async move {
             let txn = self.begin(guard);
             txn.rewrite_page(id).await
@@ -91,11 +91,11 @@ impl<E: Env> RewritePage<E> for Arc<Tree> {
 
 pub(crate) struct TreeTxn<'a, E: Env> {
     tree: &'a Tree,
-    guard: Guard<'a, E>,
+    guard: Guard<E>,
 }
 
 impl<'a, E: Env> TreeTxn<'a, E> {
-    fn new(tree: &'a Tree, guard: Guard<'a, E>) -> Self {
+    fn new(tree: &'a Tree, guard: Guard<E>) -> Self {
         Self { tree, guard }
     }
 
