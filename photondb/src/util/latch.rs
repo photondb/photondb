@@ -99,6 +99,7 @@ impl<'a> LatchWaiter<'a> {
                 let mut core = this.latch.core.lock().expect("Poisoned");
                 if core.count == this.latch.expect {
                     this.state = WaitState::Done;
+                    core.wakers.remove(&id);
                     Poll::Ready(())
                 } else {
                     core.wakers.insert(id, cx.waker().clone());
