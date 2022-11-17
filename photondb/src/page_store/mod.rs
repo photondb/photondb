@@ -38,6 +38,7 @@ mod recover;
 mod strategy;
 pub(crate) use strategy::{MinDeclineRateStrategyBuilder, StrategyBuilder};
 
+mod cache;
 /// Options to configure a page store.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
