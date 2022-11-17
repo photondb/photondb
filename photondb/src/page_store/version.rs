@@ -442,7 +442,6 @@ impl BufferSet {
 
     #[inline]
     pub(crate) fn notify_flush_job(&self) {
-        log::info!("notify one flush job");
         self.flush_notify.notify_one();
     }
 

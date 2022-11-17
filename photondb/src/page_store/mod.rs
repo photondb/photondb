@@ -56,8 +56,13 @@ pub struct Options {
     /// additional storage needed to store a single byte of data in the
     /// database.
     ///
-    /// Default: 200
+    /// Default: 100
     pub max_space_amplification_percent: usize,
+
+    /// The high watermark of the used storage space of the database.
+    ///
+    /// Default: u64::MAX
+    pub space_used_high: u64,
 }
 
 impl Default for Options {
@@ -65,7 +70,8 @@ impl Default for Options {
         Self {
             write_buffer_capacity: 128 << 20,
             use_direct_io: false,
-            max_space_amplification_percent: 200,
+            max_space_amplification_percent: 100,
+            space_used_high: u64::MAX,
         }
     }
 }
@@ -165,7 +171,7 @@ impl<E: Env> PageStore<E> {
     where
         R: RewritePage<E>,
     {
-        let strategy_builder = Box::new(MinDeclineRateStrategyBuilder::new(1 << 30, usize::MAX));
+        let strategy_builder = Box::new(MinDeclineRateStrategyBuilder);
         let job = ReclaimCtx::new(
             self.options.clone(),
             self.shutdown.subscribe(),
