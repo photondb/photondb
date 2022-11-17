@@ -21,6 +21,18 @@ pub(crate) struct LatchCore {
     wakers: HashMap<usize, Waker>,
 }
 
+pub(crate) struct LatchWaiter<'a> {
+    latch: &'a Latch,
+    state: WaitState,
+}
+
+#[derive(Debug)]
+enum WaitState {
+    Pending,
+    Waiting(usize),
+    Done,
+}
+
 impl Latch {
     /// Create a new `Latch` that can block multiple tasks.
     pub(crate) fn new(expect: usize) -> Self {
@@ -64,18 +76,6 @@ impl Latch {
             wakers.into_values().for_each(Waker::wake);
         }
     }
-}
-
-#[derive(Debug)]
-enum WaitState {
-    Pending,
-    Waiting(usize),
-    Done,
-}
-
-pub(crate) struct LatchWaiter<'a> {
-    latch: &'a Latch,
-    state: WaitState,
 }
 
 impl<'a> LatchWaiter<'a> {
@@ -124,5 +124,32 @@ impl<'a> Drop for LatchWaiter<'a> {
             let mut core = self.latch.core.lock().expect("Poisoned");
             core.wakers.remove(&id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::Latch;
+
+    #[photonio::test]
+    async fn latch_basic() {
+        let latch = Arc::new(Latch::new(2));
+
+        let cloned_latch = latch.clone();
+        let task_1 = photonio::task::spawn(async move {
+            cloned_latch.wait().await;
+        });
+
+        let cloned_latch = latch.clone();
+        let task_2 = photonio::task::spawn(async move {
+            cloned_latch.wait().await;
+        });
+
+        latch.count_down();
+        latch.count_down();
+        task_1.await.unwrap_or_default();
+        task_2.await.unwrap_or_default();
     }
 }
