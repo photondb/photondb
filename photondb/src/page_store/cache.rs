@@ -59,7 +59,6 @@ pub(crate) struct Handle<T: Clone> {
     value: Option<T>,
     hash: u32,
     charge: usize,
-    refs: u32,
 
     meta: AtomicU64,
     displacements: AtomicU32,
@@ -72,7 +71,6 @@ impl<T: Clone> Default for Handle<T> {
             key: Default::default(),
             hash: Default::default(),
             charge: Default::default(),
-            refs: Default::default(),
             meta: Default::default(),
             displacements: Default::default(),
             detached: Default::default(),
@@ -83,12 +81,11 @@ impl<T: Clone> Default for Handle<T> {
 }
 
 impl<T: Clone> Handle<T> {
-    fn insert(&mut self, key: u64, value: Option<T>, hash: u32, charge: usize, refs: u32) {
+    fn insert(&mut self, key: u64, value: Option<T>, hash: u32, charge: usize) {
         self.key = key;
         self.value = value;
         self.hash = hash;
         self.charge = charge;
-        self.refs = refs;
     }
 }
 
@@ -151,7 +148,7 @@ mod clock {
     }
 
     struct ClockCacheShard<T: Clone> {
-        data: ClockCacheHandleTable<T>,
+        table: ClockCacheHandleTable<T>,
         capacity: usize,
     }
 
@@ -262,7 +259,7 @@ mod clock {
             let mut use_detached_insert = false;
             let total_charge = proto.charge;
             if self.strict_capacity_limit {
-                let r = self.change_usage_maybe_evict_strict(
+                let r = self.charge_usage_maybe_evict_strict(
                     total_charge,
                     capacity,
                     need_evict_for_occupancy,
@@ -272,7 +269,7 @@ mod clock {
                     return Err(err);
                 }
             } else {
-                let success = self.change_usage_maybe_evict_non_strict(
+                let success = self.charge_usage_maybe_evict_non_strict(
                     total_charge,
                     capacity,
                     need_evict_for_occupancy,
@@ -285,7 +282,7 @@ mod clock {
             }
 
             if !use_detached_insert {
-                let initial_countdown = HIGH_COUNT_DOWN; // TODO: priority
+                let initial_countdown = LOW_COUNT_DOWN; // TODO: priority
                 let (slot, _) = self.find_slot(
                     proto.hash,
                     |hp| {
@@ -305,7 +302,6 @@ mod clock {
                                     proto.value.clone(),
                                     proto.hash,
                                     proto.charge,
-                                    proto.refs,
                                 );
                             }
 
@@ -387,26 +383,12 @@ mod clock {
             }
 
             assert!(use_detached_insert);
+            let h = self.detached_insert(&proto);
 
-            let h = Box::new(Handle {
-                key: proto.key,
-                value: proto.value.clone(),
-                hash: proto.hash,
-                charge: proto.charge,
-                detached: true,
-                refs: 0,
-                meta: Default::default(),
-                displacements: Default::default(),
-            });
-            let mut meta = (STATE_INVISIBLE as u64) << STATE_SHIFT;
-            meta |= 1 << ACQUIRE_COUNTER_SHIFT;
-            h.meta.store(meta, Ordering::Release);
-            self.detached_usage
-                .fetch_add(total_charge, Ordering::Relaxed);
-            Ok(Box::into_raw(h))
+            Ok(h)
         }
 
-        fn change_usage_maybe_evict_non_strict(
+        fn charge_usage_maybe_evict_non_strict(
             &self,
             total_charge: usize,
             capacity: usize,
@@ -450,7 +432,7 @@ mod clock {
             true
         }
 
-        fn change_usage_maybe_evict_strict(
+        fn charge_usage_maybe_evict_strict(
             &self,
             total_charge: usize,
             capacity: usize,
@@ -509,6 +491,24 @@ mod clock {
             Ok(())
         }
 
+        fn detached_insert(&self, proto: &Handle<T>) -> *mut Handle<T> {
+            let h = Box::new(Handle {
+                key: proto.key,
+                value: proto.value.clone(),
+                hash: proto.hash,
+                charge: proto.charge,
+                detached: true,
+                meta: Default::default(),
+                displacements: Default::default(),
+            });
+            let mut meta = (STATE_INVISIBLE as u64) << STATE_SHIFT;
+            meta |= 1 << ACQUIRE_COUNTER_SHIFT;
+            h.meta.store(meta, Ordering::Release);
+            self.detached_usage
+                .fetch_add(proto.charge, Ordering::Relaxed);
+            Box::into_raw(h)
+        }
+
         fn release(&self, hp: *mut Handle<T>) -> bool {
             if hp.is_null() {
                 return false;
@@ -551,20 +551,25 @@ mod clock {
                     }
                     self.detached_usage
                         .fetch_sub(total_charge, Ordering::Relaxed);
+                    self.usage.fetch_sub(total_charge, Ordering::Relaxed);
                 } else {
-                    let hash = h.hash;
-                    old_meta = h.meta.swap(0, Ordering::Release);
-                    assert!((old_meta >> STATE_SHIFT) as u8 == STATE_CONSTRUCTION);
-                    self.occupancy.fetch_sub(1, Ordering::Release);
-                    self.rollback(hash, hp);
+                    Self::free_data_mark_empty(h);
+                    self.rollback(h.hash, hp);
+                    self.reclaim_entry_usage(total_charge);
                 }
-                self.usage.fetch_sub(total_charge, Ordering::Relaxed);
-                assert!(self.usage.load(Ordering::Relaxed) < usize::MAX / 2);
                 true
             } else {
                 Self::correct_near_overflow(old_meta, &h.meta);
                 false
             }
+        }
+
+        #[inline]
+        fn reclaim_entry_usage(&self, totol_charge: usize) {
+            let old_occupancy = self.occupancy.fetch_sub(1, Ordering::Release);
+            assert!(old_occupancy > 0);
+            let old_usage = self.usage.fetch_sub(totol_charge, Ordering::Relaxed);
+            assert!(old_usage > 0);
         }
 
         fn ref_count(meta: u64) -> u64 {
@@ -575,15 +580,15 @@ mod clock {
             1u64 << self.length_bits
         }
 
-        const COUNTER_TO_BIT: u64 = 1u64 << (COUNTER_NUM_BITS - 1);
-        const CLEAR_BITS: u64 = (Self::COUNTER_TO_BIT << ACQUIRE_COUNTER_SHIFT)
-            | (Self::COUNTER_TO_BIT << RELEASE_COUNTER_SHIFT);
-        const CHECK_BITS: u64 =
-            (Self::COUNTER_TO_BIT | (MAX_COUNT_DOWN as u64 + 1)) << RELEASE_COUNTER_SHIFT;
-
         fn correct_near_overflow(old_meta: u64, meta: &AtomicU64) {
-            if old_meta & Self::CHECK_BITS > 0 {
-                meta.fetch_and(!Self::CLEAR_BITS, Ordering::Relaxed);
+            const COUNTER_TO_BIT: u64 = 1u64 << (COUNTER_NUM_BITS - 1);
+            const CLEAR_BITS: u64 = (COUNTER_TO_BIT << ACQUIRE_COUNTER_SHIFT)
+                | (COUNTER_TO_BIT << RELEASE_COUNTER_SHIFT);
+            const CHECK_BITS: u64 =
+                (COUNTER_TO_BIT | (MAX_COUNT_DOWN as u64 + 1)) << RELEASE_COUNTER_SHIFT;
+
+            if old_meta & CHECK_BITS > 0 {
+                meta.fetch_and(!CLEAR_BITS, Ordering::Relaxed);
             }
         }
 
@@ -633,50 +638,14 @@ mod clock {
                 for i in 0..STEP_SIZE {
                     let idx = self.mod_table_size((old_clock_pointer + i) as u32);
                     let hp = self.handles.get(idx as usize).unwrap();
-                    let h = hp.as_ref();
-                    let mut meta = h.meta.load(Ordering::Relaxed);
-                    let acquire_count = (meta >> ACQUIRE_COUNTER_SHIFT) & COUNTER_MASK;
-                    let release_count = (meta >> RELEASE_COUNTER_SHIFT) & COUNTER_MASK;
-                    if acquire_count != release_count {
-                        // Only clock update entries with no outstanding refs
-                        continue;
-                    }
-                    if ((meta >> STATE_SHIFT) & STATE_SHAREABLE_BIT as u64) == 0 {
-                        // Only clock update Shareable entries
-                        continue;
-                    }
-                    if ((meta >> STATE_SHIFT) as u8 == STATE_INVISIBLE) && acquire_count > 0 {
-                        // Decrement clock
-                        let new_count = (acquire_count - 1).min(MAX_COUNT_DOWN as u64 - 1);
-                        // Compare-exchange in the decremented clock info, but
-                        // not aggressively
-                        let new_meta = ((STATE_VISIBLE as u64) << STATE_SHIFT as u64)
-                            | (new_count << RELEASE_COUNTER_SHIFT)
-                            | (new_count << ACQUIRE_COUNTER_SHIFT);
-                        let _ = h.meta.compare_exchange(
-                            meta,
-                            new_meta,
-                            Ordering::Release,
-                            Ordering::Relaxed,
-                        );
-                        continue;
-                    }
-                    if h.meta
-                        .compare_exchange(
-                            meta,
-                            (STATE_CONSTRUCTION as u64) << STATE_SHIFT as u64,
-                            Ordering::AcqRel,
-                            Ordering::Acquire,
-                        )
-                        .is_ok()
-                    {
-                        let hash = h.hash;
+                    let evicting = self.clock_update(hp);
+                    if evicting {
+                        // evicted_charge
+                        let h = hp.as_ref();
+                        self.rollback(h.hash, hp.mut_ptr());
                         evicted_charge += h.charge;
-                        // Mark slot as empty.
-                        meta = h.meta.swap(0, Ordering::Release);
-                        assert!((meta >> (STATE_SHIFT as u64)) as u8 == STATE_CONSTRUCTION);
                         evicted_count += 1;
-                        self.rollback(hash, hp.mut_ptr());
+                        Self::free_data_mark_empty(h);
                     }
                 }
 
@@ -690,6 +659,47 @@ mod clock {
 
                 old_clock_pointer = self.clock_pointer.fetch_add(STEP_SIZE, Ordering::Relaxed);
             }
+        }
+
+        fn free_data_mark_empty(h: &Handle<T>) {
+            let meta = h.meta.swap(0, Ordering::Release);
+            assert!((meta >> (STATE_SHIFT as u64)) as u8 == STATE_CONSTRUCTION);
+        }
+
+        fn clock_update(&self, hp: &ClockHandlePtr<T>) -> bool {
+            let h = hp.as_ref();
+            let meta = h.meta.load(Ordering::Relaxed);
+            let acquire_count = (meta >> ACQUIRE_COUNTER_SHIFT) & COUNTER_MASK;
+            let release_count = (meta >> RELEASE_COUNTER_SHIFT) & COUNTER_MASK;
+            if acquire_count != release_count {
+                // Only clock update entries with no outstanding refs
+                return false;
+            }
+            if ((meta >> STATE_SHIFT) & STATE_SHAREABLE_BIT as u64) == 0 {
+                // Only clock update Shareable entries
+                return false;
+            }
+            if ((meta >> STATE_SHIFT) as u8 == STATE_INVISIBLE) && acquire_count > 0 {
+                // Decrement clock
+                let new_count = (acquire_count - 1).min(MAX_COUNT_DOWN as u64 - 1);
+                // Compare-exchange in the decremented clock info, but
+                // not aggressively
+                let new_meta = ((STATE_VISIBLE as u64) << STATE_SHIFT as u64)
+                    | (new_count << RELEASE_COUNTER_SHIFT)
+                    | (new_count << ACQUIRE_COUNTER_SHIFT);
+                let _ =
+                    h.meta
+                        .compare_exchange(meta, new_meta, Ordering::Release, Ordering::Relaxed);
+                return false;
+            }
+            h.meta
+                .compare_exchange(
+                    meta,
+                    (STATE_CONSTRUCTION as u64) << STATE_SHIFT as u64,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
         }
 
         fn rollback(&self, hash: u32, h: *mut Handle<T>) {
@@ -723,12 +733,32 @@ mod clock {
         pub(crate) fn new(
             capacity: usize,
             est_value_size: usize,
-            num_shard_bits: usize,
+            num_shard_bits: i32,
             strict_capacity_limit: bool,
         ) -> Self {
+            assert!(num_shard_bits < 20);
+            let num_shard_bits = if num_shard_bits >= 0 {
+                num_shard_bits as u32
+            } else {
+                const MIN_SHARD_SIZE: usize = 32 << 20;
+                let mut num_shard_bits = 0;
+                let mut num_shards = capacity / MIN_SHARD_SIZE;
+                loop {
+                    num_shards >>= 1;
+                    if num_shards == 0 {
+                        break;
+                    }
+                    if num_shard_bits >= 6 {
+                        num_shard_bits += 1;
+                        // No more than 6.
+                        break;
+                    }
+                }
+                num_shard_bits
+            };
             let num_shards = 1u32 << num_shard_bits;
-            let shard_mask = num_shards - 1;
             let per_shard_cap = (capacity + (num_shards as usize - 1)) / num_shards as usize;
+            let shard_mask = num_shards - 1;
             let mut shards = Vec::with_capacity(num_shards as usize);
             for _ in 0..num_shards {
                 shards.push(ClockCacheShard::new(
@@ -745,7 +775,10 @@ mod clock {
         fn new(capacity: usize, est_value_size: usize, strict_capacity_limit: bool) -> Self {
             let hash_bits = Self::hash_bits(capacity, est_value_size);
             let data = ClockCacheHandleTable::new(hash_bits, strict_capacity_limit);
-            Self { data, capacity }
+            Self {
+                table: data,
+                capacity,
+            }
         }
 
         fn hash_bits(capacity: usize, est_value_size: usize) -> u64 {
@@ -771,20 +804,19 @@ mod clock {
                 value,
                 hash,
                 charge,
-                refs: 0,
                 meta: Default::default(),
                 displacements: Default::default(),
                 detached: false,
             };
-            self.data.insert(h, self.capacity)
+            self.table.insert(h, self.capacity)
         }
 
         fn lookup(&self, key: u64, hash: u32) -> *mut Handle<T> {
-            self.data.lookup(key, hash)
+            self.table.lookup(key, hash)
         }
 
         fn release(&self, h: *mut Handle<T>) -> bool {
-            self.data.release(h)
+            self.table.release(h)
         }
     }
 
@@ -856,7 +888,7 @@ mod tests {
             (key % 10) as u32
         }
         use super::clock::*;
-        let c = Arc::new(ClockCache::new(130, 1, 0, false));
+        let c = Arc::new(ClockCache::new(130, 1, -1, false));
 
         let t1 = {
             let c = c.clone();
