@@ -12,7 +12,7 @@ use futures::channel::oneshot;
 use log::debug;
 
 use super::{FileInfo, WriteBuffer};
-use crate::util::notify::Notify;
+use crate::util::{latch::Latch, notify::Notify};
 
 pub(crate) struct VersionOwner {
     raw: AtomicPtr<Arc<Version>>,
@@ -30,7 +30,7 @@ pub(crate) struct Version {
     obsoleted_files: HashSet<u32>,
 
     next_version: AtomicPtr<Arc<Version>>,
-    new_version_notify: Notify,
+    new_version_latch: Latch,
 
     _cleanup_guard: oneshot::Sender<()>,
     cleanup_handle: Mutex<Option<oneshot::Receiver<()>>>,
@@ -120,18 +120,13 @@ impl VersionOwner {
 
         let buffer_set = current.buffer_set.clone();
         let first_buffer_id = current.first_buffer_id + 1;
-        let (sender, receiver) = oneshot::channel();
-        let new = Box::new(Arc::new(Version {
+        let new = Version::with_buffer_set(
             first_buffer_id,
-            files: delta.files,
-            obsoleted_files: delta.obsoleted_files,
             buffer_set,
-
-            next_version: AtomicPtr::default(),
-            new_version_notify: Notify::default(),
-            _cleanup_guard: sender,
-            cleanup_handle: Mutex::new(Some(receiver)),
-        }));
+            delta.files,
+            delta.obsoleted_files,
+        );
+        let new = Box::new(Arc::new(new));
         self.switch_version(new, guard);
     }
 
@@ -162,7 +157,7 @@ impl VersionOwner {
                 Ordering::Acquire,
             )
             .expect("There has already exists a version");
-        former.new_version_notify.notify_all();
+        former.new_version_latch.count_down();
 
         let raw_former = raw_former as usize;
         guard.defer(move || {
@@ -197,7 +192,15 @@ impl Version {
         obsoleted_files: HashSet<u32>,
     ) -> Self {
         let buffer_set = Arc::new(BufferSet::new(next_file_id, write_buffer_capacity));
-        let first_buffer_id = next_file_id;
+        Self::with_buffer_set(next_file_id, buffer_set, files, obsoleted_files)
+    }
+
+    pub(crate) fn with_buffer_set(
+        first_buffer_id: u32,
+        buffer_set: Arc<BufferSet>,
+        files: HashMap<u32, FileInfo>,
+        obsoleted_files: HashSet<u32>,
+    ) -> Self {
         let (sender, receiver) = oneshot::channel();
         Version {
             first_buffer_id,
@@ -206,7 +209,7 @@ impl Version {
             buffer_set,
 
             next_version: AtomicPtr::default(),
-            new_version_notify: Notify::default(),
+            new_version_latch: Latch::new(1),
             _cleanup_guard: sender,
             cleanup_handle: Mutex::new(Some(receiver)),
         }
@@ -214,7 +217,7 @@ impl Version {
 
     /// Wait and construct next [`Version`].
     pub(crate) async fn wait_next_version(&self) -> Arc<Self> {
-        self.new_version_notify.notified().await;
+        self.new_version_latch.wait().await;
         self.try_next().expect("New version has been installed")
     }
 
