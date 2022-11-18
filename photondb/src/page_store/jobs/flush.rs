@@ -50,7 +50,7 @@ impl<E: Env> FlushCtx<E> {
     pub(crate) async fn run(mut self) {
         loop {
             let version = self.version_owner.current();
-            let write_buffer = version.min_write_buffer().await;
+            let write_buffer = version.min_write_buffer();
 
             // If the [`WriteBuffer`] can be flushed, then it should continue because
             // [`Notify`] is single permits. But this may also lead to [`WriteBuffer`]
@@ -426,7 +426,7 @@ mod tests {
         // Insert two pages in current buffer.
         let (addr1, addr2, file_1) = {
             let version = ctx.version_owner.current();
-            let buf = version.min_write_buffer().await;
+            let buf = version.min_write_buffer();
             let (addr1, _, _) = unsafe { buf.alloc_page(1, 32, false) }.unwrap();
             let (addr2, _, _) = unsafe { buf.alloc_page(2, 32, false) }.unwrap();
             seal_and_install_new_buffer(&version, &buf);
@@ -438,7 +438,7 @@ mod tests {
         // Dealloc page with addr1, install new buffer.
         let file_2 = {
             let version = ctx.version_owner.current();
-            let buf = version.min_write_buffer().await;
+            let buf = version.min_write_buffer();
             unsafe { buf.dealloc_pages(&[addr1], false) }.unwrap();
             seal_and_install_new_buffer(&version, &buf);
             ctx.flush(&version, &buf).await.unwrap();
@@ -449,7 +449,7 @@ mod tests {
         // Dealloc page with addr2, install new buffer without flush.
         let buffer_2 = {
             let version = ctx.version_owner.current();
-            let buf = version.min_write_buffer().await;
+            let buf = version.min_write_buffer();
             unsafe { buf.dealloc_pages(&[addr2], false) }.unwrap();
             seal_and_install_new_buffer(&version, &buf);
             buf.file_id()

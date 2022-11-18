@@ -263,16 +263,12 @@ impl Version {
         }
     }
 
-    pub(crate) async fn min_write_buffer(&self) -> Arc<WriteBuffer> {
-        loop {
-            {
-                let current = self.buffer_set.current();
-                if let Some(buf) = current.get(self.first_buffer_id).cloned() {
-                    return buf;
-                }
-            }
-            photonio::task::yield_now().await;
-        }
+    pub(crate) fn min_write_buffer(&self) -> Arc<WriteBuffer> {
+        let current = self.buffer_set.current();
+        current
+            .get(self.first_buffer_id)
+            .expect("The buffer of first buffer id must exists")
+            .clone()
     }
 
     /// Release all previous writer buffers which is invisible.
@@ -569,7 +565,7 @@ impl BufferSet {
                 }
             }
 
-            if !self.write_buffer_permits.wait().await {
+            if self.write_buffer_permits.wait().await {
                 // Maybe the new `WriteBuffer` is not installed yet.
                 photonio::task::yield_now().await;
             }
@@ -875,6 +871,8 @@ mod version_guard {
 mod tests {
     use std::sync::atomic::AtomicU32;
 
+    use futures::{channel::mpsc, SinkExt, StreamExt};
+
     use super::*;
 
     impl BufferSetVersion {
@@ -1079,7 +1077,6 @@ mod tests {
 
     #[photonio::test]
     async fn write_buffer_permits_basic() {
-        env_logger::init();
         let write_permits = Arc::new(buffer_permits::WriteBufferPermits::new(2));
         write_permits.acquire().await;
         write_permits.acquire().await;
@@ -1087,13 +1084,27 @@ mod tests {
         // Return immediately if there no waiter.
         assert!(write_permits.wait().await);
 
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut tx_1 = tx.clone();
+        let mut tx_2 = tx.clone();
+
         let cloned_write_permits = write_permits.clone();
-        let acquire_task = photonio::task::spawn(async move {
+        let acquire_task_1 = photonio::task::spawn(async move {
+            tx_1.send(()).await.unwrap_or_default();
+            photonio::task::yield_now().await;
+            cloned_write_permits.acquire().await;
+        });
+
+        let cloned_write_permits = write_permits.clone();
+        let acquire_task_2 = photonio::task::spawn(async move {
+            tx_2.send(()).await.unwrap_or_default();
+            photonio::task::yield_now().await;
             cloned_write_permits.acquire().await;
         });
 
         let cloned_write_permits = write_permits.clone();
         let wait_task = photonio::task::spawn(async move {
+            photonio::task::yield_now().await;
             cloned_write_permits.wait().await;
         });
 
@@ -1101,10 +1112,16 @@ mod tests {
         photonio::task::yield_now().await;
         photonio::task::yield_now().await;
 
+        rx.next().await;
+        rx.next().await;
+
         // Wake tasks
         write_permits.release();
-        acquire_task.await.unwrap_or_default();
         wait_task.await.unwrap_or_default();
+
+        write_permits.release();
+        acquire_task_1.await.unwrap_or_default();
+        acquire_task_2.await.unwrap_or_default();
 
         assert!(write_permits.wait().await);
     }

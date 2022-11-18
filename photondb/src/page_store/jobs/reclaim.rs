@@ -444,7 +444,7 @@ mod tests {
         ctx.rewrite_file_impl(&file_info, &version).await.unwrap();
         assert_eq!(rewriter.pages(), vec![1, 3, 4]); // page_id 2 is deallocated.
 
-        let buf = version.min_write_buffer().await;
+        let buf = version.min_write_buffer();
         buf.seal().unwrap();
         let dealloc_pages = HashSet::from([301, 302, 303]);
         for (_, header, record_ref) in buf.iter() {
