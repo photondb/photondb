@@ -9,9 +9,9 @@ use std::{
 
 use crossbeam_epoch::Guard;
 use futures::channel::oneshot;
-use log::debug;
+use log::{debug, info};
 
-use super::{FileInfo, WriteBuffer};
+use super::{write_buffer::ReleaseState, FileInfo, WriteBuffer};
 use crate::util::{latch::Latch, notify::Notify};
 
 pub(crate) struct VersionOwner {
@@ -43,11 +43,13 @@ pub(crate) struct DeltaVersion {
 }
 
 pub(crate) struct BufferSet {
-    write_buffer_capacity: u32,
+    buffer_capacity: u32,
+    max_sealed_buffers: usize,
 
     current: AtomicPtr<BufferSetVersion>,
 
     flush_notify: Notify,
+    write_buffer_permits: buffer_permits::WriteBufferPermits,
 }
 
 pub(crate) struct BufferSetVersion {
@@ -186,12 +188,17 @@ impl Drop for VersionOwner {
 
 impl Version {
     pub(crate) fn new(
-        write_buffer_capacity: u32,
+        buffer_capacity: u32,
         next_file_id: u32,
+        max_sealed_buffers: usize,
         files: HashMap<u32, FileInfo>,
         obsoleted_files: HashSet<u32>,
     ) -> Self {
-        let buffer_set = Arc::new(BufferSet::new(next_file_id, write_buffer_capacity));
+        let buffer_set = Arc::new(BufferSet::new(
+            next_file_id,
+            buffer_capacity,
+            max_sealed_buffers,
+        ));
         Self::with_buffer_set(next_file_id, buffer_set, files, obsoleted_files)
     }
 
@@ -256,12 +263,16 @@ impl Version {
         }
     }
 
-    pub(crate) fn min_write_buffer(&self) -> Arc<WriteBuffer> {
-        let current = self.buffer_set.current();
-        current
-            .get(self.first_buffer_id)
-            .expect("First WriteBuffer referenced by this version must exists")
-            .clone()
+    pub(crate) async fn min_write_buffer(&self) -> Arc<WriteBuffer> {
+        loop {
+            {
+                let current = self.buffer_set.current();
+                if let Some(buf) = current.get(self.first_buffer_id).cloned() {
+                    return buf;
+                }
+            }
+            photonio::task::yield_now().await;
+        }
     }
 
     /// Release all previous writer buffers which is invisible.
@@ -306,6 +317,7 @@ impl Version {
 
 impl Drop for Version {
     fn drop(&mut self) {
+        log::info!("drop version {}", self.first_buffer_id);
         let raw = self.next_version.load(Ordering::SeqCst);
         if !raw.is_null() {
             unsafe {
@@ -318,24 +330,29 @@ impl Drop for Version {
 }
 
 impl BufferSet {
-    pub(crate) fn new(next_file_id: u32, write_buffer_capacity: u32) -> BufferSet {
-        let buf = WriteBuffer::with_capacity(next_file_id, write_buffer_capacity);
+    pub(crate) fn new(
+        next_file_id: u32,
+        buffer_capacity: u32,
+        max_sealed_buffers: usize,
+    ) -> BufferSet {
+        let buf = WriteBuffer::with_capacity(next_file_id, buffer_capacity);
         let version = Box::new(BufferSetVersion {
             buffers_range: next_file_id..(next_file_id + 1),
             sealed_buffers: Vec::default(),
             current_buffer: Arc::new(buf),
         });
         let raw = Box::leak(version);
+
+        // Acquire permit for `buf`.
+        let permits = max_sealed_buffers - 1;
+        let write_buffer_permits = buffer_permits::WriteBufferPermits::new(permits);
         BufferSet {
-            write_buffer_capacity,
+            buffer_capacity,
+            max_sealed_buffers,
             current: AtomicPtr::new(raw),
             flush_notify: Notify::new(),
+            write_buffer_permits,
         }
-    }
-
-    #[inline]
-    pub(crate) fn write_buffer_capacity(&self) -> u32 {
-        self.write_buffer_capacity
     }
 
     /// Obtains a reference of current [`BufferSetVersion`].
@@ -438,6 +455,26 @@ impl BufferSet {
         }
     }
 
+    /// Release a permit of write buffer, and wait new buffer to be installed.
+    ///
+    /// NOTE: This function is only called by flush job.
+    pub(crate) async fn release_permit_and_wait(&self, file_id: u32) {
+        self.write_buffer_permits.release();
+        self.write_buffer_permits.wait().await;
+
+        // Make sure that the successor buffer is installed, because `Version` requires
+        // that the correspnding write buffer of `min_buffer_id` must exists.
+        loop {
+            {
+                let buffer_set = self.current();
+                if buffer_set.current_buffer.file_id() > file_id {
+                    return;
+                }
+            }
+            photonio::task::yield_now().await;
+        }
+    }
+
     #[inline]
     pub(crate) async fn wait_flushable(&self) {
         self.flush_notify.notified().await;
@@ -502,6 +539,76 @@ impl BufferSet {
             }
         }
     }
+
+    /// Acquire the buffer id of the active buffer.
+    ///
+    /// if the active buffer is not installed, wait for it to be installed.
+    pub(crate) async fn acquire_active_buffer_id(&self) -> u32 {
+        if let Some(id) = self.acquire_active_buffer_id_fast() {
+            return id;
+        }
+
+        self.acquire_active_buffer_id_slow().await
+    }
+
+    fn acquire_active_buffer_id_fast(&self) -> Option<u32> {
+        for _ in 0..16 {
+            let buffer_set = self.current();
+            if !buffer_set.current_buffer.is_sealed() {
+                return Some(buffer_set.current_buffer.file_id());
+            }
+        }
+        None
+    }
+
+    async fn acquire_active_buffer_id_slow(&self) -> u32 {
+        loop {
+            {
+                let buffer_set = self.current();
+                if !buffer_set.current_buffer.is_sealed() {
+                    return buffer_set.current_buffer.file_id();
+                }
+            }
+
+            if !self.write_buffer_permits.wait().await {
+                // Maybe the new `WriteBuffer` is not installed yet.
+                photonio::task::yield_now().await;
+            }
+        }
+    }
+
+    /// Seal the corresponding write buffer and switch active buffer to new one.
+    pub(crate) async fn switch_buffer(&self, file_id: u32) {
+        let Some(release_state) = self.seal_buffer(file_id) else { return };
+        self.install_successor(file_id).await;
+        if matches!(release_state, ReleaseState::Flush) {
+            self.notify_flush_job();
+        }
+    }
+
+    /// Install the corresponding successor of `file_id`.
+    async fn install_successor(&self, file_id: u32) {
+        if self.write_buffer_permits.try_acquire().is_none() {
+            info!(
+                "Stalling writes because we have {} sealed write buffers (wait for flush)",
+                self.max_sealed_buffers
+            );
+            self.write_buffer_permits.acquire().await;
+        }
+
+        let write_buffer = WriteBuffer::with_capacity(file_id + 1, self.buffer_capacity);
+        self.install(Arc::new(write_buffer));
+    }
+
+    /// Seal the corresponding buffer.
+    fn seal_buffer(&self, file_id: u32) -> Option<ReleaseState> {
+        let buffer_set = self.current();
+        let write_buffer = buffer_set
+            .get(file_id)
+            .expect("The write buffer should exists");
+
+        write_buffer.seal().ok()
+    }
 }
 
 impl Drop for BufferSet {
@@ -519,11 +626,6 @@ impl Drop for BufferSet {
 }
 
 impl BufferSetVersion {
-    #[inline]
-    pub(crate) fn last_writer_buffer(&self) -> &WriteBuffer {
-        self.current_buffer.as_ref()
-    }
-
     /// Read [`WriteBuffer`] of the specified `file_id`.
     ///
     /// If the user needs to access the [`WriteBuffer`] for a long time, use
@@ -574,6 +676,133 @@ impl<'a> Deref for BufferRef<'a> {
 
     fn deref(&self) -> &Self::Target {
         self.buffer
+    }
+}
+
+mod buffer_permits {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::util::notify::Notify;
+
+    /// A permit for maxmum sealed buffers.
+    pub(crate) struct WriteBufferPermits {
+        permits: AtomicUsize,
+        notify: Notify,
+    }
+
+    enum AcquireKind {
+        None,
+        AddWaiter,
+    }
+
+    impl WriteBufferPermits {
+        pub(crate) fn new(permits: usize) -> WriteBufferPermits {
+            // Add one for recording waiter.
+            let permits = permits + 1;
+            WriteBufferPermits {
+                permits: AtomicUsize::new(permits),
+                notify: Notify::default(),
+            }
+        }
+
+        /// Not acquire a permit, but wait if there no available permits and
+        /// exists a waiter.
+        pub(crate) async fn wait(&self) -> bool {
+            if self.permits.load(Ordering::Acquire) > 0 {
+                true
+            } else {
+                self.wait_cond(|| self.permits.load(Ordering::Acquire) > 0)
+                    .await;
+                false
+            }
+        }
+
+        /// Try acquire a permit, [`None`] is returned if no available permits.
+        pub(crate) fn try_acquire(&self) -> Option<()> {
+            self.acquire_fast(AcquireKind::None)
+        }
+
+        /// Acquire a permit, wait if there no available permits.
+        pub(crate) async fn acquire(&self) {
+            if self.acquire_fast(AcquireKind::AddWaiter).is_some() {
+                return;
+            }
+
+            self.acquire_slow().await
+        }
+
+        /// Release the acquired permit and wake waiters if any.
+        pub(crate) fn release(&self) {
+            let mut current = self.permits.load(Ordering::Acquire);
+            loop {
+                let new = if current == 0 { 2 } else { current + 1 };
+                current = match self.permits.compare_exchange(
+                    current,
+                    new,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => {
+                        break;
+                    }
+                    Err(permits) => permits,
+                }
+            }
+
+            log::info!("release: current {current}");
+            if current == 0 {
+                self.notify.notify_waiters();
+            }
+        }
+
+        fn acquire_fast(&self, kind: AcquireKind) -> Option<()> {
+            let mut current = self.permits.load(Ordering::Acquire);
+            let min_permit = match kind {
+                AcquireKind::None => 1,
+                AcquireKind::AddWaiter => 0,
+            };
+            log::info!("acquire_fast: current {current}");
+            while min_permit < current {
+                let new = current - 1;
+                current = match self.permits.compare_exchange(
+                    current,
+                    new,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => break,
+                    Err(permits) => permits,
+                };
+            }
+            if current > 1 {
+                Some(())
+            } else {
+                None
+            }
+        }
+
+        async fn acquire_slow(&self) {
+            self.wait_cond(|| self.acquire_fast(AcquireKind::AddWaiter).is_some())
+                .await
+        }
+
+        async fn wait_cond<F>(&self, cond_fn: F)
+        where
+            F: Fn() -> bool,
+        {
+            let notified = self.notify.notified();
+            futures::pin_mut!(notified);
+            loop {
+                // Make sure that no wake-up is lost.
+                notified.as_mut().enable();
+                if cond_fn() {
+                    return;
+                }
+
+                notified.as_mut().await;
+                notified.set(self.notify.notified());
+            }
+        }
     }
 }
 
@@ -651,22 +880,29 @@ mod tests {
 
     use super::*;
 
+    impl BufferSetVersion {
+        #[inline]
+        pub(crate) fn last_writer_buffer(&self) -> &WriteBuffer {
+            self.current_buffer.as_ref()
+        }
+    }
+
     #[test]
     fn buffer_set_construct_and_drop() {
-        drop(BufferSet::new(1, 1 << 10));
+        drop(BufferSet::new(1, 1 << 10, 8));
     }
 
     #[test]
     fn buffer_set_write_buffer_install() {
-        let buffer_set = BufferSet::new(1, 1 << 10);
+        let buffer_set = BufferSet::new(1, 1 << 10, 8);
         let file_id = buffer_set.current().next_buffer_id();
-        let buf = WriteBuffer::with_capacity(file_id, buffer_set.write_buffer_capacity());
+        let buf = WriteBuffer::with_capacity(file_id, buffer_set.buffer_capacity);
         buffer_set.install(Arc::new(buf));
     }
 
     #[test]
     fn buffer_set_write_buffer_install_and_release() {
-        let buffer_set = BufferSet::new(1, 1 << 10);
+        let buffer_set = BufferSet::new(1, 1 << 10, 8);
         let file_id = buffer_set.current().last_writer_buffer().file_id();
 
         // 1. seal current.
@@ -676,7 +912,7 @@ mod tests {
 
         // 2. install
         {
-            let buf = WriteBuffer::with_capacity(file_id + 1, buffer_set.write_buffer_capacity());
+            let buf = WriteBuffer::with_capacity(file_id + 1, buffer_set.buffer_capacity);
             buffer_set.install(Arc::new(buf));
         }
 
@@ -694,7 +930,7 @@ mod tests {
 
     #[photonio::test]
     async fn buffer_set_concurrent_update() {
-        let buffer_set = Arc::new(BufferSet::new(1, 32));
+        let buffer_set = Arc::new(BufferSet::new(1, 32, 8));
         let file_id = buffer_set.current().last_writer_buffer().file_id();
         let first_active_buffer_id = Arc::new(AtomicU32::new(file_id));
         let cloned_first_active_buffer_id = first_active_buffer_id.clone();
@@ -744,7 +980,7 @@ mod tests {
 
     #[photonio::test]
     async fn buffer_set_write_buffer_flush_wait_and_notify() {
-        let buffer_set = Arc::new(BufferSet::new(1, 1 << 10));
+        let buffer_set = Arc::new(BufferSet::new(1, 1 << 10, 8));
         let cloned_buffer_set = buffer_set.clone();
         let handle = photonio::task::spawn(async move {
             cloned_buffer_set.wait_flushable().await;
@@ -754,7 +990,7 @@ mod tests {
         buffer_set.current().current_buffer.seal().unwrap();
 
         let file_id = buffer_set.current().next_buffer_id();
-        let buf = WriteBuffer::with_capacity(file_id, buffer_set.write_buffer_capacity());
+        let buf = WriteBuffer::with_capacity(file_id, buffer_set.buffer_capacity);
         buffer_set.install(Arc::new(buf));
 
         buffer_set.notify_flush_job();
@@ -763,7 +999,7 @@ mod tests {
 
     #[test]
     fn buffer_set_write_buffer_switch_release() {
-        let buffer_set = BufferSet::new(1, 1 << 10);
+        let buffer_set = BufferSet::new(1, 1 << 10, 8);
         let (file_id, buf) = {
             let current = buffer_set.current();
             let buf = current.last_writer_buffer();
@@ -777,7 +1013,7 @@ mod tests {
         // Install new buf.
         buffer_set.install(Arc::new(WriteBuffer::with_capacity(
             file_id + 1,
-            buffer_set.write_buffer_capacity(),
+            buffer_set.buffer_capacity,
         )));
         buffer_set.release_until(file_id + 1);
 
@@ -799,7 +1035,7 @@ mod tests {
 
     #[test]
     fn version_access_newly_buffers() {
-        let version = Version::new(1 << 10, 1, HashMap::default(), HashSet::new());
+        let version = Version::new(1 << 10, 1, 8, HashMap::default(), HashSet::new());
         let buffer_id = version.first_buffer_id;
         for i in 1..100 {
             let buf = Arc::new(WriteBuffer::with_capacity(buffer_id + i, 1 << 10));
@@ -814,7 +1050,7 @@ mod tests {
 
     #[test]
     fn version_access_unguarded_buffers() {
-        let version = Version::new(1 << 10, 1, HashMap::default(), HashSet::new());
+        let version = Version::new(1 << 10, 1, 8, HashMap::default(), HashSet::new());
         let owner = VersionOwner::new(version);
         let version = owner.current();
         let buffer_id = {
@@ -842,5 +1078,37 @@ mod tests {
         let version = owner.current();
         assert!(version.get(buffer_id).is_none());
         assert!(version.get(buffer_id + 1).is_some());
+    }
+
+    #[photonio::test]
+    async fn write_buffer_permits_basic() {
+        env_logger::init();
+        let write_permits = Arc::new(buffer_permits::WriteBufferPermits::new(2));
+        write_permits.acquire().await;
+        write_permits.acquire().await;
+
+        // Return immediately if there no waiter.
+        assert!(write_permits.wait().await);
+
+        let cloned_write_permits = write_permits.clone();
+        let acquire_task = photonio::task::spawn(async move {
+            cloned_write_permits.acquire().await;
+        });
+
+        let cloned_write_permits = write_permits.clone();
+        let wait_task = photonio::task::spawn(async move {
+            cloned_write_permits.wait().await;
+        });
+
+        photonio::task::yield_now().await;
+        photonio::task::yield_now().await;
+        photonio::task::yield_now().await;
+
+        // Wake tasks
+        write_permits.release();
+        acquire_task.await.unwrap_or_default();
+        wait_task.await.unwrap_or_default();
+
+        assert!(write_permits.wait().await);
     }
 }

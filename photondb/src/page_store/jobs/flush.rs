@@ -50,7 +50,7 @@ impl<E: Env> FlushCtx<E> {
     pub(crate) async fn run(mut self) {
         loop {
             let version = self.version_owner.current();
-            let write_buffer = version.min_write_buffer();
+            let write_buffer = version.min_write_buffer().await;
 
             // If the [`WriteBuffer`] can be flushed, then it should continue because
             // [`Notify`] is single permits. But this may also lead to [`WriteBuffer`]
@@ -93,6 +93,21 @@ impl<E: Env> FlushCtx<E> {
 
         self.save_version_edit(version, file_id, &obsoleted_files)
             .await?;
+        self.install_version(version, file_id, files, obsoleted_files)
+            .await;
+        Ok(())
+    }
+
+    async fn install_version(
+        &self,
+        version: &Version,
+        file_id: u32,
+        files: HashMap<u32, FileInfo>,
+        obsoleted_files: HashSet<u32>,
+    ) {
+        // Release buffer permit and ensure the new buffer is installed, before install
+        // new version.
+        version.buffer_set.release_permit_and_wait(file_id).await;
 
         let delta = DeltaVersion {
             file_id,
@@ -100,7 +115,6 @@ impl<E: Env> FlushCtx<E> {
             obsoleted_files,
         };
         self.version_owner.install(delta);
-        Ok(())
     }
 
     /// Flush [`WriteBuffer`] to page files and returns dealloc pages.
@@ -299,7 +313,7 @@ mod tests {
         std::fs::create_dir_all(base).unwrap();
         let notifier = ShutdownNotifier::default();
         let shutdown = notifier.subscribe();
-        let version = Version::new(1 << 16, 1, HashMap::default(), HashSet::new());
+        let version = Version::new(1 << 16, 1, 8, HashMap::default(), HashSet::new());
         let version_owner = Arc::new(VersionOwner::new(version));
         FlushCtx {
             shutdown,
@@ -412,7 +426,7 @@ mod tests {
         // Insert two pages in current buffer.
         let (addr1, addr2, file_1) = {
             let version = ctx.version_owner.current();
-            let buf = version.min_write_buffer();
+            let buf = version.min_write_buffer().await;
             let (addr1, _, _) = unsafe { buf.alloc_page(1, 32, false) }.unwrap();
             let (addr2, _, _) = unsafe { buf.alloc_page(2, 32, false) }.unwrap();
             seal_and_install_new_buffer(&version, &buf);
@@ -424,7 +438,7 @@ mod tests {
         // Dealloc page with addr1, install new buffer.
         let file_2 = {
             let version = ctx.version_owner.current();
-            let buf = version.min_write_buffer();
+            let buf = version.min_write_buffer().await;
             unsafe { buf.dealloc_pages(&[addr1], false) }.unwrap();
             seal_and_install_new_buffer(&version, &buf);
             ctx.flush(&version, &buf).await.unwrap();
@@ -435,7 +449,7 @@ mod tests {
         // Dealloc page with addr2, install new buffer without flush.
         let buffer_2 = {
             let version = ctx.version_owner.current();
-            let buf = version.min_write_buffer();
+            let buf = version.min_write_buffer().await;
             unsafe { buf.dealloc_pages(&[addr2], false) }.unwrap();
             seal_and_install_new_buffer(&version, &buf);
             buf.file_id()

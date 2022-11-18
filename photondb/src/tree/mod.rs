@@ -109,8 +109,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Insert an empty data page as the root.
         let iter: ItemIter<(Key, Value)> = None.into();
         let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_iter(iter);
-        let mut txn = self.guard.begin();
-        let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+        let mut txn = self.guard.begin().await;
+        let (new_addr, mut new_page) = txn.alloc_page(builder.size()).await?;
         builder.build(&mut new_page);
         let root_id = txn.insert_page(new_addr);
         assert_eq!(root_id, ROOT_ID);
@@ -156,8 +156,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Build a delta page with the given key-value pair.
         let delta = (key, value);
         let builder = SortedPageBuilder::new(PageTier::Leaf, PageKind::Data).with_item(delta);
-        let mut txn = self.guard.begin();
-        let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+        let mut txn = self.guard.begin().await;
+        let (new_addr, mut new_page) = txn.alloc_page(builder.size()).await?;
         builder.build(&mut new_page);
 
         // Update the corresponding leaf page with the delta.
@@ -409,19 +409,19 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             return Ok(());
         };
 
-        let mut txn = self.guard.begin();
+        let mut txn = self.guard.begin().await;
         // Build and insert the right page.
         let right_id = {
             let builder =
                 SortedPageBuilder::new(view.page.tier(), PageKind::Data).with_iter(right_iter);
-            let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+            let (new_addr, mut new_page) = txn.alloc_page(builder.size()).await?;
             builder.build(&mut new_page);
             txn.insert_page(new_addr)
         };
         // Build a delta page with the right index.
         let delta = (split_key.as_raw(), Index::new(right_id, 0));
         let builder = SortedPageBuilder::new(view.page.tier(), PageKind::Split).with_item(delta);
-        let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+        let (new_addr, mut new_page) = txn.alloc_page(builder.size()).await?;
         builder.build(&mut new_page);
         // Update the left page with the delta.
         // The page epoch must be updated to indicate the change of the page range.
@@ -459,12 +459,12 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             return Ok(());
         };
 
-        let mut txn = self.guard.begin();
+        let mut txn = self.guard.begin().await;
         // Build and insert the left page.
         let left_id = {
             let builder =
                 SortedPageBuilder::new(view.page.tier(), PageKind::Data).with_iter(left_iter);
-            let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+            let (new_addr, mut new_page) = txn.alloc_page(builder.size()).await?;
             builder.build(&mut new_page);
             txn.insert_page(new_addr)
         };
@@ -472,7 +472,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         let right_id = {
             let builder =
                 SortedPageBuilder::new(view.page.tier(), PageKind::Data).with_iter(right_iter);
-            let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+            let (new_addr, mut new_page) = txn.alloc_page(builder.size()).await?;
             builder.build(&mut new_page);
             txn.insert_page(new_addr)
         };
@@ -482,10 +482,11 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             (split_key.as_raw(), Index::new(right_id, 0)),
         ];
         let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data).with_slice(&delta);
-        let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+        let (new_addr, mut new_page) = txn.alloc_page(builder.size()).await?;
         builder.build(&mut new_page);
         // Replace and deallocate the original root.
         txn.replace_page(view.id, view.addr, new_addr, &[view.addr])
+            .await
             .map(|_| {
                 trace!("split root {:?} with delta {:?}", view, delta);
                 self.tree.stats.success.split_page.inc();
@@ -548,8 +549,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             vec![(left_key, left_index), (split_key, split_index)]
         };
         let builder = SortedPageBuilder::new(PageTier::Inner, PageKind::Data).with_slice(&delta);
-        let mut txn = self.guard.begin();
-        let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+        let mut txn = self.guard.begin().await;
+        let (new_addr, mut new_page) = txn.alloc_page(builder.size()).await?;
         builder.build(&mut new_page);
         // Update the parent page with the delta.
         new_page.set_epoch(parent.page.epoch());
@@ -631,14 +632,15 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         let info = self.collect_consolidation_info(&view, kind).await?;
         let iter = f(info.iter);
         let builder = SortedPageBuilder::new(view.page.tier(), PageKind::Data).with_iter(iter);
-        let mut txn = self.guard.begin();
-        let (new_addr, mut new_page) = txn.alloc_page(builder.size())?;
+        let mut txn = self.guard.begin().await;
+        let (new_addr, mut new_page) = txn.alloc_page(builder.size()).await?;
         builder.build(&mut new_page);
         new_page.set_epoch(view.page.epoch());
         new_page.set_chain_len(info.last_page.chain_len());
         new_page.set_chain_next(info.last_page.chain_next());
         // Update the page and deallocate the consolidated delta pages.
         txn.replace_page(view.id, view.addr, new_addr, &info.page_addrs)
+            .await
             .map(|_| {
                 trace!("consolidated page {:?}", view);
                 self.tree.stats.success.consolidate_page.inc();

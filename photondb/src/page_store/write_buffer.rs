@@ -255,7 +255,7 @@ impl WriteBuffer {
             ) {
                 Ok(_) => {
                     info!(
-                        "Seal write buffer {}, allocated {} bytes, usage {}",
+                        "Seal write buffer {}, allocated {} bytes, usage {:.4}",
                         self.file_id,
                         buffer_state.allocated,
                         buffer_state.allocated as f64 / self.buf_size as f64
