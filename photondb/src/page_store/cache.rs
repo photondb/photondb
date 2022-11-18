@@ -17,7 +17,7 @@ pub(crate) trait Cache<T: Clone>: Sized {
 
     fn release(&self, h: *mut Handle<T>) -> bool;
 
-    fn erase(&self, key: u64) -> Result<()>;
+    fn erase(&self, key: u64, hash: u32);
 }
 
 pub(crate) struct CacheEntry<T, C>
@@ -564,6 +564,61 @@ mod clock {
             }
         }
 
+        fn erase(&self, hash: u32) {
+            self.find_slot(
+                hash,
+                |hp| {
+                    let h = hp.as_ref();
+                    let mut old_meta = h.meta.fetch_add(ACQUIRE_INCREMENT, Ordering::Acquire);
+                    // Check if it's an entry visible to lookups
+                    if (old_meta >> STATE_SHIFT) as u8 == STATE_VISIBLE {
+                        if h.hash == hash {
+                            old_meta = h.meta.fetch_and(
+                                !((STATE_VISIBLE_BIT as u64) << STATE_SHIFT),
+                                Ordering::AcqRel,
+                            );
+                            old_meta &= !((STATE_VISIBLE_BIT as u64) << STATE_SHIFT);
+                            loop {
+                                let refcount = Self::ref_count(old_meta);
+                                assert!(refcount > 0);
+                                if refcount > 1 {
+                                    // Not last ref at some point in time during this Erase call
+                                    // Pretend we never took the reference
+                                    h.meta.fetch_sub(ACQUIRE_INCREMENT, Ordering::Release);
+                                    break;
+                                } else if h
+                                    .meta
+                                    .compare_exchange_weak(
+                                        old_meta,
+                                        (STATE_CONSTRUCTION as u64) << STATE_SHIFT,
+                                        Ordering::AcqRel,
+                                        Ordering::Acquire,
+                                    )
+                                    .is_ok()
+                                {
+                                    assert!(hash == h.hash);
+                                    let total_charge = h.charge;
+                                    Self::free_data_mark_empty(h);
+                                    self.reclaim_entry_usage(total_charge);
+                                    // We already have a copy of hashed_key in
+                                    // this case, so OK to
+                                    // delay Rollback until after releasing the
+                                    self.rollback(hash, hp.mut_ptr());
+                                    break;
+                                }
+                            }
+                        }
+                    } else if (old_meta >> STATE_SHIFT) as u8 == STATE_INVISIBLE {
+                        h.meta.fetch_sub(ACQUIRE_INCREMENT, Ordering::Release);
+                    } else {
+                    }
+                    false
+                },
+                |hp| hp.as_ref().displacements.load(Ordering::Relaxed) == 0,
+                |_hp| {},
+            );
+        }
+
         #[inline]
         fn reclaim_entry_usage(&self, totol_charge: usize) {
             let old_occupancy = self.occupancy.fetch_sub(1, Ordering::Release);
@@ -573,7 +628,8 @@ mod clock {
         }
 
         fn ref_count(meta: u64) -> u64 {
-            ((meta >> ACQUIRE_COUNTER_SHIFT) - (meta >> RELEASE_COUNTER_SHIFT)) & COUNTER_MASK
+            ((meta >> ACQUIRE_COUNTER_SHIFT) & COUNTER_MASK)
+                - ((meta >> RELEASE_COUNTER_SHIFT) & COUNTER_MASK)
         }
 
         const fn table_size(&self) -> u64 {
@@ -818,6 +874,10 @@ mod clock {
         fn release(&self, h: *mut Handle<T>) -> bool {
             self.table.release(h)
         }
+
+        fn erase(&self, hash: u32) {
+            self.table.erase(hash)
+        }
     }
 
     impl<T: Clone> Cache<T> for ClockCache<T> {
@@ -863,8 +923,10 @@ mod clock {
             shard.release(h)
         }
 
-        fn erase(&self, _key: u64) -> Result<()> {
-            todo!()
+        fn erase(&self, _key: u64, hash: u32) {
+            let idx = self.shard(hash);
+            let shard = &self.shards[idx as usize];
+            shard.erase(hash)
         }
     }
 
@@ -923,6 +985,7 @@ mod tests {
             })
         };
         let t3 = {
+            let c = c.clone();
             thread::spawn(move || {
                 let v = c.lookup(4, hash(4)).unwrap();
                 assert_eq!(v.key(), 4);
@@ -930,5 +993,8 @@ mod tests {
         };
         t3.join().unwrap();
         t2.join().unwrap();
+
+        c.erase(4, hash(4));
+        assert!(c.lookup(4, hash(4)).is_none());
     }
 }
