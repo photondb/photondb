@@ -317,7 +317,6 @@ impl Version {
 
 impl Drop for Version {
     fn drop(&mut self) {
-        log::info!("drop version {}", self.first_buffer_id);
         let raw = self.next_version.load(Ordering::SeqCst);
         if !raw.is_null() {
             unsafe {
@@ -749,7 +748,6 @@ mod buffer_permits {
                 }
             }
 
-            log::info!("release: current {current}");
             if current == 0 {
                 self.notify.notify_waiters();
             }
@@ -761,7 +759,6 @@ mod buffer_permits {
                 AcquireKind::None => 1,
                 AcquireKind::AddWaiter => 0,
             };
-            log::info!("acquire_fast: current {current}");
             while min_permit < current {
                 let new = current - 1;
                 current = match self.permits.compare_exchange(
