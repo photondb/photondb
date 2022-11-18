@@ -1091,20 +1091,17 @@ mod tests {
         let cloned_write_permits = write_permits.clone();
         let acquire_task_1 = photonio::task::spawn(async move {
             tx_1.send(()).await.unwrap_or_default();
-            photonio::task::yield_now().await;
             cloned_write_permits.acquire().await;
         });
 
         let cloned_write_permits = write_permits.clone();
         let acquire_task_2 = photonio::task::spawn(async move {
             tx_2.send(()).await.unwrap_or_default();
-            photonio::task::yield_now().await;
             cloned_write_permits.acquire().await;
         });
 
         let cloned_write_permits = write_permits.clone();
         let wait_task = photonio::task::spawn(async move {
-            photonio::task::yield_now().await;
             cloned_write_permits.wait().await;
         });
 
@@ -1117,9 +1114,8 @@ mod tests {
 
         // Wake tasks
         write_permits.release();
-        wait_task.await.unwrap_or_default();
-
         write_permits.release();
+        wait_task.await.unwrap_or_default();
         acquire_task_1.await.unwrap_or_default();
         acquire_task_2.await.unwrap_or_default();
 
