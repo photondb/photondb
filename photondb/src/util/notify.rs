@@ -63,148 +63,6 @@ type WaitList = LinkedList<Waiter, <Waiter as linked_list::Link>::Target>;
 /// only a **single** permit is stored. The next call to `notified().await` will
 /// complete immediately, but the one after will wait for a new permit.
 ///
-/// # Examples
-///
-/// Basic usage.
-///
-/// ```
-/// use std::sync::Arc;
-///
-/// use tokio::sync::Notify;
-///
-/// #[tokio::main]
-/// async fn main() {
-///     let notify = Arc::new(Notify::new());
-///     let notify2 = notify.clone();
-///
-///     let handle = tokio::spawn(async move {
-///         notify2.notified().await;
-///         println!("received notification");
-///     });
-///
-///     println!("sending notification");
-///     notify.notify_one();
-///
-///     // Wait for task to receive notification.
-///     handle.await.unwrap();
-/// }
-/// ```
-///
-/// Unbound multi-producer single-consumer (mpsc) channel.
-///
-/// No wakeups can be lost when using this channel because the call to
-/// `notify_one()` will store a permit in the `Notify`, which the following call
-/// to `notified()` will consume.
-///
-/// ```
-/// use std::{collections::VecDeque, sync::Mutex};
-///
-/// use tokio::sync::Notify;
-///
-/// struct Channel<T> {
-///     values: Mutex<VecDeque<T>>,
-///     notify: Notify,
-/// }
-///
-/// impl<T> Channel<T> {
-///     pub fn send(&self, value: T) {
-///         self.values.lock().unwrap().push_back(value);
-///
-///         // Notify the consumer a value is available
-///         self.notify.notify_one();
-///     }
-///
-///     // This is a single-consumer channel, so several concurrent calls to
-///     // `recv` are not allowed.
-///     pub async fn recv(&self) -> T {
-///         loop {
-///             // Drain values
-///             if let Some(value) = self.values.lock().unwrap().pop_front() {
-///                 return value;
-///             }
-///
-///             // Wait for values to be available
-///             self.notify.notified().await;
-///         }
-///     }
-/// }
-/// ```
-///
-/// Unbound multi-producer multi-consumer (mpmc) channel.
-///
-/// The call to [`enable`] is important because otherwise if you have two
-/// calls to `recv` and two calls to `send` in parallel, the following could
-/// happen:
-///
-///  1. Both calls to `try_recv` return `None`.
-///  2. Both new elements are added to the vector.
-///  3. The `notify_one` method is called twice, adding only a single
-///     permit to the `Notify`.
-///  4. Both calls to `recv` reach the `Notified` future. One of them
-///     consumes the permit, and the other sleeps forever.
-///
-/// By adding the `Notified` futures to the list by calling `enable` before
-/// `try_recv`, the `notify_one` calls in step three would remove the
-/// futures from the list and mark them notified instead of adding a permit
-/// to the `Notify`. This ensures that both futures are woken.
-///
-/// Notice that this failure can only happen if there are two concurrent calls
-/// to `recv`. This is why the mpsc example above does not require a call to
-/// `enable`.
-///
-/// ```
-/// use std::{collections::VecDeque, sync::Mutex};
-///
-/// use tokio::sync::Notify;
-///
-/// struct Channel<T> {
-///     messages: Mutex<VecDeque<T>>,
-///     notify_on_sent: Notify,
-/// }
-///
-/// impl<T> Channel<T> {
-///     pub fn send(&self, msg: T) {
-///         let mut locked_queue = self.messages.lock().unwrap();
-///         locked_queue.push_back(msg);
-///         drop(locked_queue);
-///
-///         // Send a notification to one of the calls currently
-///         // waiting in a call to `recv`.
-///         self.notify_on_sent.notify_one();
-///     }
-///
-///     pub fn try_recv(&self) -> Option<T> {
-///         let mut locked_queue = self.messages.lock().unwrap();
-///         locked_queue.pop_front()
-///     }
-///
-///     pub async fn recv(&self) -> T {
-///         let future = self.notify_on_sent.notified();
-///         tokio::pin!(future);
-///
-///         loop {
-///             // Make sure that no wakeup is lost if we get
-///             // `None` from `try_recv`.
-///             future.as_mut().enable();
-///
-///             if let Some(msg) = self.try_recv() {
-///                 return msg;
-///             }
-///
-///             // Wait for a call to `notify_one`.
-///             //
-///             // This uses `.as_mut()` to avoid consuming the future,
-///             // which lets us call `Pin::set` below.
-///             future.as_mut().await;
-///
-///             // Reset the future in case another call to
-///             // `try_recv` got the message before us.
-///             future.set(self.notify_on_sent.notified());
-///         }
-///     }
-/// }
-/// ```
-///
 /// [park]: std::thread::park
 /// [unpark]: std::thread::Thread::unpark
 /// [`notified().await`]: Notify::notified()
@@ -313,14 +171,6 @@ fn atomic_inc_num_notify_waiters_calls(data: &AtomicUsize) {
 
 impl Notify {
     /// Create a new `Notify`, initialized without a permit.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tokio::sync::Notify;
-    ///
-    /// let notify = Notify::new();
-    /// ```
     pub fn new() -> Notify {
         Notify {
             state: AtomicUsize::new(0),
@@ -328,31 +178,7 @@ impl Notify {
         }
     }
 
-    /// Create a new `Notify`, initialized without a permit.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tokio::sync::Notify;
-    ///
-    /// static NOTIFY: Notify = Notify::const_new();
-    /// ```
-    #[cfg(all(feature = "parking_lot", not(all(loom, test))))]
-    #[cfg_attr(docsrs, doc(cfg(feature = "parking_lot")))]
-    pub const fn const_new() -> Notify {
-        Notify {
-            state: AtomicUsize::new(0),
-            waiters: Mutex::const_new(LinkedList::new()),
-        }
-    }
-
     /// Wait for a notification.
-    ///
-    /// Equivalent to:
-    ///
-    /// ```ignore
-    /// async fn notified(&self);
-    /// ```
     ///
     /// Each `Notify` value holds a single permit. If a permit is available from
     /// an earlier call to [`notify_one()`], then `notified().await` will
@@ -376,28 +202,6 @@ impl Notify {
     /// This method uses a queue to fairly distribute notifications in the order
     /// they were requested. Cancelling a call to `notified` makes you lose your
     /// place in the queue.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    ///
-    /// use tokio::sync::Notify;
-    ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///     let notify = Arc::new(Notify::new());
-    ///     let notify2 = notify.clone();
-    ///
-    ///     tokio::spawn(async move {
-    ///         notify2.notified().await;
-    ///         println!("received notification");
-    ///     });
-    ///
-    ///     println!("sending notification");
-    ///     notify.notify_one();
-    /// }
-    /// ```
     pub fn notified(&self) -> Notified<'_> {
         // we load the number of times notify_waiters
         // was called and store that in our initial state
@@ -427,30 +231,6 @@ impl Notify {
     /// that will wait.
     ///
     /// [`notified().await`]: Notify::notified()
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    ///
-    /// use tokio::sync::Notify;
-    ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///     let notify = Arc::new(Notify::new());
-    ///     let notify2 = notify.clone();
-    ///
-    ///     tokio::spawn(async move {
-    ///         notify2.notified().await;
-    ///         println!("received notification");
-    ///     });
-    ///
-    ///     println!("sending notification");
-    ///     notify.notify_one();
-    /// }
-    /// ```
-    // Alias for old name in 0.x
-    #[cfg_attr(docsrs, doc(alias = "notify"))]
     pub fn notify_one(&self) {
         // Load the current state
         let mut curr = self.state.load(SeqCst);
@@ -492,32 +272,6 @@ impl Notify {
     /// `notified().await`. The purpose of this method is to notify all
     /// already registered waiters. Registering for notification is done by
     /// acquiring an instance of the `Notified` future via calling `notified()`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::sync::Arc;
-    ///
-    /// use tokio::sync::Notify;
-    ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///     let notify = Arc::new(Notify::new());
-    ///     let notify2 = notify.clone();
-    ///
-    ///     let notified1 = notify.notified();
-    ///     let notified2 = notify.notified();
-    ///
-    ///     let handle = tokio::spawn(async move {
-    ///         println!("sending notifications");
-    ///         notify2.notify_waiters();
-    ///     });
-    ///
-    ///     notified1.await;
-    ///     notified2.await;
-    ///     println!("received notifications");
-    /// }
-    /// ```
     pub fn notify_waiters(&self) {
         // There are waiters, the lock must be acquired to notify.
         let mut waiters = self.waiters.lock().expect("Poisoned");
@@ -648,82 +402,6 @@ impl Notified<'_> {
     ///
     /// If this method returns true, any future calls to poll on the same future
     /// will immediately return `Poll::Ready`.
-    ///
-    /// # Examples
-    ///
-    /// Unbound multi-producer multi-consumer (mpmc) channel.
-    ///
-    /// The call to `enable` is important because otherwise if you have two
-    /// calls to `recv` and two calls to `send` in parallel, the following could
-    /// happen:
-    ///
-    ///  1. Both calls to `try_recv` return `None`.
-    ///  2. Both new elements are added to the vector.
-    ///  3. The `notify_one` method is called twice, adding only a single
-    ///     permit to the `Notify`.
-    ///  4. Both calls to `recv` reach the `Notified` future. One of them
-    ///     consumes the permit, and the other sleeps forever.
-    ///
-    /// By adding the `Notified` futures to the list by calling `enable` before
-    /// `try_recv`, the `notify_one` calls in step three would remove the
-    /// futures from the list and mark them notified instead of adding a permit
-    /// to the `Notify`. This ensures that both futures are woken.
-    ///
-    /// ```
-    /// use std::{collections::VecDeque, sync::Mutex};
-    ///
-    /// use tokio::sync::Notify;
-    ///
-    /// struct Channel<T> {
-    ///     messages: Mutex<VecDeque<T>>,
-    ///     notify_on_sent: Notify,
-    /// }
-    ///
-    /// impl<T> Channel<T> {
-    ///     pub fn send(&self, msg: T) {
-    ///         let mut locked_queue = self.messages.lock().unwrap();
-    ///         locked_queue.push_back(msg);
-    ///         drop(locked_queue);
-    ///
-    ///         // Send a notification to one of the calls currently
-    ///         // waiting in a call to `recv`.
-    ///         self.notify_on_sent.notify_one();
-    ///     }
-    ///
-    ///     pub fn try_recv(&self) -> Option<T> {
-    ///         let mut locked_queue = self.messages.lock().unwrap();
-    ///         locked_queue.pop_front()
-    ///     }
-    ///
-    ///     pub async fn recv(&self) -> T {
-    ///         let future = self.notify_on_sent.notified();
-    ///         tokio::pin!(future);
-    ///
-    ///         loop {
-    ///             // Make sure that no wakeup is lost if we get
-    ///             // `None` from `try_recv`.
-    ///             future.as_mut().enable();
-    ///
-    ///             if let Some(msg) = self.try_recv() {
-    ///                 return msg;
-    ///             }
-    ///
-    ///             // Wait for a call to `notify_one`.
-    ///             //
-    ///             // This uses `.as_mut()` to avoid consuming the future,
-    ///             // which lets us call `Pin::set` below.
-    ///             future.as_mut().await;
-    ///
-    ///             // Reset the future in case another call to
-    ///             // `try_recv` got the message before us.
-    ///             future.set(self.notify_on_sent.notified());
-    ///         }
-    ///     }
-    /// }
-    /// ```
-    ///
-    /// [`notify_one`]: Notify::notify_one()
-    /// [`notify_waiters`]: Notify::notify_waiters()
     pub fn enable(self: Pin<&mut Self>) -> bool {
         self.poll_notified(None).is_ready()
     }
