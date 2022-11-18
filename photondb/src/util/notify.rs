@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use futures::{channel::mpsc, lock::Mutex, stream::FusedStream, StreamExt};
 
 /// Notifies a single task to wake up.
