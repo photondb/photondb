@@ -23,7 +23,7 @@ pub(crate) trait RewritePage<E: Env>: Send + Sync + 'static {
         Self: 'a;
 
     /// Rewrites the corresponding page to reclaim the space it occupied.
-    fn rewrite<'a>(&'a self, page_id: u64, guard: Guard<'a, E>) -> Self::Rewrite<'a>;
+    fn rewrite(&self, page_id: u64, guard: Guard<E>) -> Self::Rewrite<'_>;
 }
 
 pub(crate) struct ReclaimCtx<E, R>
@@ -202,7 +202,11 @@ where
                 continue;
             }
             rewrite_pages.insert(page_id);
-            let guard = Guard::new(version.clone(), &self.page_table, &self.page_files);
+            let guard = Guard::new(
+                version.clone(),
+                self.page_table.clone(),
+                self.page_files.clone(),
+            );
             self.rewriter.rewrite(page_id, guard).await?;
         }
         Ok(total_rewrite_pages)
@@ -247,7 +251,11 @@ where
         pages: &[u64],
     ) -> Result<()> {
         loop {
-            let guard = Guard::new(version.clone(), &self.page_table, &self.page_files);
+            let guard = Guard::new(
+                version.clone(),
+                self.page_table.clone(),
+                self.page_files.clone(),
+            );
             let txn = guard.begin();
             match txn.dealloc_pages(file_id, pages) {
                 Ok(()) => return Ok(()),
@@ -375,7 +383,7 @@ mod tests {
         where
             Self: 'a;
 
-        fn rewrite<'a>(&'a self, id: u64, _guard: Guard<'a, Photon>) -> Self::Rewrite<'a> {
+        fn rewrite(&self, id: u64, _guard: Guard<Photon>) -> Self::Rewrite<'_> {
             self.values.lock().unwrap().push(id);
             async { Ok(()) }
         }

@@ -134,7 +134,7 @@ impl<E: Env> PageStore<E> {
 
     #[inline]
     pub(crate) fn guard(&self) -> Guard<E> {
-        Guard::new(self.version(), &self.table, &self.page_files)
+        Guard::new(self.version(), self.table.clone(), self.page_files.clone())
     }
 
     pub(crate) async fn close(mut self) {
