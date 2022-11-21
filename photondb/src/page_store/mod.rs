@@ -26,6 +26,8 @@ use jobs::{cleanup::CleanupCtx, flush::FlushCtx, reclaim::ReclaimCtx};
 mod write_buffer;
 pub(crate) use write_buffer::{RecordRef, WriteBuffer};
 
+mod buffer_set;
+
 mod manifest;
 pub(crate) use manifest::Manifest;
 
