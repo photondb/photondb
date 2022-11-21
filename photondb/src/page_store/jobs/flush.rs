@@ -93,6 +93,21 @@ impl<E: Env> FlushCtx<E> {
 
         self.save_version_edit(version, file_id, &obsoleted_files)
             .await?;
+        self.install_version(version, file_id, files, obsoleted_files)
+            .await;
+        Ok(())
+    }
+
+    async fn install_version(
+        &self,
+        version: &Version,
+        file_id: u32,
+        files: HashMap<u32, FileInfo>,
+        obsoleted_files: HashSet<u32>,
+    ) {
+        // Release buffer permit and ensure the new buffer is installed, before install
+        // new version.
+        version.buffer_set.release_permit_and_wait(file_id).await;
 
         let delta = DeltaVersion {
             file_id,
@@ -100,7 +115,6 @@ impl<E: Env> FlushCtx<E> {
             obsoleted_files,
         };
         self.version_owner.install(delta);
-        Ok(())
     }
 
     /// Flush [`WriteBuffer`] to page files and returns dealloc pages.
@@ -299,7 +313,7 @@ mod tests {
         std::fs::create_dir_all(base).unwrap();
         let notifier = ShutdownNotifier::default();
         let shutdown = notifier.subscribe();
-        let version = Version::new(1 << 16, 1, HashMap::default(), HashSet::new());
+        let version = Version::new(1 << 16, 1, 8, HashMap::default(), HashSet::new());
         let version_owner = Arc::new(VersionOwner::new(version));
         FlushCtx {
             shutdown,

@@ -228,7 +228,8 @@ where
             }
 
             if cached_pages.len() == 128 {
-                self.rewrite_dealloc_pages_chunk(None, version, &cached_pages)?;
+                self.rewrite_dealloc_pages_chunk(None, version, &cached_pages)
+                    .await?;
                 cached_pages.clear();
             }
             cached_pages.push(*page_addr);
@@ -238,13 +239,14 @@ where
         // Ensure the `file_id` is recorded in write buffer.
         if total_rewrite_pages != 0 {
             assert!(!cached_pages.is_empty());
-            self.rewrite_dealloc_pages_chunk(Some(file_id), version, &cached_pages)?;
+            self.rewrite_dealloc_pages_chunk(Some(file_id), version, &cached_pages)
+                .await?;
         }
 
         Ok(total_rewrite_pages)
     }
 
-    fn rewrite_dealloc_pages_chunk(
+    async fn rewrite_dealloc_pages_chunk(
         &self,
         file_id: Option<u32>,
         version: &Arc<Version>,
@@ -256,8 +258,8 @@ where
                 self.page_table.clone(),
                 self.page_files.clone(),
             );
-            let txn = guard.begin();
-            match txn.dealloc_pages(file_id, pages) {
+            let txn = guard.begin().await;
+            match txn.dealloc_pages(file_id, pages).await {
                 Ok(()) => return Ok(()),
                 Err(Error::Again) => continue,
                 Err(err) => return Err(err),
@@ -445,7 +447,7 @@ mod tests {
 
         let mut files = HashMap::new();
         files.insert(2, file_info.clone());
-        let version = Arc::new(Version::new(1 << 20, 3, files, HashSet::default()));
+        let version = Arc::new(Version::new(1 << 20, 3, 8, files, HashSet::default()));
 
         ctx.rewrite_file_impl(&file_info, &version).await.unwrap();
         assert_eq!(rewriter.pages(), vec![1, 3, 4]); // page_id 2 is deallocated.

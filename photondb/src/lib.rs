@@ -64,6 +64,7 @@ mod tests {
         page_chain_length: 2,
         page_store: PageStoreOptions {
             write_buffer_capacity: 1 << 20,
+            max_write_buffers: 8,
             use_direct_io: false,
             max_space_amplification_percent: 10,
             space_used_high: u64::MAX,
