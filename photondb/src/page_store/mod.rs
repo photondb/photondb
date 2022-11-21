@@ -45,13 +45,13 @@ pub struct Options {
     /// Default: 128MB
     pub write_buffer_capacity: u32,
 
-    /// The maxmum number of sealed write buffers.
+    /// The maxmum number of write buffers.
     ///
-    /// If there exists too many sealed write buffers, writing will be stalled
-    /// until at leaset one write buffer is flushed.
+    /// If there exists too many write buffers, writing will be stalled until at
+    /// leaset one write buffer is flushed.
     ///
     /// Default: 8
-    pub max_sealed_write_buffers: usize,
+    pub max_write_buffers: usize,
 
     /// If true, use O_DIRECT to read/write page files.
     ///
@@ -77,7 +77,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             write_buffer_capacity: 128 << 20,
-            max_sealed_write_buffers: 8,
+            max_write_buffers: 8,
             use_direct_io: false,
             max_space_amplification_percent: 100,
             space_used_high: u64::MAX,
@@ -113,7 +113,7 @@ impl<E: Env> PageStore<E> {
         let version = Version::new(
             options.write_buffer_capacity,
             next_file_id,
-            options.max_sealed_write_buffers,
+            options.max_write_buffers,
             file_infos,
             HashSet::default(),
         );
