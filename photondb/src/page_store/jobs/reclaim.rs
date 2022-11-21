@@ -23,7 +23,7 @@ pub(crate) trait RewritePage<E: Env>: Send + Sync + 'static {
         Self: 'a;
 
     /// Rewrites the corresponding page to reclaim the space it occupied.
-    fn rewrite(&'_ self, page_id: u64, guard: Guard<E>) -> Self::Rewrite<'_>;
+    fn rewrite(&self, page_id: u64, guard: Guard<E>) -> Self::Rewrite<'_>;
 }
 
 pub(crate) struct ReclaimCtx<E, R>
@@ -383,7 +383,7 @@ mod tests {
         where
             Self: 'a;
 
-        fn rewrite(&'_ self, id: u64, _guard: Guard<Photon>) -> Self::Rewrite<'_> {
+        fn rewrite(&self, id: u64, _guard: Guard<Photon>) -> Self::Rewrite<'_> {
             self.values.lock().unwrap().push(id);
             async { Ok(()) }
         }

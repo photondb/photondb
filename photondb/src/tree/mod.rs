@@ -81,7 +81,7 @@ impl<E: Env> RewritePage<E> for Arc<Tree> {
         where
             Self: 'a;
 
-    fn rewrite(&'_ self, id: u64, guard: Guard<E>) -> Self::Rewrite<'_> {
+    fn rewrite(&self, id: u64, guard: Guard<E>) -> Self::Rewrite<'_> {
         async move {
             let txn = self.begin(guard);
             txn.rewrite_page(id).await
