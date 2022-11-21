@@ -27,6 +27,9 @@ impl<R: PositionalReader> PageFileReader<R> {
 
     /// Reads the exact number of bytes from the page specified by `offset`.
     pub(crate) async fn read_exact_at(&self, buf: &mut [u8], req_offset: u64) -> Result<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
         if !self.use_direct {
             self.reader
                 .read_exact_at(buf, req_offset)
