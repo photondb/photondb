@@ -244,7 +244,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             // modifying the wrong logical page.
             //
             // Consider this example where Thread 1 tries to insert a key 7.
-            // 1. Thread 1 get page id 2 from an interior tree node.
+            // 1. Thread 1 get page id 2 from an interior tree node. Logical page 2 is the
+            //    leaf page that covers key 7.
             // 2. Thread 2 splits logical page 2, and key 7 now belongs to logical page 3.
             // 3. Thread 1 get logical page 2's address.
             // 4. Thread 1 CAS on logical page 2's page table to insert key 7.
