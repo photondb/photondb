@@ -99,7 +99,7 @@ where
         cleaned_files: &HashSet<u32>,
     ) -> Vec<u32> {
         let mut empty_files = Vec::default();
-        for (id, file) in version.files() {
+        for (id, file) in version.page_files() {
             if cleaned_files.contains(id) {
                 self.cleaned_files.insert(*id);
                 continue;
@@ -150,7 +150,10 @@ where
             return Ok(());
         }
 
-        let file = version.files().get(&file_id).expect("File must exists");
+        let file = version
+            .page_files()
+            .get(&file_id)
+            .expect("File must exists");
         self.rewrite_file_impl(file, version).await?;
         self.cleaned_files.insert(file_id);
         Ok(())
@@ -218,7 +221,7 @@ where
         version: &Arc<Version>,
         dealloc_pages: &[u64],
     ) -> Result<usize> {
-        let active_files = version.files();
+        let active_files = version.page_files();
         let mut total_rewrite_pages = 0;
         let mut cached_pages = Vec::with_capacity(128);
         for page_addr in dealloc_pages {
@@ -272,7 +275,7 @@ where
         version: &Version,
         cleaned_files: &HashSet<u32>,
     ) -> Box<dyn ReclaimPickStrategy> {
-        let files = version.files();
+        let files = version.page_files();
         let now = files.keys().cloned().max().unwrap_or(1);
         let mut strategy = self.strategy_builder.build(now);
         for (id, file) in files {
@@ -289,8 +292,8 @@ where
     }
 
     fn is_reclaimable(&self, version: &Version, cleaned_files: &HashSet<u32>) -> bool {
-        let used_space = compute_used_space(version.files(), cleaned_files);
-        let base_size = compute_base_size(version.files(), cleaned_files);
+        let used_space = compute_used_space(version.page_files(), cleaned_files);
+        let base_size = compute_base_size(version.page_files(), cleaned_files);
         let additional_size = used_space.saturating_sub(base_size);
         let target_space_amp = self.options.max_space_amplification_percent as u64;
 
@@ -447,7 +450,14 @@ mod tests {
 
         let mut files = HashMap::new();
         files.insert(2, file_info.clone());
-        let version = Arc::new(Version::new(1 << 20, 3, 8, files, HashSet::default()));
+        let version = Arc::new(Version::new(
+            1 << 20,
+            3,
+            8,
+            files,
+            HashMap::default(),
+            HashSet::default(),
+        ));
 
         ctx.rewrite_file_impl(&file_info, &version).await.unwrap();
         assert_eq!(rewriter.pages(), vec![1, 3, 4]); // page_id 2 is deallocated.

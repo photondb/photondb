@@ -69,10 +69,15 @@ impl<E: Env> Guard<E> {
             return Ok(unsafe { buf.page(addr) });
         }
 
-        let Some(file_info) = self.version.files().get(&file_id) else {
+        let Some(file_info) = self.version.page_files().get(&file_id) else {
             panic!("File {file_id} is not exists");
         };
         assert_eq!(file_info.get_file_id(), file_id);
+        if let Some(map_file_id) = file_info.get_map_file_id() {
+            // This is partial page file, read page from the corresponding map file.
+            todo!("read page from {map_file_id}");
+        }
+
         let Some(handle) = file_info.get_page_handle(addr) else {
             panic!("The addr {addr} is not belongs to the target page file {file_id}");
         };
@@ -334,7 +339,14 @@ mod tests {
     use crate::page_store::{page_table::PageTable, version::Version};
 
     fn new_version(size: u32) -> Arc<Version> {
-        Arc::new(Version::new(size, 1, 8, HashMap::default(), HashSet::new()))
+        Arc::new(Version::new(
+            size,
+            1,
+            8,
+            HashMap::default(),
+            HashMap::default(),
+            HashSet::new(),
+        ))
     }
 
     #[photonio::test]

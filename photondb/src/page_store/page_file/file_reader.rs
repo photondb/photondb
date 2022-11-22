@@ -97,13 +97,13 @@ impl<R: PositionalReader> MetaReader<R> {
         let footer = Self::read_footer(reader, file_size).await?;
         let index_block = Self::read_index_block(reader, &footer).await?;
         Ok({
-            let (indexes, offsets) = index_block.as_meta_file_cached(&footer);
+            let (indexes, offsets) = index_block.as_meta_file_cached(footer.data_handle);
             Arc::new(FileMeta::new(
                 file_id,
                 file_size as usize,
+                reader.align_size,
                 indexes,
                 offsets,
-                reader.align_size,
             ))
         })
     }

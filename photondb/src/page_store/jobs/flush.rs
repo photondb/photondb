@@ -111,7 +111,8 @@ impl<E: Env> FlushCtx<E> {
 
         let delta = DeltaVersion {
             file_id,
-            files,
+            page_files: files,
+            map_files: HashMap::default(),
             obsoleted_files,
         };
         self.version_owner.install(delta);
@@ -179,7 +180,7 @@ impl<E: Env> FlushCtx<E> {
         new_file_id: u32,
         dealloc_pages: Vec<u64>,
     ) -> HashMap<u32, FileInfo> {
-        let mut files = version.files().clone();
+        let mut files = version.page_files().clone();
         for page_addr in dealloc_pages {
             let file_id = (page_addr >> 32) as u32;
             if let Some(file_info) = files.get_mut(&file_id) {
@@ -277,7 +278,11 @@ fn collect_dealloc_pages_and_stats(
 }
 
 fn version_snapshot(version: &Version) -> VersionEdit {
-    let new_files: Vec<NewFile> = version.files().values().map(Into::into).collect::<Vec<_>>();
+    let new_files: Vec<NewFile> = version
+        .page_files()
+        .values()
+        .map(Into::into)
+        .collect::<Vec<_>>();
 
     // NOTE: Only the deleted files of the current version are recorded here, and
     // the files of previous versions are not recorded here.
@@ -313,7 +318,14 @@ mod tests {
         std::fs::create_dir_all(base).unwrap();
         let notifier = ShutdownNotifier::default();
         let shutdown = notifier.subscribe();
-        let version = Version::new(1 << 16, 1, 8, HashMap::default(), HashSet::new());
+        let version = Version::new(
+            1 << 16,
+            1,
+            8,
+            HashMap::default(),
+            HashMap::default(),
+            HashSet::new(),
+        );
         let version_owner = Arc::new(VersionOwner::new(version));
         FlushCtx {
             shutdown,
@@ -370,14 +382,14 @@ mod tests {
 
     fn make_obsoleted_file(id: u32) -> FileInfo {
         let active_pages = roaring::RoaringBitmap::new();
-        let meta = FileMeta::new(id, 0, Vec::default(), BTreeMap::default(), 4096);
+        let meta = FileMeta::new(id, 0, 4096, Vec::default(), BTreeMap::default());
         FileInfo::new(active_pages, 0, id, id, HashSet::default(), Arc::new(meta))
     }
 
     fn make_active_file(id: u32, page_addr: u32) -> FileInfo {
         let mut active_pages = roaring::RoaringBitmap::new();
         active_pages.insert(page_addr);
-        let meta = FileMeta::new(id, 1, Vec::default(), BTreeMap::default(), 4096);
+        let meta = FileMeta::new(id, 1, 4096, Vec::default(), BTreeMap::default());
         FileInfo::new(active_pages, 1, id, id, HashSet::default(), Arc::new(meta))
     }
 
@@ -394,7 +406,7 @@ mod tests {
 
     fn make_obsoleted_file_but_refer_others(id: u32, refer: u32) -> FileInfo {
         let active_pages = roaring::RoaringBitmap::new();
-        let meta = FileMeta::new(id, 0, Vec::default(), BTreeMap::default(), 4096);
+        let meta = FileMeta::new(id, 0, 4096, Vec::default(), BTreeMap::default());
         let mut refers = HashSet::default();
         refers.insert(refer);
         FileInfo::new(active_pages, 0, id, id, refers, Arc::new(meta))
