@@ -238,6 +238,23 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             let view = self.page_view(index.id, Some(range)).await?;
             // If the page epoch has changed, the page may not contain the data we expect
             // anymore. Try to reconcile pending conflicts and restart the operation.
+            //
+            // CAS on the page table entry resolves conflicts for modifications within a
+            // page, but it doesn't prevent us from modifying the wrong logical
+            // page.
+            //
+            // Consider this example where thread 1 tries to insert a key 7.
+            // 1. Thread 1 gets page id 2 from an inner page. Logical page 2 is the
+            //    leaf page that covers key 7.
+            // 2. Thread 2 splits logical page 2, and key 7 now belongs to logical page 3.
+            // 3. Thread 1 gets logical page 2's address.
+            // 4. Thread 1 CAS on the page table to insert key 7 to logical page 2.
+            //
+            // Step 4 breaks the consistency of the tree because key 7 now belongs to
+            // logical page 3. Before we can do any modification to a logical
+            // page, we should check if the logical page's key range is what we
+            // expect (between step 3 and 4). We use epoch to track the key range of a
+            // logical page.
             if view.page.epoch() != index.epoch {
                 let _ = self.reconcile_page(view, parent).await;
                 return Err(Error::Again);
