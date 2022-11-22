@@ -129,10 +129,12 @@ impl<'a, 't> Deref for Pages<'a, 't> {
 
 fn poll<F: Future>(mut future: F) -> F::Output {
     let cx = &mut Context::from_waker(noop_waker_ref());
-    // Safety: the future will block until completion, so it will never be moved.
-    let fut = unsafe { Pin::new_unchecked(&mut future) };
-    match fut.poll(cx) {
-        Poll::Ready(output) => output,
-        Poll::Pending => unreachable!(),
+    loop {
+        // Safety: the future will block until completion, so it will never be moved.
+        let fut = unsafe { Pin::new_unchecked(&mut future) };
+        match fut.poll(cx) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => std::hint::spin_loop(),
+        }
     }
 }
