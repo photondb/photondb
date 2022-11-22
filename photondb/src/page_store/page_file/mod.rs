@@ -369,11 +369,26 @@ pub(crate) mod facade {
                     assert_eq!(hd.size, 10);
                     assert_eq!(hd.offset, 20);
                 }
+
+                {
+                    let file_id = 3;
+                    let delete_pages = &[page_addr(2, 0)];
+                    let mut b = files.new_file_builder(file_id).await.unwrap();
+                    b.add_delete_pages(delete_pages);
+                    let file_info = b.finish().await.unwrap();
+                    info_builder
+                        .add_file_info(&mock_version, file_info, delete_pages)
+                        .unwrap();
+                }
             }
 
             {
                 // test recovery file_info from folder.
-                let known_files = &[1, 2].iter().cloned().map(Into::into).collect::<Vec<_>>();
+                let known_files = &[1, 2, 3]
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect::<Vec<_>>();
                 let recovery_mock_version = info_builder
                     .recovery_base_file_infos(known_files)
                     .await
@@ -382,11 +397,15 @@ pub(crate) mod facade {
                 assert_eq!(file1.effective_size(), 20);
                 assert!(file1.get_page_handle(page_addr(1, 0)).is_none());
                 let file2 = recovery_mock_version.get(&2).unwrap();
-                assert_eq!(file2.effective_size(), 30);
+                assert_eq!(file2.effective_size(), 20);
                 let file2 = recovery_mock_version.get(&2).unwrap();
                 let hd = file2.get_page_handle(page_addr(2, 4)).unwrap();
                 assert_eq!(hd.size, 10);
                 assert_eq!(hd.offset, 20);
+
+                let meta_reader = files.open_meta_reader(3).await.unwrap();
+                let page_table = meta_reader.read_page_table().await.unwrap();
+                assert!(page_table.is_empty())
             }
         }
 
