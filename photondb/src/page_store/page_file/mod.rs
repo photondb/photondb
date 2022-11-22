@@ -69,7 +69,7 @@ pub(crate) mod facade {
             let base = base.into();
             let base_dir = env.open_dir(&base).await.expect("open base dir fail");
             let reader_cache = ReaderCache::new(MAX_OPEN_READER_FD_NUM);
-            let page_cache = Arc::new(ClockCache::new(2 << 30, 16, -1, false));
+            let page_cache = Arc::new(ClockCache::new(1 << 20, 16, -1, false));
             Self {
                 env,
                 base,
