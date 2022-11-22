@@ -38,11 +38,12 @@ pub(crate) mod facade {
     use super::{
         constant::{DEFAULT_BLOCK_SIZE, MAX_OPEN_READER_FD_NUM},
         file_reader::{self, MetaReader, ReaderCache},
+        types::PageHandle,
         *,
     };
     use crate::{
         env::{Env, PositionalReader, SequentialWriter},
-        page_store::Result,
+        page_store::{CacheEntry, ClockCache, Result},
     };
 
     pub(crate) const PAGE_FILE_PREFIX: &str = "dat";
@@ -58,6 +59,7 @@ pub(crate) mod facade {
         use_direct: bool,
 
         reader_cache: file_reader::ReaderCache<E>,
+        page_cache: Arc<ClockCache<Vec<u8>>>,
     }
 
     impl<E: Env> PageFiles<E> {
@@ -67,12 +69,14 @@ pub(crate) mod facade {
             let base = base.into();
             let base_dir = env.open_dir(&base).await.expect("open base dir fail");
             let reader_cache = ReaderCache::new(MAX_OPEN_READER_FD_NUM);
+            let page_cache = Arc::new(ClockCache::new(2 << 30, 16, -1, false));
             Self {
                 env,
                 base,
                 base_dir,
                 use_direct,
                 reader_cache,
+                page_cache,
             }
         }
 
@@ -112,6 +116,33 @@ pub(crate) mod facade {
                 use_direct,
                 DEFAULT_BLOCK_SIZE,
             ))
+        }
+
+        pub(crate) async fn read_page(
+            &self,
+            file_id: u32,
+            addr: u64,
+            handle: PageHandle,
+            file_info: &FileInfo,
+        ) -> Result<CacheEntry<Vec<u8>, ClockCache<Vec<u8>>>> {
+            use crate::page_store::Cache;
+
+            if let Some(cache_entry) = self.page_cache.lookup(addr) {
+                return Ok(cache_entry);
+            }
+
+            let reader = self
+                .open_page_reader(file_id, file_info.meta().block_size())
+                .await?;
+            let mut buf = vec![0u8; handle.size as usize];
+            reader.read_exact_at(&mut buf, handle.offset as u64).await?;
+
+            let cache_entry = self
+                .page_cache
+                .insert(addr, Some(buf))
+                .expect("insert cache fail");
+
+            Ok(cache_entry.unwrap())
         }
 
         /// Open page_reader for a page_file.
