@@ -29,6 +29,20 @@ where
     cache: Arc<C>,
 }
 
+unsafe impl<T, C> Send for CacheEntry<T, C>
+where
+    T: Clone,
+    C: Cache<T>,
+{
+}
+
+unsafe impl<T, C> Sync for CacheEntry<T, C>
+where
+    T: Clone,
+    C: Cache<T>,
+{
+}
+
 impl<T, C> Drop for CacheEntry<T, C>
 where
     T: Clone,
@@ -127,7 +141,7 @@ const BOTTOM_COUNT_DOWN: u8 = 1;
 // value the same as this value.
 const MAX_COUNT_DOWN: u8 = HIGH_COUNT_DOWN;
 
-mod clock {
+pub(crate) mod clock {
 
     use ::std::{
         mem,
