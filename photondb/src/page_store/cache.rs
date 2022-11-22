@@ -6,18 +6,13 @@ use ::std::sync::{
 use crate::*;
 
 pub(crate) trait Cache<T: Clone>: Sized {
-    fn insert(
-        self: &Arc<Self>,
-        key: u64,
-        hash: u32,
-        value: Option<T>,
-    ) -> Result<Option<CacheEntry<T, Self>>>;
+    fn insert(self: &Arc<Self>, key: u64, value: Option<T>) -> Result<Option<CacheEntry<T, Self>>>;
 
-    fn lookup(self: &Arc<Self>, key: u64, hash: u32) -> Option<CacheEntry<T, Self>>;
+    fn lookup(self: &Arc<Self>, key: u64) -> Option<CacheEntry<T, Self>>;
 
     fn release(&self, h: *mut Handle<T>) -> bool;
 
-    fn erase(&self, key: u64, hash: u32);
+    fn erase(&self, key: u64);
 }
 
 pub(crate) struct CacheEntry<T, C>
@@ -70,8 +65,8 @@ where
 
 pub(crate) struct Handle<T: Clone> {
     key: u64,
+    hash: u32, // TODO: cmp with bijective hash algorithm to save hash into key.
     value: Option<T>,
-    hash: u32,
     charge: usize,
 
     meta: AtomicU64,
@@ -219,6 +214,7 @@ pub(crate) mod clock {
                     ptr: Box::into_raw(h),
                 });
             }
+            let usage = AtomicUsize::new(handles.len() * mem::size_of::<Handle<T>>());
             Self {
                 length_bits,
                 length_bits_mask,
@@ -226,7 +222,7 @@ pub(crate) mod clock {
                 strict_capacity_limit,
                 handles,
                 occupancy: Default::default(),
-                usage: Default::default(),
+                usage,
                 detached_usage: Default::default(),
                 clock_pointer: Default::default(),
             }
@@ -296,7 +292,7 @@ pub(crate) mod clock {
             }
 
             if !use_detached_insert {
-                let initial_countdown = LOW_COUNT_DOWN; // TODO: priority
+                let initial_countdown = LOW_COUNT_DOWN;
                 let (slot, _) = self.find_slot(
                     proto.hash,
                     |hp| {
@@ -324,7 +320,7 @@ pub(crate) mod clock {
 
                             // Maybe with an outstanding reference
                             new_meta |= (initial_countdown as u64) << ACQUIRE_COUNTER_SHIFT;
-                            new_meta |= (initial_countdown as u64 - 1) << RELEASE_COUNTER_SHIFT; // TODO: handle
+                            new_meta |= (initial_countdown as u64 - 1) << RELEASE_COUNTER_SHIFT;
 
                             let old_meta = h.meta.swap(new_meta, Ordering::Release);
                             assert!((old_meta >> STATE_SHIFT) as u8 == STATE_CONSTRUCTION);
@@ -440,7 +436,7 @@ pub(crate) mod clock {
                     .fetch_add(total_charge - evicted_charge, Ordering::Relaxed);
             } else {
                 self.usage
-                    .fetch_add(evicted_charge - total_charge, Ordering::Relaxed);
+                    .fetch_sub(evicted_charge - total_charge, Ordering::Relaxed);
             }
             assert!(self.usage.load(Ordering::Relaxed) < usize::MAX / 2);
             true
@@ -578,15 +574,16 @@ pub(crate) mod clock {
             }
         }
 
-        fn erase(&self, hash: u32) {
+        fn erase(&self, key: u64, hash: u32) {
             self.find_slot(
                 hash,
                 |hp| {
                     let h = hp.as_ref();
                     let mut old_meta = h.meta.fetch_add(ACQUIRE_INCREMENT, Ordering::Acquire);
+                    // let mut old_meta = h.meta.fetch_add(ACQUIRE_INCREMENT, Ordering::Acquire);
                     // Check if it's an entry visible to lookups
                     if (old_meta >> STATE_SHIFT) as u8 == STATE_VISIBLE {
-                        if h.hash == hash {
+                        if h.key == key {
                             old_meta = h.meta.fetch_and(
                                 !((STATE_VISIBLE_BIT as u64) << STATE_SHIFT),
                                 Ordering::AcqRel,
@@ -614,13 +611,12 @@ pub(crate) mod clock {
                                     let total_charge = h.charge;
                                     Self::free_data_mark_empty(h);
                                     self.reclaim_entry_usage(total_charge);
-                                    // We already have a copy of hashed_key in
-                                    // this case, so OK to
-                                    // delay Rollback until after releasing the
                                     self.rollback(hash, hp.mut_ptr());
                                     break;
                                 }
                             }
+                        } else {
+                            h.meta.fetch_sub(ACQUIRE_INCREMENT, Ordering::Release);
                         }
                     } else if (old_meta >> STATE_SHIFT) as u8 == STATE_INVISIBLE {
                         h.meta.fetch_sub(ACQUIRE_INCREMENT, Ordering::Release);
@@ -798,6 +794,37 @@ pub(crate) mod clock {
         }
     }
 
+    impl<T: Clone> Drop for ClockCacheHandleTable<T> {
+        fn drop(&mut self) {
+            for hp in &self.handles {
+                let h = hp.as_ref();
+                let meta = h.meta.load(Ordering::Relaxed);
+                let ref_cnt = Self::ref_count(meta);
+                let state = (meta >> STATE_SHIFT) as u8;
+                match state {
+                    STATE_EMPTY => {}
+                    STATE_INVISIBLE => {
+                        assert_eq!(ref_cnt, 0);
+                        self.rollback(h.hash, hp.mut_ptr());
+                        self.reclaim_entry_usage(h.charge);
+                    }
+                    STATE_VISIBLE => {
+                        assert_eq!(ref_cnt, 0);
+                        self.rollback(h.hash, hp.mut_ptr());
+                        self.reclaim_entry_usage(h.charge);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            assert!(
+                self.usage.load(Ordering::Relaxed) == 0
+                    || self.usage.load(Ordering::Relaxed)
+                        == self.handles.len() * mem::size_of::<Handle<T>>()
+            );
+            assert_eq!(self.occupancy.load(Ordering::Relaxed), 0);
+        }
+    }
+
     #[allow(dead_code)]
     impl<T: Clone> ClockCache<T> {
         pub(crate) fn new(
@@ -889,8 +916,8 @@ pub(crate) mod clock {
             self.table.release(h)
         }
 
-        fn erase(&self, hash: u32) {
-            self.table.erase(hash)
+        fn erase(&self, key: u64, hash: u32) {
+            self.table.erase(key, hash)
         }
     }
 
@@ -898,10 +925,10 @@ pub(crate) mod clock {
         fn insert(
             self: &Arc<Self>,
             key: u64,
-            hash: u32,
             value: Option<T>,
         ) -> Result<Option<CacheEntry<T, Self>>> {
             let charge = 1;
+            let hash = Self::hash_key(key);
             let idx = self.shard(hash);
             let shard = &self.shards[idx as usize];
             shard.insert(key, hash, value, charge).map(|ptr| {
@@ -916,7 +943,8 @@ pub(crate) mod clock {
             })
         }
 
-        fn lookup(self: &Arc<Self>, key: u64, hash: u32) -> Option<CacheEntry<T, Self>> {
+        fn lookup(self: &Arc<Self>, key: u64) -> Option<CacheEntry<T, Self>> {
+            let hash = Self::hash_key(key);
             let idx = self.shard(hash);
             let shard = &self.shards[idx as usize];
             let ptr = shard.lookup(key, hash);
@@ -937,10 +965,11 @@ pub(crate) mod clock {
             shard.release(h)
         }
 
-        fn erase(&self, _key: u64, hash: u32) {
+        fn erase(&self, key: u64) {
+            let hash = Self::hash_key(key);
             let idx = self.shard(hash);
             let shard = &self.shards[idx as usize];
-            shard.erase(hash)
+            shard.erase(key, hash)
         }
     }
 
@@ -949,9 +978,15 @@ pub(crate) mod clock {
         fn shard(&self, hash: u32) -> u32 {
             self.shard_mask & hash
         }
+
+        #[inline]
+        fn hash_key(key: u64) -> u32 {
+            // Fibonacci hash https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/
+            const FIBONNACI_MAGIC_NUMBER_64BIT: u64 = 11400714819323198485;
+            (key.wrapping_mul(FIBONNACI_MAGIC_NUMBER_64BIT) >> 32) as u32 // TODO: cmp with hash for seprated file_id, offset and other algorithm(siphash, fnv, xxhash?).
+        }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use ::std::thread;
@@ -960,55 +995,55 @@ mod tests {
 
     #[test]
     fn test_base_cache_op() {
-        fn hash(key: u64) -> u32 {
-            (key % 10) as u32
-        }
         use super::clock::*;
-        let c = Arc::new(ClockCache::new(130, 1, -1, false));
+        let c = Arc::new(ClockCache::new(258, 1, -1, false));
 
         let t1 = {
             let c = c.clone();
             thread::spawn(move || {
-                let v = c.insert(1, hash(1), Some(vec![1])).unwrap().unwrap();
+                let v = c.insert(1, Some(vec![1])).unwrap().unwrap();
                 assert_eq!(v.key(), 1);
                 drop(v);
-                let v = c.insert(2, hash(2), Some(vec![2])).unwrap().unwrap();
+                let v = c.insert(2, Some(vec![2])).unwrap().unwrap();
                 assert_eq!(v.key(), 2);
                 drop(v);
-                let v = c.insert(3, hash(3), Some(vec![3])).unwrap().unwrap();
+                let v = c.insert(3, Some(vec![3])).unwrap().unwrap();
                 assert_eq!(v.key(), 3);
                 drop(v);
             })
         };
         t1.join().unwrap();
 
-        let v = c.lookup(3, hash(3)).unwrap();
+        let v = c.lookup(3).unwrap();
         assert_eq!(v.key(), 3);
-        assert!(c.lookup(1, hash(1)).is_none());
-        assert!(c.lookup(2, hash(2)).is_none());
+        drop(v);
+        assert!(c.lookup(1).is_none());
+        assert!(c.lookup(2).is_none());
 
-        let v = c.insert(4, hash(4), Some(vec![4])).unwrap().unwrap();
+        let v = c.insert(4, Some(vec![4])).unwrap().unwrap();
         assert_eq!(v.key(), 4);
         drop(v);
 
         let t2 = {
             let c = c.clone();
             thread::spawn(move || {
-                let v = c.lookup(3, hash(3)).unwrap();
+                let v = c.lookup(3).unwrap();
                 assert_eq!(v.key(), 3);
+                drop(v)
             })
         };
         let t3 = {
             let c = c.clone();
             thread::spawn(move || {
-                let v = c.lookup(4, hash(4)).unwrap();
+                let v = c.lookup(4).unwrap();
                 assert_eq!(v.key(), 4);
+                drop(v);
             })
         };
         t3.join().unwrap();
         t2.join().unwrap();
 
-        c.erase(4, hash(4));
-        assert!(c.lookup(4, hash(4)).is_none());
+        c.erase(4);
+        assert!(c.lookup(4).is_none());
     }
 }
