@@ -239,16 +239,15 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             // If the page epoch has changed, the page may not contain the data we expect
             // anymore. Try to reconcile pending conflicts and restart the operation.
             //
-            // CAS on the page table entry resolves conflicts inside a page's modification
-            // (update/split/consolidate), but it doesn't prevent us from
-            // modifying the wrong logical page.
+            // CAS on the page table entry resolves conflicts for modifications within a page,
+            // but it doesn't prevent us from modifying the wrong logical page.
             //
-            // Consider this example where Thread 1 tries to insert a key 7.
-            // 1. Thread 1 get page id 2 from an interior tree node. Logical page 2 is the
+            // Consider this example where thread 1 tries to insert a key 7.
+            // 1. Thread 1 gets page id 2 from an inner page. Logical page 2 is the
             //    leaf page that covers key 7.
             // 2. Thread 2 splits logical page 2, and key 7 now belongs to logical page 3.
-            // 3. Thread 1 get logical page 2's address.
-            // 4. Thread 1 CAS on logical page 2's page table to insert key 7.
+            // 3. Thread 1 gets logical page 2's address.
+            // 4. Thread 1 CAS on the page table to insert key 7 to logical page 2.
             //
             // Step 4 breaks the consistency of the tree because key 7 now belongs to
             // logical page 3. Before we can do any modification to a logical
