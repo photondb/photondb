@@ -239,8 +239,9 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             // If the page epoch has changed, the page may not contain the data we expect
             // anymore. Try to reconcile pending conflicts and restart the operation.
             //
-            // CAS on the page table entry resolves conflicts for modifications within a page,
-            // but it doesn't prevent us from modifying the wrong logical page.
+            // CAS on the page table entry resolves conflicts for modifications within a
+            // page, but it doesn't prevent us from modifying the wrong logical
+            // page.
             //
             // Consider this example where thread 1 tries to insert a key 7.
             // 1. Thread 1 gets page id 2 from an inner page. Logical page 2 is the
