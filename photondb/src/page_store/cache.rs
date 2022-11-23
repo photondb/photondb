@@ -68,6 +68,7 @@ where
     }
 }
 
+#[repr(align(64))]
 pub(crate) struct Handle<T: Clone> {
     key: u64,
     hash: u32, // TODO: cmp with bijective hash algorithm to save hash into key.
@@ -142,6 +143,11 @@ const MAX_COUNT_DOWN: u8 = HIGH_COUNT_DOWN;
 
 pub(crate) mod clock {
 
+    use std::{
+        fmt,
+        ops::{Deref, DerefMut},
+    };
+
     use ::std::{
         mem,
         ptr::{self, null_mut},
@@ -154,10 +160,15 @@ pub(crate) mod clock {
     const STRICT_LOAD_FACTOR: f64 = 0.84;
 
     pub(crate) struct ClockCache<T: Clone> {
-        shards: Vec<ClockCacheShard<T>>, // TODO: align to cacheline.
+        shards: Vec<ClockCacheShard<T>>,
         shard_mask: u32,
     }
 
+    #[cfg_attr(any(target_arch = "x86_64", target_arch = "aarch64"), repr(align(128)))]
+    #[cfg_attr(
+        not(any(target_arch = "x86_64", target_arch = "aarch64")),
+        repr(align(64))
+    )]
     struct ClockCacheShard<T: Clone> {
         table: ClockCacheHandleTable<T>,
         capacity: usize,
@@ -198,10 +209,10 @@ pub(crate) mod clock {
 
         handles: Vec<ClockHandlePtr<T>>,
 
-        occupancy: AtomicU32,
-        usage: AtomicUsize,
-        detached_usage: AtomicUsize,
-        clock_pointer: AtomicU64,
+        occupancy: CachePadded<AtomicU32>,
+        usage: CachePadded<AtomicUsize>,
+        detached_usage: CachePadded<AtomicUsize>,
+        clock_pointer: CachePadded<AtomicU64>,
     }
 
     impl<T: Clone> ClockCacheHandleTable<T> {
@@ -215,7 +226,14 @@ pub(crate) mod clock {
                     ptr: Box::into_raw(h),
                 });
             }
-            let usage = AtomicUsize::new(handles.len() * mem::size_of::<Handle<T>>());
+            assert_eq!(
+                mem::size_of::<Handle<T>>(),
+                64,
+                "expecting handle size / alignment with common cache line size"
+            );
+            let usage = CachePadded::new(AtomicUsize::new(
+                handles.len() * mem::size_of::<Handle<T>>(),
+            ));
             Self {
                 length_bits,
                 length_bits_mask,
@@ -984,6 +1002,56 @@ pub(crate) mod clock {
             // Fibonacci hash https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/
             const FIBONNACI_MAGIC_NUMBER_64BIT: u64 = 11400714819323198485;
             (key.wrapping_mul(FIBONNACI_MAGIC_NUMBER_64BIT) >> 32) as u32 // TODO: cmp with hash for seprated file_id, offset and other algorithm(siphash, fnv, xxhash?).
+        }
+    }
+
+    #[cfg_attr(any(target_arch = "x86_64", target_arch = "aarch64"), repr(align(128)))]
+    #[cfg_attr(
+        not(any(target_arch = "x86_64", target_arch = "aarch64")),
+        repr(align(64))
+    )]
+    #[derive(Default, PartialEq, Eq)]
+    struct CachePadded<T> {
+        value: T,
+    }
+
+    #[allow(unsafe_code)]
+    unsafe impl<T: Send> Send for CachePadded<T> {}
+
+    #[allow(unsafe_code)]
+    unsafe impl<T: Sync> Sync for CachePadded<T> {}
+
+    impl<T> CachePadded<T> {
+        const fn new(t: T) -> CachePadded<T> {
+            CachePadded::<T> { value: t }
+        }
+    }
+
+    impl<T> Deref for CachePadded<T> {
+        type Target = T;
+
+        fn deref(&self) -> &T {
+            &self.value
+        }
+    }
+
+    impl<T> DerefMut for CachePadded<T> {
+        fn deref_mut(&mut self) -> &mut T {
+            &mut self.value
+        }
+    }
+
+    impl<T: fmt::Debug> fmt::Debug for CachePadded<T> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("CachePadded")
+                .field("value", &self.value)
+                .finish()
+        }
+    }
+
+    impl<T> From<T> for CachePadded<T> {
+        fn from(t: T) -> Self {
+            CachePadded::new(t)
         }
     }
 }
