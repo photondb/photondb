@@ -10,7 +10,7 @@ pub(crate) use info_builder::FileInfoBuilder;
 
 mod types;
 pub(crate) use facade::PageFiles;
-pub(crate) use types::{FileInfo, FileMeta, MapFileMeta};
+pub(crate) use types::{FileInfo, FileMeta, MapFileInfo};
 
 mod map_file_builder;
 
@@ -41,7 +41,8 @@ pub(crate) mod facade {
         page_store::Result,
     };
 
-    pub(crate) const PAGE_FILE_FILE_NAME: &str = "dat";
+    pub(crate) const PAGE_FILE_NAME: &str = "dat";
+    pub(crate) const MAP_FILE_NAME: &str = "map";
 
     /// The facade for page_file module.
     /// it hides the detail about disk location for caller(after it be created).
@@ -74,7 +75,7 @@ pub(crate) mod facade {
         /// Create file_builder to write a new page_file.
         pub(crate) async fn new_file_builder(&self, file_id: u32) -> Result<FileBuilder<E>> {
             // TODO: switch to env in suitable time.
-            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_FILE_NAME));
+            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_NAME));
             let writer = self
                 .env
                 .open_sequential_writer(path.to_owned())
@@ -101,7 +102,7 @@ pub(crate) mod facade {
             let r = self
                 .reader_cache
                 .get_with(file_id, async move {
-                    let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_FILE_NAME));
+                    let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_NAME));
 
                     let file = self
                         .env
@@ -125,7 +126,7 @@ pub(crate) mod facade {
             &self,
             file_id: u32,
         ) -> Result<MetaReader<<E as Env>::PositionalReader>> {
-            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_FILE_NAME));
+            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_NAME));
             let file_size = self
                 .env
                 .metadata(&path)
@@ -141,33 +142,59 @@ pub(crate) mod facade {
             MetaReader::open(page_file_reader, file_size, file_id).await
         }
 
-        pub(crate) async fn remove_files(&self, files: Vec<u32>) -> Result<()> {
+        pub(crate) async fn remove_page_files(&self, files: Vec<u32>) -> Result<()> {
             for file_id in files {
                 // FIXME: handle error.
-                self.remove_file(file_id).await?;
+                self.remove_page_file(file_id).await?;
                 self.reader_cache.invalidate(&file_id).await;
             }
             Ok(())
         }
 
-        async fn remove_file(&self, file_id: u32) -> Result<()> {
-            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_FILE_NAME));
+        pub(crate) async fn remove_map_files(&self, files: Vec<u32>) -> Result<()> {
+            for file_id in files {
+                // FIXME: handle error.
+                self.remove_map_file(file_id).await?;
+            }
+            Ok(())
+        }
+
+        async fn remove_page_file(&self, file_id: u32) -> Result<()> {
+            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_NAME));
             self.env
                 .remove_file(&path)
                 .await
-                .expect("remove file failed");
+                .expect("remove page file failed");
+            Ok(())
+        }
+
+        async fn remove_map_file(&self, file_id: u32) -> Result<()> {
+            let path = self.base.join(format!("{}_{file_id}", MAP_FILE_NAME));
+            self.env
+                .remove_file(&path)
+                .await
+                .expect("remove page file failed");
             Ok(())
         }
 
         pub(crate) fn list_page_files(&self) -> Result<Vec<u32>> {
+            let prefix = format!("{}_", PAGE_FILE_NAME).into_bytes();
+            self.list_files_with_prefix(&prefix)
+        }
+
+        pub(crate) fn list_map_files(&self) -> Result<Vec<u32>> {
+            let prefix = format!("{}_", MAP_FILE_NAME).into_bytes();
+            self.list_files_with_prefix(&prefix)
+        }
+
+        fn list_files_with_prefix(&self, prefix: &[u8]) -> Result<Vec<u32>> {
             use std::os::unix::ffi::OsStrExt;
-            let prefix = format!("{}_", PAGE_FILE_FILE_NAME).into_bytes();
             let dir = self.env.read_dir(&self.base)?;
             let mut files = Vec::default();
             for entry in dir {
                 let file_name = entry?.file_name();
                 let bytes = file_name.as_bytes();
-                if !bytes.starts_with(&prefix) {
+                if !bytes.starts_with(prefix) {
                     continue;
                 }
                 if let Ok(file_id) = String::from_utf8_lossy(&bytes[prefix.len()..]).parse::<u32>()

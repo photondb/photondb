@@ -333,20 +333,14 @@ impl<'a, E: Env> Drop for PageTxn<'a, E> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::*;
-    use crate::page_store::{page_table::PageTable, version::Version};
+    use crate::page_store::{
+        page_table::PageTable,
+        version::{DeltaVersion, Version},
+    };
 
     fn new_version(size: u32) -> Arc<Version> {
-        Arc::new(Version::new(
-            size,
-            1,
-            8,
-            HashMap::default(),
-            HashMap::default(),
-            HashSet::new(),
-        ))
+        Arc::new(Version::new(size, 1, 8, DeltaVersion::default()))
     }
 
     #[photonio::test]

@@ -1,5 +1,6 @@
 use prost::{alloc::vec::Vec, Message};
 
+/// A page file or map file.
 #[allow(unreachable_pub)]
 #[derive(Clone, PartialEq, PartialOrd, Ord, Eq, Message)]
 pub(crate) struct NewFile {
@@ -11,18 +12,30 @@ pub(crate) struct NewFile {
     pub up2: u32,
 }
 
+/// A sequence of ordered files forms a stream.
 #[allow(unreachable_pub)]
-#[derive(Clone, PartialEq, Message)]
-pub(crate) struct VersionEdit {
+#[derive(Clone, PartialEq, PartialOrd, Eq, Ord, Message)]
+pub(crate) struct StreamEdit {
     #[prost(message, repeated, tag = "1")]
     pub new_files: Vec<NewFile>,
     #[prost(uint32, repeated, tag = "2")]
     pub deleted_files: Vec<u32>,
 }
 
+#[allow(unreachable_pub)]
+#[derive(Clone, PartialEq, Message)]
+pub(crate) struct VersionEdit {
+    /// A set of page files.
+    #[prost(message, tag = "1")]
+    pub page_stream: Option<StreamEdit>,
+    /// A set of map files.
+    #[prost(message, tag = "2")]
+    pub map_stream: Option<StreamEdit>,
+}
+
 mod convert {
     use super::*;
-    use crate::page_store::FileInfo;
+    use crate::page_store::{FileInfo, MapFileInfo};
 
     impl From<&FileInfo> for NewFile {
         fn from(info: &FileInfo) -> Self {
@@ -43,6 +56,16 @@ mod convert {
             }
         }
     }
+
+    impl From<&MapFileInfo> for NewFile {
+        fn from(info: &MapFileInfo) -> Self {
+            NewFile {
+                id: info.file_id(),
+                up1: info.up1(),
+                up2: info.up2(),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -53,13 +76,15 @@ mod tests {
     fn version_edit_decode_and_encode() {
         let new_files: Vec<NewFile> = vec![4, 5, 6].into_iter().map(Into::into).collect();
         let edit = VersionEdit {
-            new_files: new_files.clone(),
-            deleted_files: vec![1, 2, 3],
+            page_stream: Some(StreamEdit {
+                new_files,
+                deleted_files: vec![1, 2, 3],
+            }),
+            map_stream: None,
         };
 
         let payload = edit.encode_to_vec();
-        let edit = VersionEdit::decode(payload.as_slice()).unwrap();
-        assert_eq!(edit.deleted_files, vec![1, 2, 3]);
-        assert_eq!(edit.new_files, new_files,);
+        let new = VersionEdit::decode(payload.as_slice()).unwrap();
+        assert_eq!(edit, new);
     }
 }

@@ -8,10 +8,7 @@ use log::info;
 
 use crate::{
     env::Env,
-    page_store::{
-        version::{DeltaVersion, Version},
-        *,
-    },
+    page_store::*,
     util::shutdown::{with_shutdown, Shutdown},
 };
 
@@ -110,12 +107,11 @@ impl<E: Env> FlushCtx<E> {
         version.buffer_set.release_permit_and_wait(file_id).await;
 
         let delta = DeltaVersion {
-            file_id,
             page_files: files,
-            map_files: HashMap::default(),
-            obsoleted_files,
+            obsoleted_page_files: obsoleted_files,
+            ..Default::default()
         };
-        self.version_owner.install(delta);
+        self.version_owner.install(file_id, delta);
     }
 
     /// Flush [`WriteBuffer`] to page files and returns dealloc pages.
@@ -159,13 +155,17 @@ impl<E: Env> FlushCtx<E> {
         obsoleted_files: &HashSet<u32>,
     ) -> Result<()> {
         let deleted_files = obsoleted_files.iter().cloned().collect();
-        let edit = VersionEdit {
+        let stream = StreamEdit {
             new_files: vec![NewFile {
                 id: file_id,
                 up1: file_id,
                 up2: file_id,
             }],
             deleted_files,
+        };
+        let edit = VersionEdit {
+            page_stream: Some(stream),
+            map_stream: None,
         };
 
         let mut manifest = self.manifest.lock().await;
@@ -286,10 +286,28 @@ fn version_snapshot(version: &Version) -> VersionEdit {
 
     // NOTE: Only the deleted files of the current version are recorded here, and
     // the files of previous versions are not recorded here.
-    let deleted_files = version.obsoleted_files();
-    VersionEdit {
+    let deleted_files = version.obsoleted_page_files();
+    let page_stream = StreamEdit {
         new_files,
         deleted_files,
+    };
+
+    let new_files: Vec<NewFile> = version
+        .map_files()
+        .values()
+        .map(Into::into)
+        .collect::<Vec<_>>();
+
+    // NOTE: Only the deleted files of the current version are recorded here, and
+    // the files of previous versions are not recorded here.
+    let deleted_files = version.obsoleted_map_files();
+    let map_stream = StreamEdit {
+        new_files,
+        deleted_files,
+    };
+    VersionEdit {
+        page_stream: Some(page_stream),
+        map_stream: Some(map_stream),
     }
 }
 
@@ -308,7 +326,7 @@ mod tests {
         env::Photon,
         page_store::{
             page_file::FileMeta,
-            version::{Version, VersionOwner},
+            version::{DeltaVersion, Version, VersionOwner},
             FileInfo, Manifest, PageFiles, WriteBuffer,
         },
         util::shutdown::ShutdownNotifier,
@@ -318,14 +336,7 @@ mod tests {
         std::fs::create_dir_all(base).unwrap();
         let notifier = ShutdownNotifier::default();
         let shutdown = notifier.subscribe();
-        let version = Version::new(
-            1 << 16,
-            1,
-            8,
-            HashMap::default(),
-            HashMap::default(),
-            HashSet::new(),
-        );
+        let version = Version::new(1 << 16, 1, 8, DeltaVersion::default());
         let version_owner = Arc::new(VersionOwner::new(version));
         FlushCtx {
             shutdown,

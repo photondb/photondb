@@ -368,7 +368,7 @@ mod tests {
     use super::*;
     use crate::{
         env::Photon,
-        page_store::{MinDeclineRateStrategyBuilder, RecordRef},
+        page_store::{version::DeltaVersion, MinDeclineRateStrategyBuilder, RecordRef},
         util::shutdown::ShutdownNotifier,
     };
 
@@ -450,14 +450,11 @@ mod tests {
 
         let mut files = HashMap::new();
         files.insert(2, file_info.clone());
-        let version = Arc::new(Version::new(
-            1 << 20,
-            3,
-            8,
-            files,
-            HashMap::default(),
-            HashSet::default(),
-        ));
+        let delta = DeltaVersion {
+            page_files: files,
+            ..Default::default()
+        };
+        let version = Arc::new(Version::new(1 << 20, 3, 8, delta));
 
         ctx.rewrite_file_impl(&file_info, &version).await.unwrap();
         assert_eq!(rewriter.pages(), vec![1, 3, 4]); // page_id 2 is deallocated.

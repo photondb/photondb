@@ -1,9 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fmt, mem,
-    path::Path,
-    sync::Arc,
-};
+use std::{fmt, mem, path::Path, sync::Arc};
 
 use crate::{env::Env, util::shutdown::ShutdownNotifier};
 
@@ -19,10 +14,10 @@ use page_table::PageTable;
 pub(crate) use page_table::{MIN_ID, NAN_ID};
 
 mod meta;
-pub(crate) use meta::{NewFile, VersionEdit};
+pub(crate) use meta::{NewFile, StreamEdit, VersionEdit};
 
 mod version;
-use version::{Version, VersionOwner};
+use version::{DeltaVersion, Version, VersionOwner};
 
 mod jobs;
 pub(crate) use jobs::RewritePage;
@@ -37,7 +32,7 @@ mod manifest;
 pub(crate) use manifest::Manifest;
 
 mod page_file;
-pub(crate) use page_file::{FileInfo, MapFileMeta, PageFiles};
+pub(crate) use page_file::{FileInfo, MapFileInfo, PageFiles};
 
 mod recover;
 mod strategy;
@@ -114,17 +109,14 @@ impl<E: Env> PageStore<E> {
         P: AsRef<Path>,
         R: RewritePage<E>,
     {
-        let (next_file_id, manifest, table, page_files, file_infos) =
+        let (next_file_id, manifest, table, page_files, delta) =
             Self::recover(env.to_owned(), path, &options).await?;
-        let map_files = HashMap::default();
 
         let version = Version::new(
             options.write_buffer_capacity,
             next_file_id,
             options.max_write_buffers,
-            file_infos,
-            map_files,
-            HashSet::default(),
+            delta,
         );
 
         let version_owner = Arc::new(VersionOwner::new(version));
