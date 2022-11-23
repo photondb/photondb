@@ -330,6 +330,7 @@ mod tests {
             FileInfo, Manifest, PageFiles, WriteBuffer,
         },
         util::shutdown::ShutdownNotifier,
+        PageStoreOptions,
     };
 
     async fn new_flush_ctx(base: &Path) -> FlushCtx<Photon> {
@@ -338,10 +339,14 @@ mod tests {
         let shutdown = notifier.subscribe();
         let version = Version::new(1 << 16, 1, 8, DeltaVersion::default());
         let version_owner = Arc::new(VersionOwner::new(version));
+        let opt = PageStoreOptions {
+            cache_capacity: 2 << 10,
+            ..Default::default()
+        };
         FlushCtx {
             shutdown,
             version_owner,
-            page_files: Arc::new(PageFiles::new(Photon, base, false).await),
+            page_files: Arc::new(PageFiles::new(Photon, base, &opt).await),
             manifest: Arc::new(futures::lock::Mutex::new(
                 Manifest::open(Photon, base).await.unwrap(),
             )),

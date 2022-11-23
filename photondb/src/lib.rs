@@ -69,6 +69,8 @@ mod tests {
             max_space_amplification_percent: 10,
             space_used_high: u64::MAX,
             file_base_size: 1 << 20,
+            cache_capacity: 2 << 10,
+            cache_estimated_entry_charge: 1,
         },
     };
 

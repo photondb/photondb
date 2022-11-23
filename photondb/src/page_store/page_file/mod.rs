@@ -44,6 +44,7 @@ pub(crate) mod facade {
     use crate::{
         env::{Env, PositionalReader, SequentialWriter},
         page_store::{CacheEntry, ClockCache, Result},
+        PageStoreOptions,
     };
 
     pub(crate) const PAGE_FILE_PREFIX: &str = "dat";
@@ -65,11 +66,21 @@ pub(crate) mod facade {
     impl<E: Env> PageFiles<E> {
         /// Create page file facade.
         /// It should be a singleton in the page_store.
-        pub(crate) async fn new(env: E, base: impl Into<PathBuf>, use_direct: bool) -> Self {
+        pub(crate) async fn new(
+            env: E,
+            base: impl Into<PathBuf>,
+            options: &PageStoreOptions,
+        ) -> Self {
             let base = base.into();
             let base_dir = env.open_dir(&base).await.expect("open base dir fail");
             let reader_cache = ReaderCache::new(MAX_OPEN_READER_FD_NUM);
-            let page_cache = Arc::new(ClockCache::new(1 << 20, 16, -1, false));
+            let page_cache = Arc::new(ClockCache::new(
+                options.cache_capacity,
+                options.cache_estimated_entry_charge,
+                -1,
+                false,
+            ));
+            let use_direct = options.use_direct_io;
             Self {
                 env,
                 base,
@@ -137,9 +148,10 @@ pub(crate) mod facade {
             let mut buf = vec![0u8; handle.size as usize];
             reader.read_exact_at(&mut buf, handle.offset as u64).await?;
 
+            let charge = buf.len();
             let cache_entry = self
                 .page_cache
-                .insert(addr, Some(buf))
+                .insert(addr, Some(buf), charge)
                 .expect("insert cache fail");
 
             Ok(cache_entry.unwrap())
@@ -317,7 +329,7 @@ pub(crate) mod facade {
         fn test_file_builder() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_builder").unwrap();
-            let files = PageFiles::new(env, base.path(), true).await;
+            let files = PageFiles::new(env, base.path(), &test_option()).await;
             let mut builder = files.new_page_file_builder(11233).await.unwrap();
             builder.add_delete_pages(&[1, 2]);
             builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
@@ -328,7 +340,7 @@ pub(crate) mod facade {
         fn test_read_page() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_dread").unwrap();
-            let files = PageFiles::new(env, base.path(), true).await;
+            let files = PageFiles::new(env, base.path(), &test_option()).await;
             let file_id = 2;
             let info = {
                 let mut b = files.new_page_file_builder(file_id).await.unwrap();
@@ -387,7 +399,7 @@ pub(crate) mod facade {
         fn test_test_simple_write_reader() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_simple_rw").unwrap();
-            let files = PageFiles::new(env, base.path(), true).await;
+            let files = PageFiles::new(env, base.path(), &test_option()).await;
 
             let file_id = 2;
             let ret_info = {
@@ -445,7 +457,7 @@ pub(crate) mod facade {
         fn test_file_info_recovery_and_add_new_file() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_recovery").unwrap();
-            let files = PageFiles::new(env, base.path(), true).await;
+            let files = PageFiles::new(env, base.path(), &test_option()).await;
 
             let info_builder = files.new_info_builder();
             {
@@ -544,7 +556,7 @@ pub(crate) mod facade {
         fn test_query_page_id_by_addr() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_query_id_by_addr").unwrap();
-            let files = PageFiles::new(env, base.path(), true).await;
+            let files = PageFiles::new(env, base.path(), &test_option()).await;
             let file_id = 1;
             let page_addr1 = page_addr(file_id, 0);
             let page_addr2 = page_addr(file_id, 1);
@@ -572,7 +584,7 @@ pub(crate) mod facade {
         fn test_get_child_page() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_get_child_page").unwrap();
-            let files = PageFiles::new(env, base.path(), true).await;
+            let files = PageFiles::new(env, base.path(), &test_option()).await;
             let info_builder = files.new_info_builder();
 
             let file_id = 1;
@@ -606,7 +618,7 @@ pub(crate) mod facade {
 
             let env = crate::env::Photon;
             let base = TempDir::new("test_get_child_page").unwrap();
-            let files = PageFiles::new(env, base.path(), true).await;
+            let files = PageFiles::new(env, base.path(), &test_option()).await;
             new_file(&files, 0).await;
             new_file(&files, 1).await;
             new_file(&files, 3).await;
@@ -622,6 +634,13 @@ pub(crate) mod facade {
 
         fn page_addr(file_id: u32, index: u32) -> u64 {
             ((file_id as u64) << 32) | (index as u64)
+        }
+
+        fn test_option() -> PageStoreOptions {
+            PageStoreOptions {
+                cache_capacity: 2 << 10,
+                ..Default::default()
+            }
         }
     }
 }

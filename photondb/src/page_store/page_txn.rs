@@ -348,6 +348,7 @@ mod tests {
     use crate::page_store::{
         page_table::PageTable,
         version::{DeltaVersion, Version},
+        PageStoreOptions,
     };
 
     fn new_version(size: u32) -> Arc<Version> {
@@ -358,7 +359,7 @@ mod tests {
     async fn page_txn_update_page() {
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_txn_update_page").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
         let version = new_version(512);
         let page_table = PageTable::default();
         let guard = Guard::new(version.clone(), page_table, files);
@@ -375,7 +376,7 @@ mod tests {
     async fn page_txn_failed_update_page() {
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_txn_failed_update_page").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
 
         let version = new_version(1 << 10);
         let page_table = PageTable::default();
@@ -400,7 +401,7 @@ mod tests {
     async fn page_txn_increment_page_addr_update() {
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_increment_page_addr_update").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
 
         let version = new_version(512);
         let page_table = PageTable::default();
@@ -413,7 +414,7 @@ mod tests {
     async fn page_txn_replace_page() {
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_txn_replace_page").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
 
         let version = new_version(1 << 10);
         let page_table = PageTable::default();
@@ -444,7 +445,7 @@ mod tests {
     async fn page_txn_seal_write_buffer() {
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_seal_write_buffer").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
 
         let version = new_version(512);
         let page_table = PageTable::default();
@@ -457,7 +458,7 @@ mod tests {
     async fn page_txn_seal_write_buffer_twice() {
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_seal_write_buffer_twice").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
 
         let version = new_version(512);
         let page_table = PageTable::default();
@@ -473,7 +474,7 @@ mod tests {
         env_logger::init();
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_insert_page").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
 
         let version = new_version(512);
         let page_table = PageTable::default();
@@ -492,5 +493,12 @@ mod tests {
         let buf = current.last_writer_buffer();
         buf.seal().unwrap();
         assert!(buf.is_flushable());
+    }
+
+    fn test_option() -> PageStoreOptions {
+        PageStoreOptions {
+            cache_capacity: 2 << 10,
+            ..Default::default()
+        }
     }
 }

@@ -6,7 +6,12 @@ use ::std::sync::{
 use crate::*;
 
 pub(crate) trait Cache<T: Clone>: Sized {
-    fn insert(self: &Arc<Self>, key: u64, value: Option<T>) -> Result<Option<CacheEntry<T, Self>>>;
+    fn insert(
+        self: &Arc<Self>,
+        key: u64,
+        value: Option<T>,
+        charge: usize,
+    ) -> Result<Option<CacheEntry<T, Self>>>;
 
     fn lookup(self: &Arc<Self>, key: u64) -> Option<CacheEntry<T, Self>>;
 
@@ -48,12 +53,12 @@ where
     }
 }
 
-#[allow(dead_code)]
 impl<T, C> CacheEntry<T, C>
 where
     T: Clone,
     C: Cache<T>,
 {
+    #[allow(dead_code)]
     pub(crate) fn key(&self) -> u64 {
         unsafe { (*self.handle).key }
     }
@@ -128,7 +133,6 @@ const STATE_VISIBLE: u8 = STATE_OCCUPIED_BIT | STATE_SHAREABLE_BIT | STATE_VISIB
 // in effect with zero refs, acquire counter == release counter, and in that
 // case the countdown clock == both of those counters.)
 const HIGH_COUNT_DOWN: u8 = 3;
-#[allow(dead_code)]
 const LOW_COUNT_DOWN: u8 = 2;
 #[allow(dead_code)]
 const BOTTOM_COUNT_DOWN: u8 = 1;
@@ -146,9 +150,7 @@ pub(crate) mod clock {
 
     use super::*;
 
-    #[allow(dead_code)]
     const LOAD_FACTOR: f64 = 0.7;
-    #[allow(dead_code)]
     const STRICT_LOAD_FACTOR: f64 = 0.84;
 
     pub(crate) struct ClockCache<T: Clone> {
@@ -203,7 +205,6 @@ pub(crate) mod clock {
     }
 
     impl<T: Clone> ClockCacheHandleTable<T> {
-        #[allow(dead_code)]
         fn new(length_bits: u64, strict_capacity_limit: bool) -> Self {
             let length_bits_mask = ((1 << length_bits) - 1) as u32;
             let occupancy_limit = ((1 << length_bits) as f64 * STRICT_LOAD_FACTOR) as u32;
@@ -825,7 +826,6 @@ pub(crate) mod clock {
         }
     }
 
-    #[allow(dead_code)]
     impl<T: Clone> ClockCache<T> {
         pub(crate) fn new(
             capacity: usize,
@@ -879,9 +879,9 @@ pub(crate) mod clock {
         }
 
         fn hash_bits(capacity: usize, est_value_size: usize) -> u64 {
-            let mut average_slot_charge = est_value_size;
-            average_slot_charge += mem::size_of::<Handle<T>>();
-            let num_slots = (capacity as f64 / average_slot_charge as f64 + 0.999999) as u64;
+            let mut average_slot_charge = est_value_size as f64 * LOAD_FACTOR;
+            average_slot_charge += mem::size_of::<Handle<T>>() as f64;
+            let num_slots = (capacity as f64 / average_slot_charge + 0.999999) as u64;
             let mut hash_bits = ((num_slots << 1) as f64 - 1.).log2().floor().min(32.) as u64;
             while hash_bits > 0 && mem::size_of::<Handle<T>>() << hash_bits > capacity {
                 hash_bits -= 1;
@@ -926,8 +926,8 @@ pub(crate) mod clock {
             self: &Arc<Self>,
             key: u64,
             value: Option<T>,
+            charge: usize,
         ) -> Result<Option<CacheEntry<T, Self>>> {
-            let charge = 1;
             let hash = Self::hash_key(key);
             let idx = self.shard(hash);
             let shard = &self.shards[idx as usize];
@@ -1001,15 +1001,11 @@ mod tests {
         let t1 = {
             let c = c.clone();
             thread::spawn(move || {
-                let v = c.insert(1, Some(vec![1])).unwrap().unwrap();
-                assert_eq!(v.key(), 1);
-                drop(v);
-                let v = c.insert(2, Some(vec![2])).unwrap().unwrap();
-                assert_eq!(v.key(), 2);
-                drop(v);
-                let v = c.insert(3, Some(vec![3])).unwrap().unwrap();
-                assert_eq!(v.key(), 3);
-                drop(v);
+                for i in 1..=3 {
+                    let v = c.insert(i, Some(vec![i]), 1).unwrap().unwrap();
+                    assert_eq!(v.key(), i);
+                    drop(v);
+                }
             })
         };
         t1.join().unwrap();
@@ -1020,7 +1016,7 @@ mod tests {
         assert!(c.lookup(1).is_none());
         assert!(c.lookup(2).is_none());
 
-        let v = c.insert(4, Some(vec![4])).unwrap().unwrap();
+        let v = c.insert(4, Some(vec![4]), 1).unwrap().unwrap();
         assert_eq!(v.key(), 4);
         drop(v);
 
