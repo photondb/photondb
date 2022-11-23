@@ -3,7 +3,7 @@ pub(crate) use file_builder::FileBuilder;
 pub(self) use file_builder::{BlockHandler, BufferedWriter, CommonFileBuilder};
 
 mod file_reader;
-pub(crate) use file_reader::PageFileReader;
+pub(crate) use file_reader::{read_page_table, PageFileReader};
 
 mod info_builder;
 pub(crate) use info_builder::FileInfoBuilder;
@@ -13,6 +13,7 @@ pub(crate) use facade::PageFiles;
 pub(crate) use types::{FileInfo, FileMeta, MapFileInfo};
 
 mod map_file_builder;
+pub(crate) use map_file_builder::{MapFileBuilder, PartialFileBuilder};
 
 pub(crate) mod constant {
     /// Default alignment requirement for the SSD.
@@ -41,8 +42,8 @@ pub(crate) mod facade {
         page_store::Result,
     };
 
-    pub(crate) const PAGE_FILE_NAME: &str = "dat";
-    pub(crate) const MAP_FILE_NAME: &str = "map";
+    pub(crate) const PAGE_FILE_PREFIX: &str = "dat";
+    pub(crate) const MAP_FILE_PREFIX: &str = "map";
 
     /// The facade for page_file module.
     /// it hides the detail about disk location for caller(after it be created).
@@ -72,10 +73,10 @@ pub(crate) mod facade {
             }
         }
 
-        /// Create file_builder to write a new page_file.
-        pub(crate) async fn new_file_builder(&self, file_id: u32) -> Result<FileBuilder<E>> {
+        /// Create `FileBuilder` to write a new page file.
+        pub(crate) async fn new_page_file_builder(&self, file_id: u32) -> Result<FileBuilder<E>> {
             // TODO: switch to env in suitable time.
-            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_NAME));
+            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_PREFIX));
             let writer = self
                 .env
                 .open_sequential_writer(path.to_owned())
@@ -83,6 +84,25 @@ pub(crate) mod facade {
                 .expect("open writer for file_id: {file_id} fail");
             let use_direct = self.use_direct && writer.direct_io_ify().is_ok();
             Ok(FileBuilder::new(
+                file_id,
+                &self.base_dir,
+                writer,
+                use_direct,
+                DEFAULT_BLOCK_SIZE,
+            ))
+        }
+
+        /// Create `MapFileBuilder` to write a new map file.
+        pub(crate) async fn new_map_file_builder(&self, file_id: u32) -> Result<MapFileBuilder<E>> {
+            // TODO: switch to env in suitable time.
+            let path = self.base.join(format!("{}_{file_id}", MAP_FILE_PREFIX));
+            let writer = self
+                .env
+                .open_sequential_writer(path.to_owned())
+                .await
+                .expect("open writer for file_id: {file_id} fail");
+            let use_direct = self.use_direct && writer.direct_io_ify().is_ok();
+            Ok(MapFileBuilder::new(
                 file_id,
                 &self.base_dir,
                 writer,
@@ -102,7 +122,7 @@ pub(crate) mod facade {
             let r = self
                 .reader_cache
                 .get_with(file_id, async move {
-                    let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_NAME));
+                    let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_PREFIX));
 
                     let file = self
                         .env
@@ -126,7 +146,7 @@ pub(crate) mod facade {
             &self,
             file_id: u32,
         ) -> Result<MetaReader<<E as Env>::PositionalReader>> {
-            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_NAME));
+            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_PREFIX));
             let file_size = self
                 .env
                 .metadata(&path)
@@ -160,7 +180,7 @@ pub(crate) mod facade {
         }
 
         async fn remove_page_file(&self, file_id: u32) -> Result<()> {
-            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_NAME));
+            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_PREFIX));
             self.env
                 .remove_file(&path)
                 .await
@@ -169,7 +189,7 @@ pub(crate) mod facade {
         }
 
         async fn remove_map_file(&self, file_id: u32) -> Result<()> {
-            let path = self.base.join(format!("{}_{file_id}", MAP_FILE_NAME));
+            let path = self.base.join(format!("{}_{file_id}", MAP_FILE_PREFIX));
             self.env
                 .remove_file(&path)
                 .await
@@ -178,12 +198,12 @@ pub(crate) mod facade {
         }
 
         pub(crate) fn list_page_files(&self) -> Result<Vec<u32>> {
-            let prefix = format!("{}_", PAGE_FILE_NAME).into_bytes();
+            let prefix = format!("{}_", PAGE_FILE_PREFIX).into_bytes();
             self.list_files_with_prefix(&prefix)
         }
 
         pub(crate) fn list_map_files(&self) -> Result<Vec<u32>> {
-            let prefix = format!("{}_", MAP_FILE_NAME).into_bytes();
+            let prefix = format!("{}_", MAP_FILE_PREFIX).into_bytes();
             self.list_files_with_prefix(&prefix)
         }
 
@@ -220,7 +240,7 @@ pub(crate) mod facade {
             let env = crate::env::Photon;
             let base = TempDir::new("test_builder").unwrap();
             let files = PageFiles::new(env, base.path(), true).await;
-            let mut builder = files.new_file_builder(11233).await.unwrap();
+            let mut builder = files.new_page_file_builder(11233).await.unwrap();
             builder.add_delete_pages(&[1, 2]);
             builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
             builder.finish().await.unwrap();
@@ -233,7 +253,7 @@ pub(crate) mod facade {
             let files = PageFiles::new(env, base.path(), true).await;
             let file_id = 2;
             let info = {
-                let mut b = files.new_file_builder(file_id).await.unwrap();
+                let mut b = files.new_page_file_builder(file_id).await.unwrap();
                 b.add_delete_pages(&[page_addr(1, 0), page_addr(1, 1)]);
                 b.add_page(1, page_addr(2, 2), &[7].repeat(8192))
                     .await
@@ -293,7 +313,7 @@ pub(crate) mod facade {
 
             let file_id = 2;
             let ret_info = {
-                let mut b = files.new_file_builder(file_id).await.unwrap();
+                let mut b = files.new_page_file_builder(file_id).await.unwrap();
                 b.add_delete_pages(&[page_addr(1, 0), page_addr(1, 1)]);
                 b.add_page(1, page_addr(2, 2), &[7].repeat(8192))
                     .await
@@ -355,7 +375,7 @@ pub(crate) mod facade {
                 let mut mock_version = HashMap::new();
                 {
                     let file_id = 1;
-                    let mut b = files.new_file_builder(file_id).await.unwrap();
+                    let mut b = files.new_page_file_builder(file_id).await.unwrap();
                     b.add_page(1, page_addr(file_id, 0), &[1].repeat(10))
                         .await
                         .unwrap();
@@ -374,7 +394,7 @@ pub(crate) mod facade {
                     let file_id = 2;
                     let delete_pages = &[page_addr(1, 0)];
 
-                    let mut b = files.new_file_builder(file_id).await.unwrap();
+                    let mut b = files.new_page_file_builder(file_id).await.unwrap();
                     b.add_page(4, page_addr(file_id, 0), &[1].repeat(10))
                         .await
                         .unwrap();
@@ -406,7 +426,7 @@ pub(crate) mod facade {
                 {
                     let file_id = 3;
                     let delete_pages = &[page_addr(2, 0)];
-                    let mut b = files.new_file_builder(file_id).await.unwrap();
+                    let mut b = files.new_page_file_builder(file_id).await.unwrap();
                     b.add_delete_pages(delete_pages);
                     let file_info = b.finish().await.unwrap();
                     info_builder
@@ -453,7 +473,7 @@ pub(crate) mod facade {
             let page_addr3 = page_addr(file_id, 2);
 
             {
-                let mut b = files.new_file_builder(file_id).await.unwrap();
+                let mut b = files.new_page_file_builder(file_id).await.unwrap();
                 b.add_page(1, page_addr1, &[1].repeat(10)).await.unwrap();
                 b.add_page(1, page_addr2, &[2].repeat(10)).await.unwrap();
                 b.add_page(2, page_addr3, &[3].repeat(10)).await.unwrap();
@@ -482,7 +502,7 @@ pub(crate) mod facade {
             let page_addr2 = page_addr(file_id, 1);
 
             {
-                let mut b = files.new_file_builder(file_id).await.unwrap();
+                let mut b = files.new_page_file_builder(file_id).await.unwrap();
                 b.add_page(1, page_addr1, &[1].repeat(10)).await.unwrap();
                 b.add_page(1, page_addr2, &[2].repeat(10)).await.unwrap();
                 let file_info = b.finish().await.unwrap();
@@ -502,7 +522,7 @@ pub(crate) mod facade {
         #[photonio::test]
         async fn test_list_page_files() {
             async fn new_file(files: &PageFiles<crate::env::Photon>, file_id: u32) {
-                let mut b = files.new_file_builder(file_id).await.unwrap();
+                let mut b = files.new_page_file_builder(file_id).await.unwrap();
                 b.finish().await.unwrap();
             }
 

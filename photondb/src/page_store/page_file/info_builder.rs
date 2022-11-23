@@ -116,7 +116,7 @@ impl<E: Env> FileInfoBuilder<E> {
     async fn open_meta_reader(&self, file_id: &u32) -> MetaReader<E::PositionalReader> {
         let path = self
             .base
-            .join(format!("{}_{file_id}", super::facade::PAGE_FILE_NAME));
+            .join(format!("{}_{file_id}", super::facade::PAGE_FILE_PREFIX));
         let raw_metadata = self
             .env
             .metadata(path.to_owned())

@@ -10,8 +10,10 @@ use log::{info, trace};
 use crate::{
     env::Env,
     page_store::{
-        page_table::PageTable, strategy::ReclaimPickStrategy, Error, FileInfo, Guard, Options,
-        PageFiles, Result, StrategyBuilder, Version,
+        page_file::{read_page_table, MapFileBuilder, PartialFileBuilder},
+        page_table::PageTable,
+        strategy::ReclaimPickStrategy,
+        Error, FileInfo, Guard, MapFileInfo, Options, PageFiles, Result, StrategyBuilder, Version,
     },
     util::shutdown::{with_shutdown, Shutdown},
 };
@@ -331,6 +333,82 @@ where
             false
         }
     }
+
+    /// Compound a set of page files into a map file.
+    ///
+    /// NOTE: We don't mix page file and map file in compounding, because they
+    /// have different age (update frequency).
+    #[allow(unused)]
+    async fn compound_page_files(
+        &self,
+        new_file_id: u32,
+        file_infos: &HashMap<u32, FileInfo>,
+        victims: HashSet<u32>,
+    ) -> Result<(HashMap<u32, FileInfo>, MapFileInfo)> {
+        let mut builder = self.page_files.new_map_file_builder(new_file_id).await?;
+        for id in victims {
+            let file_builder = builder.add_file(id);
+            let file_info = file_infos.get(&id).expect("Victims must exists");
+            let page_file = self
+                .page_files
+                .open_page_reader(id, file_info.meta().block_size())
+                .await?;
+            builder = self
+                .compound_partial_page_file(file_builder, file_info)
+                .await?;
+        }
+        builder.finish().await
+    }
+
+    /// Write all active pages of the corresponding page file into a map file
+    /// (not include dealloc pages).
+    async fn compound_partial_page_file<'a>(
+        &self,
+        mut builder: PartialFileBuilder<'a, E>,
+        file_info: &FileInfo,
+    ) -> Result<MapFileBuilder<'a, E>> {
+        let file_id = file_info.get_file_id();
+        let file_meta = file_info.meta();
+        let block_size = file_meta.block_size();
+        let reader = self
+            .page_files
+            .open_page_reader(file_id, block_size)
+            .await?;
+        let page_table = read_page_table(&reader, &file_meta).await?;
+        let mut page = vec![];
+        for page_addr in file_info.iter() {
+            let page_id = page_table
+                .get(&page_addr)
+                .cloned()
+                .expect("Page mapping must exists in page table");
+            let handle = file_info
+                .get_page_handle(page_addr)
+                .expect("Handle of active page must exists");
+            let page_size = handle.size as usize;
+            if page.len() < page_size {
+                page.resize(page_size, 0u8);
+            }
+            reader
+                .read_exact_at(&mut page[..page_size], handle.offset as u64)
+                .await?;
+            builder
+                .add_page(page_id, page_addr, &page[..page_size])
+                .await?;
+        }
+        builder.finish().await
+    }
+
+    /// Compact a set of map files into a new map file, and release mark the
+    /// compacted files as obsoleted to reclaim space.
+    #[allow(unused)]
+    async fn compact_map_files(
+        &self,
+        new_file_id: u32,
+        map_files: &HashMap<u32, MapFileInfo>,
+        victims: HashSet<u32>,
+    ) -> Result<(HashMap<u32, FileInfo>, MapFileInfo)> {
+        todo!()
+    }
 }
 
 fn compute_base_size(files: &HashMap<u32, FileInfo>, cleaned_files: &HashSet<u32>) -> u64 {
@@ -400,7 +478,7 @@ mod tests {
         pages: &[(u64, u64)],
         dealloc_pages: &[u64],
     ) -> FileInfo {
-        let mut builder = page_files.new_file_builder(file_id).await.unwrap();
+        let mut builder = page_files.new_page_file_builder(file_id).await.unwrap();
         for (page_id, page_addr) in pages {
             builder.add_page(*page_id, *page_addr, &[0]).await.unwrap();
         }
@@ -477,5 +555,64 @@ mod tests {
 
     fn pa(file_id: u32, offset: u32) -> u64 {
         ((file_id as u64) << 32) | (offset as u64)
+    }
+
+    #[photonio::test]
+    async fn compound_page_files() {
+        let root = TempDir::new("compound_page_files").unwrap();
+        let root = root.into_path();
+
+        let rewriter = PageRewriter::default();
+        let ctx = build_reclaim_ctx(&root, rewriter.clone()).await;
+        let file_id_1 = 2;
+        let file_id_2 = 3;
+        let mut file_info_1 = build_page_file(
+            &ctx.page_files,
+            file_id_1,
+            &[
+                (1, pa(file_id_1, 16)),
+                (2, pa(file_id_1, 32)),
+                (3, pa(file_id_1, 64)),
+                (4, pa(file_id_1, 128)),
+            ],
+            &[301, 302, 303],
+        )
+        .await;
+        file_info_1.deactivate_page(3, pa(file_id_1, 32));
+
+        let file_info_2 = build_page_file(
+            &ctx.page_files,
+            file_id_2,
+            &[
+                (11, pa(file_id_2, 16)),
+                (12, pa(file_id_2, 32)),
+                (13, pa(file_id_2, 64)),
+                (14, pa(file_id_2, 128)),
+            ],
+            &[301, 302, 303],
+        )
+        .await;
+
+        let mut files = HashMap::new();
+        files.insert(file_id_1, file_info_1.clone());
+        files.insert(file_id_2, file_info_2.clone());
+
+        let victims = files.keys().cloned().collect::<HashSet<_>>();
+        let (new_files, map_file) = ctx.compound_page_files(1, &files, victims).await.unwrap();
+        assert_eq!(map_file.meta().num_page_files(), 2);
+        assert!(new_files.contains_key(&file_id_1));
+        assert!(new_files.contains_key(&file_id_2));
+        assert!(new_files
+            .get(&file_id_1)
+            .unwrap()
+            .is_page_active(pa(file_id_1, 16)));
+        assert!(!new_files
+            .get(&file_id_1)
+            .unwrap()
+            .is_page_active(pa(file_id_1, 32)));
+        assert!(new_files
+            .get(&file_id_2)
+            .unwrap()
+            .is_page_active(pa(file_id_2, 32)));
     }
 }

@@ -128,7 +128,7 @@ impl<E: Env> FlushCtx<E> {
         let file_id = write_buffer.file_id();
         info!("Flush write buffer {file_id} to page file, {flush_stats}");
 
-        let mut builder = self.page_files.new_file_builder(file_id).await?;
+        let mut builder = self.page_files.new_page_file_builder(file_id).await?;
         for (page_addr, header, record_ref) in write_buffer.iter() {
             match record_ref {
                 RecordRef::DeallocPages(_) => {}
