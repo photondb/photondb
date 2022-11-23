@@ -12,7 +12,7 @@ use crate::{
     page_store::{
         page_file::{read_page_table, MapFileBuilder, PartialFileBuilder},
         page_table::PageTable,
-        strategy::ReclaimPickStrategy,
+        strategy::{PickedFile, ReclaimPickStrategy},
         Error, FileInfo, Guard, MapFileInfo, Options, PageFiles, Result, StrategyBuilder, Version,
     },
     util::shutdown::{with_shutdown, Shutdown},
@@ -43,6 +43,26 @@ where
     page_files: Arc<PageFiles<E>>,
 
     cleaned_files: HashSet<u32>,
+}
+
+#[derive(Debug)]
+struct ReclaimJobBuilder {
+    target_file_base: usize,
+
+    compound_files: HashSet<u32>,
+    compound_size: usize,
+    compact_files: HashSet<u32>,
+    compact_size: usize,
+}
+
+#[derive(Debug)]
+enum ReclaimJob {
+    /// Rewrite page file.
+    Rewrite(u32),
+    /// Compound a set of page files into a new map file.
+    Compound(HashSet<u32>),
+    /// Compact a set of map files into a new map file.
+    Compact(HashSet<u32>),
 }
 
 impl<E, R> ReclaimCtx<E, R>
@@ -132,9 +152,22 @@ where
         cleaned_files: &HashSet<u32>,
     ) {
         let mut strategy = self.build_strategy(version, cleaned_files);
-        while let Some(file_id) = strategy.apply() {
-            if let Err(err) = self.rewrite_file(file_id, version).await {
-                todo!("reclaim files: {err:?}");
+        let mut builder = ReclaimJobBuilder::new(self.options.file_base_size);
+        while let Some((file, active_size)) = strategy.apply() {
+            if let Some(job) = builder.add(file, active_size) {
+                match job {
+                    ReclaimJob::Rewrite(file_id) => {
+                        if let Err(err) = self.rewrite_file(file_id, version).await {
+                            todo!("reclaim files: {err:?}");
+                        }
+                    }
+                    ReclaimJob::Compound(victims) => {
+                        self.reclaim_page_files(version, victims).await;
+                    }
+                    ReclaimJob::Compact(_map_files) => {
+                        todo!()
+                    }
+                }
             }
 
             if self.shutdown.is_terminated()
@@ -144,6 +177,19 @@ where
                 break;
             }
         }
+    }
+
+    /// Reclaim page files by compounding victims into a new map file, and
+    /// install new version.
+    async fn reclaim_page_files(&self, version: &Arc<Version>, victims: HashSet<u32>) {
+        // TODO: alloc map file id.
+        let new_map_file_id = 1;
+        let file_infos = version.page_files();
+        self.compound_page_files(new_map_file_id, file_infos, victims)
+            .await
+            .unwrap();
+
+        // TODO: install new version.
     }
 
     async fn rewrite_file(&mut self, file_id: u32, version: &Arc<Version>) -> Result<()> {
@@ -287,7 +333,7 @@ where
             }
 
             if !file.is_empty() {
-                strategy.collect(file);
+                strategy.collect_page_file(file);
             }
         }
         strategy
@@ -335,6 +381,9 @@ where
     }
 
     /// Compound a set of page files into a map file.
+    ///
+    /// We don't add `victims` into `ReclaimCtx::cleaned_files`, because there
+    /// might exists dealloc pages.
     ///
     /// NOTE: We don't mix page file and map file in compounding, because they
     /// have different age (update frequency).
@@ -407,6 +456,59 @@ where
         map_files: &HashMap<u32, MapFileInfo>,
         victims: HashSet<u32>,
     ) -> Result<(HashMap<u32, FileInfo>, MapFileInfo)> {
+        todo!()
+    }
+}
+
+impl ReclaimJobBuilder {
+    fn new(target_file_base: usize) -> ReclaimJobBuilder {
+        ReclaimJobBuilder {
+            target_file_base,
+
+            compact_files: HashSet::default(),
+            compact_size: 0,
+            compound_files: HashSet::default(),
+            compound_size: 0,
+        }
+    }
+
+    fn add(&mut self, file: PickedFile, active_size: usize) -> Option<ReclaimJob> {
+        // A switch disable map files before we have full supports.
+        if true {
+            let PickedFile::PageFile(file_id) = file else { panic!("not implemented") };
+            return Some(ReclaimJob::Rewrite(file_id));
+        }
+
+        match file {
+            PickedFile::PageFile(file_id) => {
+                // Rewrite small page files or hot pages directly.
+                if active_size < 16 << 10 || self.is_top_k(file_id) {
+                    return Some(ReclaimJob::Rewrite(file_id));
+                }
+
+                self.compound_size += active_size;
+                self.compound_files.insert(file_id);
+                if self.compound_size >= self.target_file_base {
+                    self.compound_size = 0;
+                    return Some(ReclaimJob::Compound(std::mem::take(
+                        &mut self.compound_files,
+                    )));
+                }
+            }
+            PickedFile::MapFile(file_id) => {
+                // TODO: rewrite small map file directly.
+                self.compact_size += active_size;
+                self.compact_files.insert(file_id);
+                if self.compact_size >= self.target_file_base {
+                    self.compact_size = 0;
+                    return Some(ReclaimJob::Compact(std::mem::take(&mut self.compact_files)));
+                }
+            }
+        }
+        None
+    }
+
+    fn is_top_k(&self, _file_id: u32) -> bool {
         todo!()
     }
 }

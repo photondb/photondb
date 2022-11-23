@@ -73,6 +73,11 @@ pub struct Options {
     ///
     /// Default: u64::MAX
     pub space_used_high: u64,
+
+    /// TODO:
+    ///
+    /// Default: 64MB
+    pub file_base_size: usize,
 }
 
 impl Default for Options {
@@ -83,6 +88,7 @@ impl Default for Options {
             use_direct_io: false,
             max_space_amplification_percent: 100,
             space_used_high: u64::MAX,
+            file_base_size: 64 << 20,
         }
     }
 }

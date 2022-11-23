@@ -119,6 +119,11 @@ impl FileInfo {
     }
 
     #[inline]
+    pub(crate) fn total_pages(&self) -> usize {
+        self.meta.total_pages()
+    }
+
+    #[inline]
     pub(crate) fn empty_pages_rate(&self) -> f64 {
         let active_pages = self.active_pages.len() as f64;
         let total_pages = self.meta.total_pages() as f64 + 0.1;
@@ -359,6 +364,11 @@ impl MapFileMeta {
     #[inline]
     pub(crate) fn num_page_files(&self) -> usize {
         self.page_files.len()
+    }
+
+    #[inline]
+    pub(crate) fn page_files(&self) -> &HashMap<u32, Arc<FileMeta>> {
+        &self.page_files
     }
 }
 

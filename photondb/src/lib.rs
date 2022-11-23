@@ -68,6 +68,7 @@ mod tests {
             use_direct_io: false,
             max_space_amplification_percent: 10,
             space_used_high: u64::MAX,
+            file_base_size: 1 << 20,
         },
     };
 
