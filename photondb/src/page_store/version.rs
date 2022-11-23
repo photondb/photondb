@@ -10,7 +10,7 @@ use crossbeam_epoch::Guard;
 use futures::channel::oneshot;
 use log::debug;
 
-use super::{buffer_set::*, FileInfo, MapFileMeta, WriteBuffer};
+use super::{buffer_set::*, FileInfo, MapFileInfo, WriteBuffer};
 use crate::util::latch::Latch;
 
 pub(crate) struct VersionOwner {
@@ -21,13 +21,14 @@ pub(crate) struct Version {
     pub(crate) buffer_set: Arc<BufferSet>,
 
     page_files: HashMap<u32, FileInfo>,
-    map_files: HashMap<u32, Arc<MapFileMeta>>,
+    map_files: HashMap<u32, MapFileInfo>,
 
     // The id of the first buffer this version could access.
     first_buffer_id: u32,
 
     /// Records the ID of the file that can be deleted.
-    obsoleted_files: HashSet<u32>,
+    obsoleted_page_files: HashSet<u32>,
+    obsoleted_map_files: HashSet<u32>,
 
     next_version: AtomicPtr<Arc<Version>>,
     new_version_latch: Latch,
@@ -36,11 +37,12 @@ pub(crate) struct Version {
     cleanup_handle: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
+#[derive(Default)]
 pub(crate) struct DeltaVersion {
-    pub(crate) file_id: u32,
     pub(crate) page_files: HashMap<u32, FileInfo>,
-    pub(crate) map_files: HashMap<u32, Arc<MapFileMeta>>,
-    pub(crate) obsoleted_files: HashSet<u32>,
+    pub(crate) map_files: HashMap<u32, MapFileInfo>,
+    pub(crate) obsoleted_page_files: HashSet<u32>,
+    pub(crate) obsoleted_map_files: HashSet<u32>,
 }
 
 impl VersionOwner {
@@ -76,29 +78,23 @@ impl VersionOwner {
     ///
     /// TODO: It is assumed that all installations come in [`WriteBuffer`]
     /// order, so there is no need to consider concurrency issues.
-    pub(crate) fn install(&self, delta: DeltaVersion) {
+    pub(crate) fn install(&self, file_id: u32, delta: DeltaVersion) {
         let guard = version_guard::pin();
 
         // Safety: guard by `buffer_set_guard::pin`.
         let current = unsafe { self.current_without_guard() };
-        if current.first_buffer_id != delta.file_id {
+        if current.first_buffer_id != file_id {
             panic!(
                 "Version should be installed in the order of write buffers, expect {}, but got {}",
-                current.first_buffer_id, delta.file_id
+                current.first_buffer_id, file_id
             );
         }
 
-        debug!("Install new version with file {}", delta.file_id);
+        debug!("Install new version with file {file_id}");
 
         let buffer_set = current.buffer_set.clone();
         let first_buffer_id = current.first_buffer_id + 1;
-        let new = Version::with_buffer_set(
-            first_buffer_id,
-            buffer_set,
-            delta.page_files,
-            delta.map_files,
-            delta.obsoleted_files,
-        );
+        let new = Version::with_buffer_set(first_buffer_id, buffer_set, delta);
         let new = Box::new(Arc::new(new));
         self.switch_version(new, guard);
     }
@@ -162,37 +158,28 @@ impl Version {
         buffer_capacity: u32,
         next_file_id: u32,
         max_sealed_buffers: usize,
-        page_files: HashMap<u32, FileInfo>,
-        map_files: HashMap<u32, Arc<MapFileMeta>>,
-        obsoleted_files: HashSet<u32>,
+        delta: DeltaVersion,
     ) -> Self {
         let buffer_set = Arc::new(BufferSet::new(
             next_file_id,
             buffer_capacity,
             max_sealed_buffers,
         ));
-        Self::with_buffer_set(
-            next_file_id,
-            buffer_set,
-            page_files,
-            map_files,
-            obsoleted_files,
-        )
+        Self::with_buffer_set(next_file_id, buffer_set, delta)
     }
 
     pub(crate) fn with_buffer_set(
         first_buffer_id: u32,
         buffer_set: Arc<BufferSet>,
-        page_files: HashMap<u32, FileInfo>,
-        map_files: HashMap<u32, Arc<MapFileMeta>>,
-        obsoleted_files: HashSet<u32>,
+        delta: DeltaVersion,
     ) -> Self {
         let (sender, receiver) = oneshot::channel();
         Version {
             first_buffer_id,
-            page_files,
-            map_files,
-            obsoleted_files,
+            page_files: delta.page_files,
+            map_files: delta.map_files,
+            obsoleted_page_files: delta.obsoleted_page_files,
+            obsoleted_map_files: delta.obsoleted_map_files,
             buffer_set,
 
             next_version: AtomicPtr::default(),
@@ -225,8 +212,14 @@ impl Version {
 
     /// Fetch the files which obsoleted but referenced by former [`Version`]s.
     #[inline]
-    pub(crate) fn obsoleted_files(&self) -> Vec<u32> {
-        self.obsoleted_files.iter().cloned().collect()
+    pub(crate) fn obsoleted_page_files(&self) -> Vec<u32> {
+        self.obsoleted_page_files.iter().cloned().collect()
+    }
+
+    /// Fetch the files which obsoleted but referenced by former [`Version`]s.
+    #[inline]
+    pub(crate) fn obsoleted_map_files(&self) -> Vec<u32> {
+        self.obsoleted_map_files.iter().cloned().collect()
     }
 
     #[inline]
@@ -236,7 +229,7 @@ impl Version {
 
     #[allow(unused)]
     #[inline]
-    pub(crate) fn map_files(&self) -> &HashMap<u32, Arc<MapFileMeta>> {
+    pub(crate) fn map_files(&self) -> &HashMap<u32, MapFileInfo> {
         &self.map_files
     }
 
@@ -350,14 +343,7 @@ mod tests {
 
     #[test]
     fn version_access_newly_buffers() {
-        let version = Version::new(
-            1 << 10,
-            1,
-            8,
-            HashMap::default(),
-            HashMap::default(),
-            HashSet::new(),
-        );
+        let version = Version::new(1 << 10, 1, 8, DeltaVersion::default());
         let buffer_id = version.first_buffer_id;
         for i in 1..100 {
             let buf = Arc::new(WriteBuffer::with_capacity(buffer_id + i, 1 << 10));
@@ -372,14 +358,7 @@ mod tests {
 
     #[test]
     fn version_access_unguarded_buffers() {
-        let version = Version::new(
-            1 << 10,
-            1,
-            8,
-            HashMap::default(),
-            HashMap::default(),
-            HashSet::new(),
-        );
+        let version = Version::new(1 << 10, 1, 8, DeltaVersion::default());
         let owner = VersionOwner::new(version);
         let version = owner.current();
         let buffer_id = {
@@ -397,12 +376,7 @@ mod tests {
         drop(version);
 
         // install new version
-        owner.install(DeltaVersion {
-            file_id: buffer_id,
-            page_files: HashMap::default(),
-            map_files: HashMap::default(),
-            obsoleted_files: HashSet::new(),
-        });
+        owner.install(buffer_id, DeltaVersion::default());
 
         // now latest version could not access former buffer since no guard held.
         let version = owner.current();

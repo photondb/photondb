@@ -28,7 +28,8 @@ impl<E: Env> CleanupCtx<E> {
                 break;
             };
 
-            let files = next_version.obsoleted_files();
+            let page_files = next_version.obsoleted_page_files();
+            let map_files = next_version.obsoleted_map_files();
             std::mem::swap(&mut next_version, &mut version);
             if with_shutdown(&mut self.shutdown, next_version.wait_version_released())
                 .await
@@ -42,19 +43,23 @@ impl<E: Env> CleanupCtx<E> {
             version.release_previous_buffers();
 
             // Now it is safety to cleanup the version.
-            self.clean_obsoleted_files(files).await;
+            self.clean_obsoleted_files(page_files, map_files).await;
         }
     }
 
     #[inline]
-    async fn clean_obsoleted_files(&self, files: Vec<u32>) {
-        if files.is_empty() {
-            return;
+    async fn clean_obsoleted_files(&self, page_files: Vec<u32>, map_files: Vec<u32>) {
+        if !page_files.is_empty() {
+            info!("Clean obsoleted page files {page_files:?}");
+            if let Err(err) = self.page_files.remove_page_files(page_files).await {
+                todo!("{err}");
+            }
         }
-
-        info!("Clean obsoleted page files {files:?}");
-        if let Err(err) = self.page_files.remove_files(files).await {
-            todo!("{err}");
+        if !map_files.is_empty() {
+            info!("Clean obsoleted map files {map_files:?}");
+            if let Err(err) = self.page_files.remove_map_files(map_files).await {
+                todo!("{err}");
+            }
         }
     }
 }

@@ -279,6 +279,48 @@ impl FileMeta {
 }
 
 #[allow(unused)]
+pub(crate) struct MapFileInfo {
+    up1: u32,
+    up2: u32,
+
+    meta: Arc<MapFileMeta>,
+}
+
+#[allow(unused)]
+impl MapFileInfo {
+    pub(crate) fn new(up1: u32, up2: u32, meta: Arc<MapFileMeta>) -> Self {
+        MapFileInfo { up1, up2, meta }
+    }
+
+    pub(crate) fn on_update(&mut self, now: u32) {
+        if self.up1 < now {
+            self.up2 = self.up1;
+            self.up1 = now;
+        }
+    }
+
+    #[inline]
+    pub(crate) fn file_id(&self) -> u32 {
+        self.meta.file_id
+    }
+
+    #[inline]
+    pub(crate) fn meta(&self) -> &Arc<MapFileMeta> {
+        &self.meta
+    }
+
+    #[inline]
+    pub(crate) fn up1(&self) -> u32 {
+        self.up1
+    }
+
+    #[inline]
+    pub(crate) fn up2(&self) -> u32 {
+        self.up2
+    }
+}
+
+#[allow(unused)]
 pub(crate) struct MapFileMeta {
     file_id: u32,
     file_size: usize,

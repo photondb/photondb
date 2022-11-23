@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use super::{
     constant::*, types::MapFileMeta, BlockHandler, BufferedWriter, CommonFileBuilder, FileInfo,
+    MapFileInfo,
 };
 use crate::{
     env::Env,
@@ -85,7 +86,7 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
         }
     }
 
-    pub(crate) async fn finish(mut self) -> Result<(HashMap<u32, FileInfo>, Arc<MapFileMeta>)> {
+    pub(crate) async fn finish(mut self) -> Result<(HashMap<u32, FileInfo>, MapFileInfo)> {
         let file_size = self.finish_tail_blocks().await?;
         let page_files = self
             .file_infos
@@ -93,7 +94,8 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
             .map(|(&id, info)| (id, info.meta()))
             .collect::<HashMap<_, _>>();
         let file_meta = Arc::new(MapFileMeta::new(self.file_id, file_size, page_files));
-        Ok((self.file_infos, file_meta))
+        let file_info = MapFileInfo::new(self.file_id, self.file_id, file_meta);
+        Ok((self.file_infos, file_info))
     }
 
     async fn finish_tail_blocks(&mut self) -> Result<usize> {
