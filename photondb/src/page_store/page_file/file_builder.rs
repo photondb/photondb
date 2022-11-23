@@ -28,14 +28,8 @@ use crate::{
 /// `page_addr`'s high 32 bit always be `file-id`(`PageAddr = {file id} {write
 /// buffer index}`), so it only store lower 32 bit.
 pub(crate) struct FileBuilder<'a, E: Env> {
-    file_id: u32,
-
     writer: BufferedWriter<'a, E>,
-
-    index: IndexBlockBuilder,
-    meta: MetaBlockBuilder,
-
-    block_size: usize,
+    inner: CommonFileBuilder,
 }
 
 impl<'a, E: Env> FileBuilder<'a, E> {
@@ -49,11 +43,8 @@ impl<'a, E: Env> FileBuilder<'a, E> {
     ) -> Self {
         let writer = BufferedWriter::new(file, IO_BUFFER_SIZE, use_direct, block_size, base_dir);
         Self {
-            file_id,
             writer,
-            index: Default::default(),
-            meta: Default::default(),
-            block_size,
+            inner: CommonFileBuilder::new(file_id, block_size),
         }
     }
 
@@ -64,20 +55,19 @@ impl<'a, E: Env> FileBuilder<'a, E> {
         page_addr: u64,
         page_content: &[u8],
     ) -> Result<()> {
-        let file_offset = self.writer.write(page_content).await?;
-        self.index.add_data_block(page_addr, file_offset);
-        self.meta.add_page(page_addr, page_id);
-        Ok(())
+        self.inner
+            .add_page(&mut self.writer, page_id, page_addr, page_content)
+            .await
     }
 
     /// Add delete page to builder.
     pub(crate) fn add_delete_pages(&mut self, page_addrs: &[u64]) {
-        self.meta.delete_pages(page_addrs)
+        self.inner.add_delete_pages(page_addrs)
     }
 
     // Finish build page file.
     pub(crate) async fn finish(&mut self) -> Result<FileInfo> {
-        self.finish_meta_block().await?;
+        self.inner.finish_meta_block(&mut self.writer).await?;
         let info = self.finish_file_footer().await?;
         self.writer.flush_and_sync().await?;
         Ok(info)
@@ -85,44 +75,98 @@ impl<'a, E: Env> FileBuilder<'a, E> {
 }
 
 impl<'a, E: Env> FileBuilder<'a, E> {
-    async fn finish_meta_block(&mut self) -> Result<()> {
-        {
-            let page_tables = self.meta.finish_page_table_block();
-            let file_offset = self.writer.write(&page_tables).await?;
-            self.index.add_page_table_meta_block(file_offset)
-        }
-        {
-            let delete_pages = self.meta.finish_delete_pages_block();
-            let file_offset = self.writer.write(&delete_pages).await?;
-            self.index.add_delete_pages_meta_block(file_offset)
-        };
-        Ok(())
-    }
-
     async fn finish_file_footer(&mut self) -> Result<FileInfo> {
-        let footer = {
-            let (data_index, meta_index) = self.index.finish_index_block();
-            Footer {
-                magic: 142857,
-                data_handle: BlockHandler {
-                    offset: { self.writer.write(&data_index).await? },
-                    length: data_index.len() as u64,
-                },
-                meta_handle: BlockHandler {
-                    offset: { self.writer.write(&meta_index).await? },
-                    length: meta_index.len() as u64,
-                },
-            }
+        let (data_handle, meta_handle) = self.inner.finish_index_block(&mut self.writer).await?;
+        let footer = Footer {
+            magic: PAGE_FILE_MAGIC,
+            data_handle,
+            meta_handle,
         };
 
         let footer_dat = footer.encode();
         let foot_offset = self.writer.write(&footer_dat).await?;
         let file_size = foot_offset as usize + footer_dat.len();
 
-        Ok(self.as_file_info(file_size, &footer))
+        Ok(self.inner.as_file_info(file_size, &footer))
+    }
+}
+
+pub(crate) struct CommonFileBuilder {
+    file_id: u32,
+    block_size: usize,
+
+    index: IndexBlockBuilder,
+    meta: MetaBlockBuilder,
+}
+
+impl CommonFileBuilder {
+    pub(super) fn new(file_id: u32, block_size: usize) -> Self {
+        CommonFileBuilder {
+            file_id,
+            block_size,
+            index: IndexBlockBuilder::default(),
+            meta: MetaBlockBuilder::default(),
+        }
     }
 
-    fn as_file_info(&self, file_size: usize, footer: &Footer) -> FileInfo {
+    /// Add a new page to builder.
+    pub(super) async fn add_page<'a, E: Env>(
+        &mut self,
+        writer: &mut BufferedWriter<'a, E>,
+        page_id: u64,
+        page_addr: u64,
+        page_content: &[u8],
+    ) -> Result<()> {
+        let file_offset = writer.write(page_content).await?;
+        self.index.add_data_block(page_addr, file_offset);
+        self.meta.add_page(page_addr, page_id);
+        Ok(())
+    }
+
+    /// Add delete page to builder.
+    pub(super) fn add_delete_pages(&mut self, page_addrs: &[u64]) {
+        self.meta.delete_pages(page_addrs)
+    }
+
+    pub(super) async fn finish_meta_block<'a, E: Env>(
+        &mut self,
+        writer: &mut BufferedWriter<'a, E>,
+    ) -> Result<()> {
+        {
+            let page_tables = self.meta.finish_page_table_block();
+            let file_offset = writer.write(&page_tables).await?;
+            self.index.add_page_table_meta_block(file_offset)
+        }
+        {
+            let delete_pages = self.meta.finish_delete_pages_block();
+            let file_offset = writer.write(&delete_pages).await?;
+            self.index.add_delete_pages_meta_block(file_offset)
+        };
+        Ok(())
+    }
+
+    pub(super) async fn finish_index_block<'a, E: Env>(
+        &mut self,
+        writer: &mut BufferedWriter<'a, E>,
+    ) -> Result<(
+        BlockHandler, /* data index */
+        BlockHandler, /* meta index */
+    )> {
+        let (data_index, meta_index) = self.index.finish_index_block();
+        let data_offset = writer.write(&data_index).await?;
+        let meta_offset = writer.write(&meta_index).await?;
+        let data_handle = BlockHandler {
+            offset: data_offset,
+            length: data_index.len() as u64,
+        };
+        let meta_handle = BlockHandler {
+            offset: meta_offset,
+            length: meta_index.len() as u64,
+        };
+        Ok((data_handle, meta_handle))
+    }
+
+    pub(super) fn as_file_info(&self, file_size: usize, footer: &Footer) -> FileInfo {
         let meta = {
             let (indexes, offsets) = self.index.index_block.as_meta_file_cached(footer);
             Arc::new(FileMeta::new(
@@ -166,19 +210,23 @@ impl<'a, E: Env> FileBuilder<'a, E> {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub(crate) struct BlockHandler {
     pub(crate) offset: u64,
     pub(crate) length: u64,
 }
 
 impl BlockHandler {
-    fn encode(&self, bytes: &mut Vec<u8>) {
+    pub(super) fn encoded_size() -> usize {
+        core::mem::size_of::<u64>() * 2
+    }
+
+    pub(super) fn encode(&self, bytes: &mut Vec<u8>) {
         bytes.extend_from_slice(&self.offset.to_le_bytes());
         bytes.extend_from_slice(&self.length.to_le_bytes());
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self> {
+    pub(super) fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != core::mem::size_of::<u64>() * 2 {
             return Err(Error::Corrupted);
         }
@@ -457,7 +505,7 @@ impl IndexBlock {
     }
 }
 
-struct BufferedWriter<'a, E: Env> {
+pub(super) struct BufferedWriter<'a, E: Env> {
     file: E::SequentialWriter,
     base_dir: &'a E::Directory,
 
@@ -473,7 +521,7 @@ struct BufferedWriter<'a, E: Env> {
 }
 
 impl<'a, E: Env> BufferedWriter<'a, E> {
-    fn new(
+    pub(super) fn new(
         file: E::SequentialWriter,
         io_batch_size: usize,
         use_direct: bool,
@@ -494,7 +542,7 @@ impl<'a, E: Env> BufferedWriter<'a, E> {
         }
     }
 
-    async fn write(&mut self, page: &[u8]) -> Result<u64> {
+    pub(super) async fn write(&mut self, page: &[u8]) -> Result<u64> {
         let mut page_consumed = 0;
         let buf_cap = self.buffer.len();
         while page_consumed < page.len() {

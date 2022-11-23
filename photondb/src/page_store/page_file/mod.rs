@@ -1,5 +1,6 @@
 mod file_builder;
 pub(crate) use file_builder::FileBuilder;
+pub(self) use file_builder::{BlockHandler, BufferedWriter, CommonFileBuilder};
 
 mod file_reader;
 pub(crate) use file_reader::PageFileReader;
@@ -11,6 +12,8 @@ mod types;
 pub(crate) use facade::PageFiles;
 pub(crate) use types::{FileInfo, FileMeta};
 
+mod map_file_builder;
+
 pub(crate) mod constant {
     /// Default alignment requirement for the SSD.
     // TODO: query logical sector size
@@ -20,6 +23,9 @@ pub(crate) mod constant {
     pub(crate) const IO_BUFFER_SIZE: usize = 4096 * 4;
 
     pub(crate) const MAX_OPEN_READER_FD_NUM: u64 = 1000;
+
+    pub(crate) const PAGE_FILE_MAGIC: u64 = 142857;
+    pub(crate) const MAP_FILE_MAGIC: u64 = 0x179394;
 }
 
 pub(crate) mod facade {
