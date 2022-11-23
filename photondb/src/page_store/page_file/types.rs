@@ -357,7 +357,7 @@ impl MapFileMeta {
     }
 
     #[inline]
-    pub(crate) fn num_files(&self) -> usize {
+    pub(crate) fn num_page_files(&self) -> usize {
         self.page_files.len()
     }
 }
