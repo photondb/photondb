@@ -1,4 +1,9 @@
-use std::{collections::HashSet, fmt, mem, path::Path, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt, mem,
+    path::Path,
+    sync::Arc,
+};
 
 use crate::{env::Env, util::shutdown::ShutdownNotifier};
 
@@ -32,7 +37,7 @@ mod manifest;
 pub(crate) use manifest::Manifest;
 
 mod page_file;
-pub(crate) use page_file::{FileInfo, PageFiles};
+pub(crate) use page_file::{FileInfo, MapFileMeta, PageFiles};
 
 mod recover;
 mod strategy;
@@ -111,12 +116,14 @@ impl<E: Env> PageStore<E> {
     {
         let (next_file_id, manifest, table, page_files, file_infos) =
             Self::recover(env.to_owned(), path, &options).await?;
+        let map_files = HashMap::default();
 
         let version = Version::new(
             options.write_buffer_capacity,
             next_file_id,
             options.max_write_buffers,
             file_infos,
+            map_files,
             HashSet::default(),
         );
 

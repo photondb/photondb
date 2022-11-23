@@ -1,7 +1,9 @@
 #![allow(unused)]
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
-use super::{constant::*, BlockHandler, BufferedWriter, CommonFileBuilder, FileInfo};
+use super::{
+    constant::*, types::MapFileMeta, BlockHandler, BufferedWriter, CommonFileBuilder, FileInfo,
+};
 use crate::{
     env::Env,
     page_store::{Error, Result},
@@ -83,7 +85,18 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
         }
     }
 
-    pub(crate) async fn finish(&mut self) -> Result<()> {
+    pub(crate) async fn finish(mut self) -> Result<(HashMap<u32, FileInfo>, Arc<MapFileMeta>)> {
+        let file_size = self.finish_tail_blocks().await?;
+        let page_files = self
+            .file_infos
+            .iter()
+            .map(|(&id, info)| (id, info.meta()))
+            .collect::<HashMap<_, _>>();
+        let file_meta = Arc::new(MapFileMeta::new(self.file_id, file_size, page_files));
+        Ok((self.file_infos, file_meta))
+    }
+
+    async fn finish_tail_blocks(&mut self) -> Result<usize> {
         let page_index_block = self.page_index.finish();
         let offset = self.writer.write(&page_index_block).await?;
         let length = page_index_block.len() as u64;
@@ -93,8 +106,8 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
             page_index_handler,
         };
         let payload = footer.encode();
-        self.writer.write(&payload).await?;
-        Ok(())
+        let foot_offset = self.writer.write(&payload).await?;
+        Ok(foot_offset as usize + payload.len())
     }
 }
 
@@ -122,7 +135,8 @@ impl<'a, E: Env> PartialFileBuilder<'a, E> {
         self.builder
             .page_index
             .add_page_file(self.file_id, data, meta);
-        // TODO(walter) add file info.
+        let file_info = self.inner.as_file_info(0, data, Some(self.builder.file_id));
+        self.builder.file_infos.insert(self.file_id, file_info);
         Ok(self.builder)
     }
 }

@@ -87,7 +87,7 @@ impl<'a, E: Env> FileBuilder<'a, E> {
         let foot_offset = self.writer.write(&footer_dat).await?;
         let file_size = foot_offset as usize + footer_dat.len();
 
-        Ok(self.inner.as_file_info(file_size, &footer))
+        Ok(self.inner.as_file_info(file_size, footer.data_handle, None))
     }
 }
 
@@ -166,16 +166,26 @@ impl CommonFileBuilder {
         Ok((data_handle, meta_handle))
     }
 
-    pub(super) fn as_file_info(&self, file_size: usize, footer: &Footer) -> FileInfo {
+    pub(super) fn as_file_info(
+        &self,
+        file_size: usize,
+        data_handle: BlockHandler,
+        map_file_id: Option<u32>,
+    ) -> FileInfo {
         let meta = {
-            let (indexes, offsets) = self.index.index_block.as_meta_file_cached(footer);
-            Arc::new(FileMeta::new(
-                self.file_id,
-                file_size as usize,
-                indexes,
-                offsets,
-                self.block_size,
-            ))
+            let (indexes, offsets) = self.index.index_block.as_meta_file_cached(data_handle);
+            let file_meta = if let Some(map_file_id) = map_file_id {
+                FileMeta::new_partial(self.file_id, map_file_id, self.block_size, indexes, offsets)
+            } else {
+                FileMeta::new(
+                    self.file_id,
+                    file_size as usize,
+                    self.block_size,
+                    indexes,
+                    offsets,
+                )
+            };
+            Arc::new(file_meta)
         };
 
         let active_pages = {
@@ -210,7 +220,7 @@ impl CommonFileBuilder {
     }
 }
 
-#[derive(Default, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
 pub(crate) struct BlockHandler {
     pub(crate) offset: u64,
     pub(crate) length: u64,
@@ -495,11 +505,14 @@ impl IndexBlock {
         })
     }
 
-    pub(crate) fn as_meta_file_cached(&self, footer: &Footer) -> (Vec<u64>, BTreeMap<u64, u64>) {
+    pub(crate) fn as_meta_file_cached(
+        &self,
+        data_handle: BlockHandler,
+    ) -> (Vec<u64>, BTreeMap<u64, u64>) {
         let indexes = vec![
             self.meta_page_table.as_ref().unwrap().to_owned(),
             self.meta_delete_pages.as_ref().unwrap().to_owned(),
-            footer.data_handle.offset, // meta block's end is index_block's start.
+            data_handle.offset, // meta block's end is index_block's start.
         ];
         (indexes, self.page_offsets.to_owned())
     }

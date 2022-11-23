@@ -85,7 +85,7 @@ struct Inner {
     // The next id to allocate.
     next: AtomicU64,
     // The head of the free list.
-    // The list uses epoch-based reclaimation to prevent the ABA problem.
+    // The list uses epoch-based reclamation to prevent the ABA problem.
     free: AtomicU64,
 }
 

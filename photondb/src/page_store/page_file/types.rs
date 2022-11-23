@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -11,6 +11,8 @@ pub(crate) struct PageHandle {
     pub(crate) size: u32,
 }
 
+/// The volatile info for page file, also include the partial page files
+/// (partial of map file).
 #[derive(Clone)]
 pub(crate) struct FileInfo {
     active_pages: roaring::RoaringBitmap,
@@ -141,36 +143,66 @@ impl FileInfo {
         self.meta.file_size()
     }
 
+    /// Return the id of the map file this file belongs to. `None` is returned
+    /// if this file is not a partial page file.
+    #[inline]
+    pub(crate) fn get_map_file_id(&self) -> Option<u32> {
+        self.meta.belong_to
+    }
+
     #[inline]
     pub(crate) fn iter(&self) -> FileInfoIterator {
         FileInfoIterator::new(self)
     }
 }
 
+/// The immutable metadata for page file.
 pub(crate) struct FileMeta {
     file_id: u32,
     file_size: usize,
+    block_size: usize,
+
+    /// The id of map file which contains the page file.
+    belong_to: Option<u32>,
 
     data_offsets: BTreeMap<u64, u64>, // TODO: reduce this size.
-    meta_indexes: Vec<u64>,           // [0] -> page_table, [1] ->  delete page, [2], meta_bloc_end
 
-    block_size: usize,
+    // [0] -> page_table, [1] ->  delete page, [2], meta_block_end
+    meta_indexes: Vec<u64>,
 }
 
 impl FileMeta {
     pub(crate) fn new(
         file_id: u32,
         file_size: usize,
+        block_size: usize,
         meta_indexes: Vec<u64>,
         data_offsets: BTreeMap<u64, u64>,
-        block_size: usize,
     ) -> Self {
         Self {
             file_id,
             file_size,
+            belong_to: None,
             meta_indexes,
             data_offsets,
             block_size,
+        }
+    }
+
+    pub(crate) fn new_partial(
+        file_id: u32,
+        map_file_id: u32,
+        block_size: usize,
+        meta_indexes: Vec<u64>,
+        data_offsets: BTreeMap<u64, u64>,
+    ) -> Self {
+        FileMeta {
+            file_id,
+            file_size: 0,
+            block_size,
+            belong_to: Some(map_file_id),
+            meta_indexes,
+            data_offsets,
         }
     }
 
@@ -243,6 +275,48 @@ impl FileMeta {
         } else {
             Err(Error::Corrupted)
         }
+    }
+}
+
+#[allow(unused)]
+pub(crate) struct MapFileMeta {
+    file_id: u32,
+    file_size: usize,
+    page_files: HashMap<u32, Arc<FileMeta>>,
+}
+
+#[allow(unused)]
+impl MapFileMeta {
+    pub(crate) fn new(
+        file_id: u32,
+        file_size: usize,
+        page_files: HashMap<u32, Arc<FileMeta>>,
+    ) -> Self {
+        MapFileMeta {
+            file_id,
+            file_size,
+            page_files,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn file_id(&self) -> u32 {
+        self.file_id
+    }
+
+    #[inline]
+    pub(crate) fn file_size(&self) -> usize {
+        self.file_size
+    }
+
+    #[inline]
+    pub(crate) fn contains(&self, file_id: u32) -> bool {
+        self.page_files.contains_key(&file_id)
+    }
+
+    #[inline]
+    pub(crate) fn num_files(&self) -> usize {
+        self.page_files.len()
     }
 }
 

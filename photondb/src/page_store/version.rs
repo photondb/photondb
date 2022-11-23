@@ -10,7 +10,7 @@ use crossbeam_epoch::Guard;
 use futures::channel::oneshot;
 use log::debug;
 
-use super::{buffer_set::*, FileInfo, WriteBuffer};
+use super::{buffer_set::*, FileInfo, MapFileMeta, WriteBuffer};
 use crate::util::latch::Latch;
 
 pub(crate) struct VersionOwner {
@@ -20,7 +20,8 @@ pub(crate) struct VersionOwner {
 pub(crate) struct Version {
     pub(crate) buffer_set: Arc<BufferSet>,
 
-    files: HashMap<u32, FileInfo>,
+    page_files: HashMap<u32, FileInfo>,
+    map_files: HashMap<u32, Arc<MapFileMeta>>,
 
     // The id of the first buffer this version could access.
     first_buffer_id: u32,
@@ -37,7 +38,8 @@ pub(crate) struct Version {
 
 pub(crate) struct DeltaVersion {
     pub(crate) file_id: u32,
-    pub(crate) files: HashMap<u32, FileInfo>,
+    pub(crate) page_files: HashMap<u32, FileInfo>,
+    pub(crate) map_files: HashMap<u32, Arc<MapFileMeta>>,
     pub(crate) obsoleted_files: HashSet<u32>,
 }
 
@@ -93,7 +95,8 @@ impl VersionOwner {
         let new = Version::with_buffer_set(
             first_buffer_id,
             buffer_set,
-            delta.files,
+            delta.page_files,
+            delta.map_files,
             delta.obsoleted_files,
         );
         let new = Box::new(Arc::new(new));
@@ -159,7 +162,8 @@ impl Version {
         buffer_capacity: u32,
         next_file_id: u32,
         max_sealed_buffers: usize,
-        files: HashMap<u32, FileInfo>,
+        page_files: HashMap<u32, FileInfo>,
+        map_files: HashMap<u32, Arc<MapFileMeta>>,
         obsoleted_files: HashSet<u32>,
     ) -> Self {
         let buffer_set = Arc::new(BufferSet::new(
@@ -167,19 +171,27 @@ impl Version {
             buffer_capacity,
             max_sealed_buffers,
         ));
-        Self::with_buffer_set(next_file_id, buffer_set, files, obsoleted_files)
+        Self::with_buffer_set(
+            next_file_id,
+            buffer_set,
+            page_files,
+            map_files,
+            obsoleted_files,
+        )
     }
 
     pub(crate) fn with_buffer_set(
         first_buffer_id: u32,
         buffer_set: Arc<BufferSet>,
-        files: HashMap<u32, FileInfo>,
+        page_files: HashMap<u32, FileInfo>,
+        map_files: HashMap<u32, Arc<MapFileMeta>>,
         obsoleted_files: HashSet<u32>,
     ) -> Self {
         let (sender, receiver) = oneshot::channel();
         Version {
             first_buffer_id,
-            files,
+            page_files,
+            map_files,
             obsoleted_files,
             buffer_set,
 
@@ -218,8 +230,14 @@ impl Version {
     }
 
     #[inline]
-    pub(crate) fn files(&self) -> &HashMap<u32, FileInfo> {
-        &self.files
+    pub(crate) fn page_files(&self) -> &HashMap<u32, FileInfo> {
+        &self.page_files
+    }
+
+    #[allow(unused)]
+    #[inline]
+    pub(crate) fn map_files(&self) -> &HashMap<u32, Arc<MapFileMeta>> {
+        &self.map_files
     }
 
     #[inline]
@@ -332,7 +350,14 @@ mod tests {
 
     #[test]
     fn version_access_newly_buffers() {
-        let version = Version::new(1 << 10, 1, 8, HashMap::default(), HashSet::new());
+        let version = Version::new(
+            1 << 10,
+            1,
+            8,
+            HashMap::default(),
+            HashMap::default(),
+            HashSet::new(),
+        );
         let buffer_id = version.first_buffer_id;
         for i in 1..100 {
             let buf = Arc::new(WriteBuffer::with_capacity(buffer_id + i, 1 << 10));
@@ -347,7 +372,14 @@ mod tests {
 
     #[test]
     fn version_access_unguarded_buffers() {
-        let version = Version::new(1 << 10, 1, 8, HashMap::default(), HashSet::new());
+        let version = Version::new(
+            1 << 10,
+            1,
+            8,
+            HashMap::default(),
+            HashMap::default(),
+            HashSet::new(),
+        );
         let owner = VersionOwner::new(version);
         let version = owner.current();
         let buffer_id = {
@@ -367,7 +399,8 @@ mod tests {
         // install new version
         owner.install(DeltaVersion {
             file_id: buffer_id,
-            files: HashMap::default(),
+            page_files: HashMap::default(),
+            map_files: HashMap::default(),
             obsoleted_files: HashSet::new(),
         });
 
