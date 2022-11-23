@@ -3,7 +3,7 @@ use ::std::sync::{
     Arc,
 };
 
-use crate::*;
+use crate::page_store::{Error, Result};
 
 pub(crate) trait Cache<T: Clone>: Sized {
     fn insert(
@@ -17,7 +17,7 @@ pub(crate) trait Cache<T: Clone>: Sized {
 
     fn release(&self, h: *mut Handle<T>) -> bool;
 
-    fn erase(&self, key: u64);
+    fn erase(self: &Arc<Self>, key: u64);
 }
 
 pub(crate) struct CacheEntry<T, C>
@@ -965,7 +965,7 @@ pub(crate) mod clock {
             shard.release(h)
         }
 
-        fn erase(&self, key: u64) {
+        fn erase(self: &Arc<Self>, key: u64) {
             let hash = Self::hash_key(key);
             let idx = self.shard(hash);
             let shard = &self.shards[idx as usize];

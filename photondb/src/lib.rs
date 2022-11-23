@@ -71,6 +71,7 @@ mod tests {
             file_base_size: 1 << 20,
             cache_capacity: 2 << 10,
             cache_estimated_entry_charge: 1,
+            prepopulate_cache_on_flush: true,
         },
     };
 

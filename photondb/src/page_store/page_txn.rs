@@ -345,9 +345,11 @@ impl<'a, E: Env> Drop for PageTxn<'a, E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::page_store::{
-        page_table::PageTable,
-        version::{DeltaVersion, Version},
+    use crate::{
+        page_store::{
+            page_table::PageTable,
+            version::{DeltaVersion, Version},
+        },
         PageStoreOptions,
     };
 

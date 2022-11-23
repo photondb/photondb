@@ -106,6 +106,11 @@ pub struct Options {
     ///   dramatically affect lookup times, instead letting the hit rate suffer
     ///   by not utilizing the full capacity.
     pub cache_estimated_entry_charge: usize,
+
+    /// Insert warm pages into PageCache during flush if true.
+    ///
+    /// Default: false
+    pub prepopulate_cache_on_flush: bool,
 }
 
 impl Default for Options {
@@ -119,6 +124,7 @@ impl Default for Options {
             file_base_size: 64 << 20,
             cache_capacity: 8 << 20,
             cache_estimated_entry_charge: 8 << 10,
+            prepopulate_cache_on_flush: false,
         }
     }
 }

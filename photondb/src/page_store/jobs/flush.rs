@@ -84,7 +84,7 @@ impl<E: Env> FlushCtx<E> {
             start_at.elapsed().as_micros()
         );
 
-        let mut files = self.apply_dealloc_pages(version, file_id, dealloc_pages);
+        let mut files = self.apply_dealloc_pages(version, file_id, dealloc_pages.to_owned());
         let obsoleted_files = drain_obsoleted_files(&mut files, reclaimed_files);
         files.insert(file_id, file_info);
 
@@ -128,6 +128,8 @@ impl<E: Env> FlushCtx<E> {
         let file_id = write_buffer.file_id();
         info!("Flush write buffer {file_id} to page file, {flush_stats}");
 
+        self.page_files.evict_cached_pages(&dealloc_pages);
+
         let mut builder = self.page_files.new_page_file_builder(file_id).await?;
         for (page_addr, header, record_ref) in write_buffer.iter() {
             match record_ref {
@@ -140,6 +142,7 @@ impl<E: Env> FlushCtx<E> {
                     builder
                         .add_page(header.page_id(), page_addr, content)
                         .await?;
+                    let _ = self.page_files.populate_cache(page_addr, content);
                 }
             }
         }

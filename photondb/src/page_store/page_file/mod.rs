@@ -43,7 +43,7 @@ pub(crate) mod facade {
     };
     use crate::{
         env::{Env, PositionalReader, SequentialWriter},
-        page_store::{CacheEntry, ClockCache, Result},
+        page_store::{Cache, CacheEntry, ClockCache, Result},
         PageStoreOptions,
     };
 
@@ -58,6 +58,7 @@ pub(crate) mod facade {
         base_dir: E::Directory,
 
         use_direct: bool,
+        prepopulate_cache_on_flush: bool,
 
         reader_cache: file_reader::ReaderCache<E>,
         page_cache: Arc<ClockCache<Vec<u8>>>,
@@ -81,11 +82,13 @@ pub(crate) mod facade {
                 false,
             ));
             let use_direct = options.use_direct_io;
+            let prepopulate_cache_on_flush = options.prepopulate_cache_on_flush;
             Self {
                 env,
                 base,
                 base_dir,
                 use_direct,
+                prepopulate_cache_on_flush,
                 reader_cache,
                 page_cache,
             }
@@ -136,8 +139,6 @@ pub(crate) mod facade {
             handle: PageHandle,
             file_info: &FileInfo,
         ) -> Result<CacheEntry<Vec<u8>, ClockCache<Vec<u8>>>> {
-            use crate::page_store::Cache;
-
             if let Some(cache_entry) = self.page_cache.lookup(addr) {
                 return Ok(cache_entry);
             }
@@ -145,7 +146,8 @@ pub(crate) mod facade {
             let reader = self
                 .open_page_reader(file_id, file_info.meta().block_size())
                 .await?;
-            let mut buf = vec![0u8; handle.size as usize];
+
+            let mut buf = vec![0u8; handle.size as usize]; // TODO: aligned buffer pool
             reader.read_exact_at(&mut buf, handle.offset as u64).await?;
 
             let charge = buf.len();
@@ -285,6 +287,24 @@ pub(crate) mod facade {
                 .await
                 .expect("remove page file failed");
             Ok(())
+        }
+
+        pub(crate) fn populate_cache(&self, page_addr: u64, page_content: &[u8]) -> Result<()> {
+            if !self.prepopulate_cache_on_flush {
+                return Ok(());
+            }
+            let val = page_content.to_owned(); // TODO: aligned buffer pool
+            let guard = self
+                .page_cache
+                .insert(page_addr, Some(val), page_content.len())?;
+            drop(guard);
+            Ok(())
+        }
+
+        pub(crate) fn evict_cached_pages(&self, page_addrs: &[u64]) {
+            for page_addr in page_addrs {
+                self.page_cache.erase(*page_addr);
+            }
         }
 
         pub(crate) fn list_page_files(&self) -> Result<Vec<u32>> {
