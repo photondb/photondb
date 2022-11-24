@@ -5,9 +5,6 @@ pub(self) use file_builder::{BlockHandler, BufferedWriter, CommonFileBuilder};
 mod file_reader;
 pub(crate) use file_reader::{read_page_table, PageFileReader};
 
-mod info_builder;
-pub(crate) use info_builder::FileInfoBuilder;
-
 mod types;
 pub(crate) use facade::PageFiles;
 pub(crate) use types::{FileInfo, FileMeta, MapFileInfo};
@@ -16,7 +13,7 @@ mod map_file_builder;
 pub(crate) use map_file_builder::{MapFileBuilder, PartialFileBuilder};
 
 mod map_file_reader;
-pub(crate) use map_file_reader::{MapFileMetaReader, MapFileReader};
+pub(crate) use map_file_reader::{MapFileMetaHolder, MapFileReader};
 
 pub(crate) mod constant {
     /// Default alignment requirement for the SSD.
@@ -196,11 +193,6 @@ pub(crate) mod facade {
             todo!("support file cache")
         }
 
-        // Create info_builder to help recovery & mantains version's file_info.
-        pub(crate) fn new_info_builder(&self) -> FileInfoBuilder<E> {
-            FileInfoBuilder::new(self.env.to_owned(), self.base.to_owned())
-        }
-
         pub(crate) async fn open_page_file_meta_reader(
             &self,
             file_id: u32,
@@ -217,11 +209,7 @@ pub(crate) mod facade {
             MetaReader::open(page_file_reader, file_id).await
         }
 
-        #[allow(unused)]
-        pub(crate) async fn open_map_file_meta_reader(
-            &self,
-            file_id: u32,
-        ) -> Result<MapFileMetaReader<<E as Env>::PositionalReader>> {
+        pub(crate) async fn read_map_file_meta(&self, file_id: u32) -> Result<MapFileMetaHolder> {
             let (file, file_size) = self
                 .open_positional_reader(PAGE_FILE_PREFIX, file_id)
                 .await?;
@@ -231,7 +219,7 @@ pub(crate) mod facade {
                 DEFAULT_BLOCK_SIZE,
                 file_size as usize,
             ));
-            MapFileMetaReader::open(file_id, page_file_reader).await
+            MapFileMetaHolder::read(file_id, page_file_reader).await
         }
 
         async fn open_positional_reader(
@@ -339,8 +327,6 @@ pub(crate) mod facade {
 
     #[cfg(test)]
     mod tests {
-        use std::collections::HashMap;
-
         use tempdir::TempDir;
 
         use super::*;
@@ -474,105 +460,6 @@ pub(crate) mod facade {
         }
 
         #[photonio::test]
-        fn test_file_info_recovery_and_add_new_file() {
-            let env = crate::env::Photon;
-            let base = TempDir::new("test_recovery").unwrap();
-            let files = PageFiles::new(env, base.path(), &test_option()).await;
-
-            let info_builder = files.new_info_builder();
-            {
-                // test add new files.
-                let mut mock_version = HashMap::new();
-                {
-                    let file_id = 1;
-                    let mut b = files.new_page_file_builder(file_id).await.unwrap();
-                    b.add_page(1, page_addr(file_id, 0), &[1].repeat(10))
-                        .await
-                        .unwrap();
-                    b.add_page(2, page_addr(file_id, 1), &[2].repeat(10))
-                        .await
-                        .unwrap();
-                    b.add_page(3, page_addr(file_id, 2), &[3].repeat(10))
-                        .await
-                        .unwrap();
-                    let file_info = b.finish().await.unwrap();
-                    mock_version.insert(file_id, file_info);
-                }
-
-                {
-                    // add an additional file with delete file1's page info.
-                    let file_id = 2;
-                    let delete_pages = &[page_addr(1, 0)];
-
-                    let mut b = files.new_page_file_builder(file_id).await.unwrap();
-                    b.add_page(4, page_addr(file_id, 0), &[1].repeat(10))
-                        .await
-                        .unwrap();
-                    b.add_page(5, page_addr(file_id, 1), &[2].repeat(10))
-                        .await
-                        .unwrap();
-                    b.add_page(6, page_addr(file_id, 4), &[3].repeat(10))
-                        .await
-                        .unwrap();
-                    b.add_delete_pages(delete_pages);
-                    let file_info = b.finish().await.unwrap();
-
-                    let original_file1_active_size = mock_version.get(&1).unwrap().effective_size();
-                    mock_version = info_builder
-                        .add_file_info(&mock_version, file_info, delete_pages)
-                        .unwrap();
-
-                    let file1 = mock_version.get(&1).unwrap();
-                    assert_eq!(file1.effective_size(), original_file1_active_size - 10);
-                    assert!(file1.get_page_handle(page_addr(1, 0)).is_none());
-                    assert!(file1.get_page_handle(page_addr(1, 1)).is_some());
-
-                    let file2 = mock_version.get(&2).unwrap();
-                    let hd = file2.get_page_handle(page_addr(2, 4)).unwrap();
-                    assert_eq!(hd.size, 10);
-                    assert_eq!(hd.offset, 20);
-                }
-
-                {
-                    let file_id = 3;
-                    let delete_pages = &[page_addr(2, 0)];
-                    let mut b = files.new_page_file_builder(file_id).await.unwrap();
-                    b.add_delete_pages(delete_pages);
-                    let file_info = b.finish().await.unwrap();
-                    info_builder
-                        .add_file_info(&mock_version, file_info, delete_pages)
-                        .unwrap();
-                }
-            }
-
-            {
-                // test recovery file_info from folder.
-                let known_files = &[1, 2, 3]
-                    .iter()
-                    .cloned()
-                    .map(Into::into)
-                    .collect::<Vec<_>>();
-                let recovery_mock_version = info_builder
-                    .recover_page_file_infos(known_files)
-                    .await
-                    .unwrap();
-                let file1 = recovery_mock_version.get(&1).unwrap();
-                assert_eq!(file1.effective_size(), 20);
-                assert!(file1.get_page_handle(page_addr(1, 0)).is_none());
-                let file2 = recovery_mock_version.get(&2).unwrap();
-                assert_eq!(file2.effective_size(), 20);
-                let file2 = recovery_mock_version.get(&2).unwrap();
-                let hd = file2.get_page_handle(page_addr(2, 4)).unwrap();
-                assert_eq!(hd.size, 10);
-                assert_eq!(hd.offset, 20);
-
-                let meta_reader = files.open_page_file_meta_reader(3).await.unwrap();
-                let page_table = meta_reader.read_page_table().await.unwrap();
-                assert!(page_table.is_empty())
-            }
-        }
-
-        #[photonio::test]
         fn test_query_page_id_by_addr() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_query_id_by_addr").unwrap();
@@ -605,7 +492,6 @@ pub(crate) mod facade {
             let env = crate::env::Photon;
             let base = TempDir::new("test_get_child_page").unwrap();
             let files = PageFiles::new(env, base.path(), &test_option()).await;
-            let info_builder = files.new_info_builder();
 
             let file_id = 1;
             let page_addr1 = page_addr(file_id, 0);
@@ -617,15 +503,6 @@ pub(crate) mod facade {
                 b.add_page(1, page_addr2, &[2].repeat(10)).await.unwrap();
                 let file_info = b.finish().await.unwrap();
                 assert!(file_info.get_page_handle(page_addr1).is_some())
-            }
-
-            {
-                let recovery_mock_version = info_builder
-                    .recover_page_file_infos(&[file_id.into()])
-                    .await
-                    .unwrap();
-                let file1 = recovery_mock_version.get(&1).unwrap();
-                assert!(file1.get_page_handle(page_addr1).is_some())
             }
         }
 

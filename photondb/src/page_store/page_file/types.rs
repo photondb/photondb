@@ -281,6 +281,15 @@ impl FileMeta {
             Err(Error::Corrupted)
         }
     }
+
+    pub(crate) fn pages_bitmap(&self) -> roaring::RoaringBitmap {
+        let mut pages = roaring::RoaringBitmap::new();
+        for page_addr in self.data_offsets().keys() {
+            let (_, index) = split_page_addr(*page_addr);
+            pages.insert(index);
+        }
+        pages
+    }
 }
 
 #[allow(unused)]
@@ -322,10 +331,6 @@ impl MapFileInfo {
     #[inline]
     pub(crate) fn up2(&self) -> u32 {
         self.up2
-    }
-
-    pub(crate) fn get_page_handle(&self, addr: u64) -> Option<PageHandle> {
-        todo!()
     }
 }
 

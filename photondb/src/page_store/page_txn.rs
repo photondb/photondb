@@ -78,16 +78,11 @@ impl<E: Env> Guard<E> {
 
         let page_handle = if let Some(map_file_id) = file_info.get_map_file_id() {
             // This is partial page file, read page from the corresponding map file.
-            let Some(file_info) = self.version.map_files().get(&map_file_id) else {
-                panic!("Map file {file_id} is not exists");
-            };
-            assert_eq!(file_info.file_id(), map_file_id);
-
-            let Some(handle) = file_info.get_page_handle(addr) else {
+            let Some(_) = file_info.get_page_handle(addr) else {
                 panic!("The addr {addr} is not belongs to the target map file {file_id}");
             };
 
-            handle
+            todo!("read page from map file {map_file_id}");
         } else {
             let Some(handle) = file_info.get_page_handle(addr) else {
                 panic!("The addr {addr} is not belongs to the target page file {file_id}");
