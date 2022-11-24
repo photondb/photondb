@@ -210,7 +210,7 @@ where
     async fn rewrite_file_impl(&self, file: &FileInfo, version: &Arc<Version>) -> Result<()> {
         let start_at = Instant::now();
         let file_id = file.get_file_id();
-        let reader = self.page_files.open_meta_reader(file_id).await?;
+        let reader = self.page_files.open_page_file_meta_reader(file_id).await?;
         let page_table = reader.read_page_table().await?;
         let dealloc_pages = reader.read_delete_pages().await?;
 

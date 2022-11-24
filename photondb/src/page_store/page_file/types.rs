@@ -323,12 +323,17 @@ impl MapFileInfo {
     pub(crate) fn up2(&self) -> u32 {
         self.up2
     }
+
+    pub(crate) fn get_page_handle(&self, addr: u64) -> Option<PageHandle> {
+        todo!()
+    }
 }
 
 #[allow(unused)]
 pub(crate) struct MapFileMeta {
     file_id: u32,
     file_size: usize,
+    block_size: usize,
     page_files: HashMap<u32, Arc<FileMeta>>,
 }
 
@@ -337,11 +342,13 @@ impl MapFileMeta {
     pub(crate) fn new(
         file_id: u32,
         file_size: usize,
+        block_size: usize,
         page_files: HashMap<u32, Arc<FileMeta>>,
     ) -> Self {
         MapFileMeta {
             file_id,
             file_size,
+            block_size,
             page_files,
         }
     }
@@ -354,6 +361,11 @@ impl MapFileMeta {
     #[inline]
     pub(crate) fn file_size(&self) -> usize {
         self.file_size
+    }
+
+    #[inline]
+    pub(crate) fn block_size(&self) -> usize {
+        self.block_size
     }
 
     #[inline]

@@ -75,7 +75,31 @@ impl<E: Env> Guard<E> {
         assert_eq!(file_info.get_file_id(), file_id);
         if let Some(map_file_id) = file_info.get_map_file_id() {
             // This is partial page file, read page from the corresponding map file.
-            todo!("read page from {map_file_id}");
+            let Some(file_info) = self.version.map_files().get(&map_file_id) else {
+                panic!("Map file {file_id} is not exists");
+            };
+            assert_eq!(file_info.file_id(), map_file_id);
+            let Some(handle) = file_info.get_page_handle(addr) else {
+                panic!("The addr {addr} is not belongs to the target map file {file_id}");
+            };
+
+            // TODO: cache page file reader for speed up.
+            let reader = self
+                .page_files
+                .open_page_reader(file_id, file_info.meta().block_size())
+                .await?;
+            let mut buf = vec![0u8; handle.size as usize];
+            reader.read_exact_at(&mut buf, handle.offset as u64).await?;
+
+            let mut owned_pages = self.owned_pages.lock().expect("Poisoned");
+            owned_pages.push(buf);
+            let page = owned_pages.last().expect("Verified");
+            let page = page.as_slice();
+
+            return Ok(PageRef::new(unsafe {
+                // Safety: the lifetime is guarranted by `guard`.
+                std::slice::from_raw_parts(page.as_ptr(), page.len())
+            }));
         }
 
         let Some(handle) = file_info.get_page_handle(addr) else {

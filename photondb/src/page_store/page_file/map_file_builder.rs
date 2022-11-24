@@ -47,16 +47,16 @@ pub(crate) struct PageIndexBuilder {
 
 /// A handler for partial page file.
 #[derive(Debug, PartialEq, Eq)]
-struct PageIndex {
-    file_id: u32,
-    data_handler: BlockHandler,
-    meta_handler: BlockHandler,
+pub(super) struct PageIndex {
+    pub(super) file_id: u32,
+    pub(super) data_handle: BlockHandler,
+    pub(super) meta_handle: BlockHandler,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Footer {
-    magic: u64,
-    page_index_handler: BlockHandler,
+    pub(super) magic: u64,
+    pub(super) page_index_handle: BlockHandler,
 }
 
 impl<'a, E: Env> MapFileBuilder<'a, E> {
@@ -93,7 +93,12 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
             .iter()
             .map(|(&id, info)| (id, info.meta()))
             .collect::<HashMap<_, _>>();
-        let file_meta = Arc::new(MapFileMeta::new(self.file_id, file_size, page_files));
+        let file_meta = Arc::new(MapFileMeta::new(
+            self.file_id,
+            file_size,
+            DEFAULT_BLOCK_SIZE,
+            page_files,
+        ));
         let file_info = MapFileInfo::new(self.file_id, self.file_id, file_meta);
         Ok((self.file_infos, file_info))
     }
@@ -105,7 +110,7 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
         let page_index_handler = BlockHandler { offset, length };
         let footer = Footer {
             magic: MAP_FILE_MAGIC,
-            page_index_handler,
+            page_index_handle: page_index_handler,
         };
         let payload = footer.encode();
         let foot_offset = self.writer.write(&payload).await?;
@@ -152,8 +157,8 @@ impl PageIndexBuilder {
     ) {
         self.pages.push(PageIndex {
             file_id,
-            data_handler,
-            meta_handler,
+            data_handle: data_handler,
+            meta_handle: meta_handler,
         });
     }
 
@@ -168,7 +173,7 @@ impl PageIndexBuilder {
 
 impl PageIndex {
     #[inline]
-    fn encoded_size() -> usize {
+    pub(super) const fn encoded_size() -> usize {
         core::mem::size_of::<u32>() + core::mem::size_of::<u64>() * 4
     }
 
@@ -182,11 +187,11 @@ impl PageIndex {
     #[inline]
     fn encode(&self, buf: &mut Vec<u8>) {
         buf.extend_from_slice(&self.file_id.to_le_bytes());
-        self.data_handler.encode(buf);
-        self.meta_handler.encode(buf);
+        self.data_handle.encode(buf);
+        self.meta_handle.encode(buf);
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self> {
+    pub(super) fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != Self::encoded_size() {
             return Err(Error::Corrupted);
         }
@@ -205,15 +210,15 @@ impl PageIndex {
 
         Ok(PageIndex {
             file_id,
-            data_handler,
-            meta_handler,
+            data_handle: data_handler,
+            meta_handle: meta_handler,
         })
     }
 }
 
 impl Footer {
     #[inline]
-    fn encoded_size() -> usize {
+    pub(super) const fn encoded_size() -> usize {
         core::mem::size_of::<u64>() * 3
     }
 
@@ -221,11 +226,11 @@ impl Footer {
     fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(Self::encoded_size());
         bytes.extend_from_slice(&self.magic.to_le_bytes());
-        self.page_index_handler.encode(&mut bytes);
+        self.page_index_handle.encode(&mut bytes);
         bytes
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self> {
+    pub(super) fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() != Self::encoded_size() {
             return Err(Error::Corrupted);
         }
@@ -239,7 +244,7 @@ impl Footer {
         let page_index_handler = BlockHandler::decode(&bytes[idx..end])?;
         Ok(Self {
             magic,
-            page_index_handler,
+            page_index_handle: page_index_handler,
         })
     }
 }
@@ -253,7 +258,7 @@ mod tests {
     fn footer_encode_and_decode() {
         let footer = Footer {
             magic: 123,
-            page_index_handler: BlockHandler {
+            page_index_handle: BlockHandler {
                 offset: 1234,
                 length: 64234,
             },
@@ -268,11 +273,11 @@ mod tests {
     fn page_index_encode_and_decode() {
         let page_index = PageIndex {
             file_id: 123,
-            data_handler: BlockHandler {
+            data_handle: BlockHandler {
                 offset: 5632,
                 length: 123,
             },
-            meta_handler: BlockHandler {
+            meta_handle: BlockHandler {
                 offset: 999,
                 length: 123,
             },
