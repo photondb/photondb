@@ -8,12 +8,16 @@ pub enum Error {
     /// Some data is corrupted.
     #[error("Corrupted")]
     Corrupted,
+    /// Over Memory Limit(cache).
+    #[error("MemoryLimit")]
+    MemoryLimit,
 }
 
 impl From<PageError> for Error {
     fn from(err: PageError) -> Self {
         match err {
             PageError::Corrupted => Self::Corrupted,
+            PageError::MemoryLimit => Self::MemoryLimit,
             e => unreachable!("unexpected error: {:?}", e),
         }
     }
