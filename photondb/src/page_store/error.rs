@@ -9,8 +9,9 @@ pub(crate) enum Error {
     #[error("Invalid argument")]
     InvalidArgument,
     #[error("Memory Limit")]
-    #[allow(dead_code)]
     MemoryLimit,
+    #[error("TooLarge put size")]
+    TooLargeSize,
     #[error("IO {0}")]
     Io(#[from] std::io::Error),
 }

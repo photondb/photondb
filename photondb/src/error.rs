@@ -11,6 +11,9 @@ pub enum Error {
     /// Over Memory Limit(cache).
     #[error("MemoryLimit")]
     MemoryLimit,
+    /// Put data is too large.
+    #[error("TooLargeSize")]
+    TooLargeSize,
 }
 
 impl From<PageError> for Error {
@@ -18,6 +21,7 @@ impl From<PageError> for Error {
         match err {
             PageError::Corrupted => Self::Corrupted,
             PageError::MemoryLimit => Self::MemoryLimit,
+            PageError::TooLargeSize => Self::TooLargeSize,
             e => unreachable!("unexpected error: {:?}", e),
         }
     }

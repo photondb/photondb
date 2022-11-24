@@ -587,6 +587,9 @@ impl BufferState {
         const ALIGN: u32 = core::mem::size_of::<usize>() as u32;
         debug_assert_eq!(self.allocated % ALIGN, 0);
         let required = next_multiple_of_u32(required, ALIGN);
+        if required > buf_size {
+            return Err(Error::TooLargeSize);
+        }
         if self.allocated + required > buf_size {
             return Err(Error::Again);
         }
@@ -956,12 +959,29 @@ mod tests {
     }
 
     #[test]
-    fn write_buffer_alloc_out_of_range() {
-        let buf = WriteBuffer::with_capacity(1, 1 << 10);
+    fn write_buffer_alloc_out_of_range_try_next() {
+        let buf = WriteBuffer::with_capacity(1, 8 << 10);
+
+        // alloc 6 of 8
+        unsafe { buf.alloc_page(1, 4 << 10, true) }.unwrap();
+        unsafe { buf.alloc_page(2, 2 << 10, false) }.unwrap();
+
+        // try +4 return again to try next writebuffer.
+        assert!(matches!(
+            unsafe { buf.alloc_page(3, 4 << 10, false) },
+            Err(Error::Again)
+        ));
+
+        unsafe { buf.release_writer() };
+    }
+
+    #[test]
+    fn write_buffer_alloc_out_of_range_too_large_size() {
+        let buf = WriteBuffer::with_capacity(1, 2 << 10);
 
         assert!(matches!(
-            unsafe { buf.alloc_page(1, 2 << 10, true) },
-            Err(Error::Again)
+            unsafe { buf.alloc_page(1, 4 << 10, true) },
+            Err(Error::TooLargeSize)
         ));
     }
 
