@@ -93,7 +93,7 @@ impl<E: Env> PageStore<E> {
         let mut files = active_files.values().cloned().collect::<Vec<_>>();
         files.sort_unstable();
         let builder = page_files.new_info_builder();
-        builder.recovery_base_file_infos(&files).await
+        builder.recover_page_file_infos(&files).await
     }
 
     async fn recover_map_file_infos(
@@ -119,7 +119,7 @@ impl<E: Env> PageStore<E> {
 
         let mut table = PageTableBuilder::default();
         for file_id in files {
-            let meta_reader = page_files.open_meta_reader(file_id).await?;
+            let meta_reader = page_files.open_page_file_meta_reader(file_id).await?;
             for (page_addr, page_id) in meta_reader.read_page_table().await? {
                 table.set(page_id, page_addr);
             }

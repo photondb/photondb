@@ -15,6 +15,9 @@ pub(crate) use types::{FileInfo, FileMeta, MapFileInfo};
 mod map_file_builder;
 pub(crate) use map_file_builder::{MapFileBuilder, PartialFileBuilder};
 
+mod map_file_reader;
+pub(crate) use map_file_reader::{MapFileMetaReader, MapFileReader};
+
 pub(crate) mod constant {
     /// Default alignment requirement for the SSD.
     // TODO: query logical sector size
@@ -122,19 +125,30 @@ pub(crate) mod facade {
             let r = self
                 .reader_cache
                 .get_with(file_id, async move {
-                    let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_PREFIX));
-
-                    let file = self
-                        .env
-                        .open_positional_reader(path)
+                    let (file, file_size) = self
+                        .open_positional_reader(PAGE_FILE_PREFIX, file_id)
                         .await
                         .expect("open reader for file_id: {file_id} fail");
                     let use_direct = self.use_direct && file.direct_io_ify().is_ok();
-
-                    Arc::new(PageFileReader::from(file, use_direct, block_size))
+                    Arc::new(PageFileReader::from(
+                        file,
+                        use_direct,
+                        block_size,
+                        file_size as usize,
+                    ))
                 })
                 .await;
             Ok(r)
+        }
+
+        /// Open a reader for the specified map file.
+        #[allow(unused)]
+        pub(crate) async fn open_map_file_reader(
+            &self,
+            file_id: u32,
+            block_size: usize,
+        ) -> Result<Arc<MapFileReader<E::PositionalReader>>> {
+            todo!("support file cache")
         }
 
         // Create info_builder to help recovery & mantains version's file_info.
@@ -142,24 +156,57 @@ pub(crate) mod facade {
             FileInfoBuilder::new(self.env.to_owned(), self.base.to_owned())
         }
 
-        pub(crate) async fn open_meta_reader(
+        pub(crate) async fn open_page_file_meta_reader(
             &self,
             file_id: u32,
         ) -> Result<MetaReader<<E as Env>::PositionalReader>> {
-            let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_PREFIX));
+            let (file, file_size) = self
+                .open_positional_reader(PAGE_FILE_PREFIX, file_id)
+                .await?;
+            let page_file_reader = Arc::new(PageFileReader::from(
+                file,
+                true,
+                DEFAULT_BLOCK_SIZE,
+                file_size as usize,
+            ));
+            MetaReader::open(page_file_reader, file_id).await
+        }
+
+        #[allow(unused)]
+        pub(crate) async fn open_map_file_meta_reader(
+            &self,
+            file_id: u32,
+        ) -> Result<MapFileMetaReader<<E as Env>::PositionalReader>> {
+            let (file, file_size) = self
+                .open_positional_reader(PAGE_FILE_PREFIX, file_id)
+                .await?;
+            let page_file_reader = Arc::new(MapFileReader::from(
+                file,
+                true,
+                DEFAULT_BLOCK_SIZE,
+                file_size as usize,
+            ));
+            MapFileMetaReader::open(file_id, page_file_reader).await
+        }
+
+        async fn open_positional_reader(
+            &self,
+            prefix: &str,
+            file_id: u32,
+        ) -> Result<(E::PositionalReader, u64)> {
+            let path = self.base.join(format!("{}_{file_id}", prefix));
             let file_size = self
                 .env
                 .metadata(&path)
                 .await
                 .expect("read fs metadata fail")
-                .len as u32;
+                .len;
             let file = self
                 .env
                 .open_positional_reader(path)
                 .await
                 .expect("open reader for file_id: {file_id} fail");
-            let page_file_reader = PageFileReader::from(file, true, DEFAULT_BLOCK_SIZE);
-            MetaReader::open(page_file_reader, file_size, file_id).await
+            Ok((file, file_size))
         }
 
         pub(crate) async fn remove_page_files(&self, files: Vec<u32>) -> Result<()> {
@@ -330,7 +377,7 @@ pub(crate) mod facade {
             };
             {
                 let meta = {
-                    let meta_reader = files.open_meta_reader(file_id).await.unwrap();
+                    let meta_reader = files.open_page_file_meta_reader(file_id).await.unwrap();
                     assert_eq!(
                         meta_reader.file_metadata().total_page_size(),
                         8192 + 8192 / 2 + 8192 / 3
@@ -443,7 +490,7 @@ pub(crate) mod facade {
                     .map(Into::into)
                     .collect::<Vec<_>>();
                 let recovery_mock_version = info_builder
-                    .recovery_base_file_infos(known_files)
+                    .recover_page_file_infos(known_files)
                     .await
                     .unwrap();
                 let file1 = recovery_mock_version.get(&1).unwrap();
@@ -456,7 +503,7 @@ pub(crate) mod facade {
                 assert_eq!(hd.size, 10);
                 assert_eq!(hd.offset, 20);
 
-                let meta_reader = files.open_meta_reader(3).await.unwrap();
+                let meta_reader = files.open_page_file_meta_reader(3).await.unwrap();
                 let page_table = meta_reader.read_page_table().await.unwrap();
                 assert!(page_table.is_empty())
             }
@@ -482,7 +529,7 @@ pub(crate) mod facade {
             }
 
             {
-                let meta_reader = files.open_meta_reader(file_id).await.unwrap();
+                let meta_reader = files.open_page_file_meta_reader(file_id).await.unwrap();
                 let page_table = meta_reader.read_page_table().await.unwrap();
                 assert_eq!(*page_table.get(&page_addr1).unwrap(), 1);
                 assert_eq!(*page_table.get(&page_addr2).unwrap(), 1);
@@ -511,7 +558,7 @@ pub(crate) mod facade {
 
             {
                 let recovery_mock_version = info_builder
-                    .recovery_base_file_infos(&[file_id.into()])
+                    .recover_page_file_infos(&[file_id.into()])
                     .await
                     .unwrap();
                 let file1 = recovery_mock_version.get(&1).unwrap();
