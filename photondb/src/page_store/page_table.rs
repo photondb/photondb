@@ -20,6 +20,10 @@ pub(crate) struct PageTableBuilder {
 
 impl PageTableBuilder {
     pub(crate) fn set(&mut self, id: u64, addr: u64) {
+        if addr <= self.inner.index(id).load(Ordering::Relaxed) {
+            panic!("set page id {id} with addr {addr} who small than exists");
+        }
+
         self.inner.index(id).store(addr, Ordering::Relaxed);
         self.max_id = self.max_id.max(id);
     }

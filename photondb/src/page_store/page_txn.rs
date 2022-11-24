@@ -75,10 +75,6 @@ impl<E: Env> Guard<E> {
         assert_eq!(file_info.get_file_id(), file_id);
         if let Some(map_file_id) = file_info.get_map_file_id() {
             // This is partial page file, read page from the corresponding map file.
-            let Some(file_info) = self.version.map_files().get(&map_file_id) else {
-                panic!("Map file {file_id} is not exists");
-            };
-            assert_eq!(file_info.file_id(), map_file_id);
             let Some(handle) = file_info.get_page_handle(addr) else {
                 panic!("The addr {addr} is not belongs to the target map file {file_id}");
             };
@@ -86,7 +82,7 @@ impl<E: Env> Guard<E> {
             // TODO: cache page file reader for speed up.
             let reader = self
                 .page_files
-                .open_page_reader(file_id, file_info.meta().block_size())
+                .open_map_file_reader(map_file_id, file_info.meta().block_size())
                 .await?;
             let mut buf = vec![0u8; handle.size as usize];
             reader.read_exact_at(&mut buf, handle.offset as u64).await?;

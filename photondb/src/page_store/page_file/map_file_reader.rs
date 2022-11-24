@@ -1,11 +1,14 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use super::{
     file_builder::IndexBlock,
     file_reader::CommonFileReader,
     map_file_builder::{Footer, PageIndex},
     types::MapFileMeta,
-    FileMeta,
+    BlockHandler, FileMeta,
 };
 use crate::{
     env::PositionalReader,
@@ -14,29 +17,25 @@ use crate::{
 
 pub(crate) type MapFileReader<R> = CommonFileReader<R>;
 
-#[allow(unused)]
-pub(crate) struct MapFileMetaReader<R: PositionalReader> {
-    /// The id of map file.
-    file_id: u32,
-    /// The underlying file reader.
-    reader: Arc<CommonFileReader<R>>,
+pub(crate) struct MapFileMetaHolder {
     /// The file meta of map file.
-    file_meta: Arc<MapFileMeta>,
-    /// The block handle indexes of page files.
-    file_indexes: HashMap<u32, PageIndex>,
-    /// The index blocks of page files.
-    index_blocks: HashMap<u32, IndexBlock>,
+    pub(crate) file_meta: Arc<MapFileMeta>,
     /// The meta of page files.
-    file_meta_map: HashMap<u32, Arc<FileMeta>>,
+    pub(crate) file_meta_map: HashMap<u32, Arc<FileMeta>>,
+    /// The page tables of page files.
+    pub(crate) page_tables: HashMap<u32, BTreeMap<u64, u64>>,
 }
 
-impl<R: PositionalReader> MapFileMetaReader<R> {
+impl MapFileMetaHolder {
     /// Open a meta reader with the specified map file id.
-    pub(crate) async fn open(file_id: u32, reader: Arc<MapFileReader<R>>) -> Result<Self> {
+    pub(crate) async fn read<R: PositionalReader>(
+        file_id: u32,
+        reader: Arc<MapFileReader<R>>,
+    ) -> Result<Self> {
         let footer = Self::read_footer(&reader).await?;
         let file_indexes = Self::read_file_indexes(&reader, &footer).await?;
-        let mut index_blocks = HashMap::default();
         let mut file_meta_map = HashMap::default();
+        let mut page_tables = HashMap::default();
         for page_index in file_indexes.values() {
             let index_block = Self::read_partial_file_index_block(&reader, page_index).await?;
             let (indexes, offsets) = index_block.as_meta_file_cached(page_index.data_handle);
@@ -47,8 +46,9 @@ impl<R: PositionalReader> MapFileMetaReader<R> {
                 indexes,
                 offsets,
             );
-            index_blocks.insert(page_index.file_id, index_block);
+            let page_table = Self::read_page_table(&reader, &file_meta).await?;
             file_meta_map.insert(page_index.file_id, Arc::new(file_meta));
+            page_tables.insert(page_index.file_id, page_table);
         }
         let file_meta = Arc::new(MapFileMeta::new(
             file_id,
@@ -56,28 +56,30 @@ impl<R: PositionalReader> MapFileMetaReader<R> {
             reader.align_size,
             file_meta_map.clone(),
         ));
-        Ok(MapFileMetaReader {
-            file_id,
-            reader,
-            file_indexes,
-            index_blocks,
+        Ok(MapFileMetaHolder {
             file_meta_map,
             file_meta,
+            page_tables,
         })
     }
 
-    /// Get the [`MapFileMeta`].
-    pub(crate) fn file_meta(&self) -> Arc<MapFileMeta> {
-        self.file_meta.clone()
-    }
+    /// Read the page table of the specified partital file.
+    async fn read_page_table<R: PositionalReader>(
+        reader: &MapFileReader<R>,
+        file_meta: &FileMeta,
+    ) -> Result<BTreeMap<u64, u64>> {
+        use super::file_builder::PageTable;
 
-    /// Get the [`FileMeta`] for partial files.
-    pub(crate) fn page_file_meta_map(&self) -> &HashMap<u32, Arc<FileMeta>> {
-        &self.file_meta_map
+        let (offset, length) = file_meta.get_page_table_meta_page()?;
+        let length = length as u64;
+        let block_handle = BlockHandler { offset, length };
+        let buf = reader.read_block(block_handle).await?;
+        let table = PageTable::decode(&buf)?;
+        Ok(table.into())
     }
 
     /// Read the [`IndexBlock`] of the specified partial file.
-    async fn read_partial_file_index_block(
+    async fn read_partial_file_index_block<R: PositionalReader>(
         reader: &MapFileReader<R>,
         page_index: &PageIndex,
     ) -> Result<IndexBlock> {
@@ -87,7 +89,7 @@ impl<R: PositionalReader> MapFileMetaReader<R> {
     }
 
     /// Read [`Footer`] according to file reader.
-    async fn read_footer(reader: &MapFileReader<R>) -> Result<Footer> {
+    async fn read_footer<R: PositionalReader>(reader: &MapFileReader<R>) -> Result<Footer> {
         let file_size = reader.file_size;
         if file_size < Footer::encoded_size() {
             return Err(Error::Corrupted);
@@ -101,7 +103,7 @@ impl<R: PositionalReader> MapFileMetaReader<R> {
 
     /// Read [`PageIndex`] of the corresponding map file, according to the file
     /// reader.
-    async fn read_file_indexes(
+    async fn read_file_indexes<R: PositionalReader>(
         reader: &MapFileReader<R>,
         footer: &Footer,
     ) -> Result<HashMap<u32, PageIndex>> {

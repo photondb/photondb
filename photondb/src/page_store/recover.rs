@@ -3,12 +3,30 @@ use std::{
     path::Path,
 };
 
+use log::debug;
+
 use super::{
     page_table::{PageTable, PageTableBuilder},
     version::DeltaVersion,
     FileInfo, MapFileInfo, NewFile, PageFiles, PageStore, Result, VersionEdit,
 };
 use crate::{env::Env, page_store::Manifest};
+
+struct FileInfoBuilder<'a, E: Env> {
+    facade: &'a PageFiles<E>,
+
+    /// The virtual page file set.
+    virtual_files: HashSet<u32>,
+    /// The [`FileInfo`] for page files, includes virtual page files.
+    page_files: HashMap<u32, FileInfo>,
+    /// The [`MapFileInfo`] for map files.
+    map_files: HashMap<u32, MapFileInfo>,
+    /// The page table builder.
+    page_table_builder: PageTableBuilder,
+
+    /// Records the dealloc pages.
+    dealloc_pages: HashMap<u32, Vec<u64>>,
+}
 
 struct FilesSummary {
     active_page_files: HashMap<u32, NewFile>,
@@ -34,11 +52,12 @@ impl<E: Env> PageStore<E> {
         let summary = Self::apply_version_edits(versions);
 
         let page_files = PageFiles::new(env, path.as_ref(), options.use_direct_io).await;
-        let file_infos =
-            Self::recover_page_file_infos(&page_files, &summary.active_page_files).await?;
-        let map_files =
-            Self::recover_map_file_infos(&page_files, &summary.active_map_files).await?;
-        let page_table = Self::recover_page_table(&page_files, &summary.active_page_files).await?;
+
+        // WARNING: recover map files before page files.
+        let mut builder = FileInfoBuilder::new(&page_files);
+        Self::recover_map_file_infos(&mut builder, &summary.active_map_files).await?;
+        Self::recover_page_file_infos(&mut builder, &summary.active_page_files).await?;
+        let (file_infos, map_files, page_table) = builder.build();
 
         Self::delete_unreferenced_page_files(&page_files, &summary).await?;
 
@@ -86,45 +105,29 @@ impl<E: Env> PageStore<E> {
     }
 
     async fn recover_page_file_infos(
-        page_files: &PageFiles<E>,
+        builder: &mut FileInfoBuilder<'_, E>,
         active_files: &HashMap<u32, NewFile>,
-    ) -> Result<HashMap<u32, FileInfo>> {
+    ) -> Result<()> {
         // ensure recover files in order.
         let mut files = active_files.values().cloned().collect::<Vec<_>>();
         files.sort_unstable();
-        let builder = page_files.new_info_builder();
-        builder.recover_page_file_infos(&files).await
+        for file in files {
+            builder.recover_page_file(file).await?;
+        }
+        Ok(())
     }
 
     async fn recover_map_file_infos(
-        page_files: &PageFiles<E>,
+        builder: &mut FileInfoBuilder<'_, E>,
         active_files: &HashMap<u32, NewFile>,
-    ) -> Result<HashMap<u32, MapFileInfo>> {
+    ) -> Result<()> {
         // ensure recover files in order.
         let mut files = active_files.values().cloned().collect::<Vec<_>>();
         files.sort_unstable();
-
-        // TODO: recover map files
-        let _ = page_files;
-        Ok(HashMap::default())
-    }
-
-    async fn recover_page_table(
-        page_files: &PageFiles<E>,
-        active_files: &HashMap<u32, NewFile>,
-    ) -> Result<PageTable> {
-        // ensure recover files in order.
-        let mut files = active_files.keys().cloned().collect::<Vec<_>>();
-        files.sort_unstable();
-
-        let mut table = PageTableBuilder::default();
-        for file_id in files {
-            let meta_reader = page_files.open_page_file_meta_reader(file_id).await?;
-            for (page_addr, page_id) in meta_reader.read_page_table().await? {
-                table.set(page_id, page_addr);
-            }
+        for file in files {
+            builder.recover_map_file(file).await?;
         }
-        Ok(table.build())
+        Ok(())
     }
 
     async fn delete_unreferenced_page_files(
@@ -163,5 +166,128 @@ impl<E: Env> PageStore<E> {
             }
         }
         obsoleted_files.into_iter().collect::<Vec<_>>()
+    }
+}
+
+impl<'a, E: Env> FileInfoBuilder<'a, E> {
+    fn new(facade: &'a PageFiles<E>) -> Self {
+        FileInfoBuilder {
+            facade,
+            virtual_files: HashSet::default(),
+            page_files: HashMap::default(),
+            map_files: HashMap::default(),
+            page_table_builder: PageTableBuilder::default(),
+            dealloc_pages: HashMap::default(),
+        }
+    }
+
+    /// Recover a map file, the specified file id must be monotonically
+    /// increasing.
+    ///
+    /// NOTE: Since the map file doesn't contains any dealloc pages record, so
+    /// it should be recovered before page files, in order to maintain active
+    /// pages.
+    async fn recover_map_file(&mut self, file: NewFile) -> Result<()> {
+        let meta_reader = self.facade.read_map_file_meta(file.id).await?;
+
+        // 1. recover virtual file infos.
+        for (file_id, file_meta) in meta_reader.file_meta_map {
+            let active_pages = file_meta.pages_bitmap();
+            let active_size = file_meta.total_page_size();
+            let file_info = FileInfo::new(
+                active_pages,
+                active_size,
+                file.up1,
+                file.up2,
+                HashSet::default(),
+                file_meta.clone(),
+            );
+            self.virtual_files.insert(file_id);
+            self.page_files.insert(file_id, file_info);
+        }
+
+        // 2. recover map file info.
+        let file_meta = meta_reader.file_meta;
+        self.map_files
+            .insert(file.id, MapFileInfo::new(file.up1, file.up2, file_meta));
+
+        // 3. recover page table.
+        for (_, page_table) in meta_reader.page_tables {
+            for (page_addr, page_id) in page_table {
+                // TODO: the page addr in map file isn't ensure the address order.
+                self.page_table_builder.set(page_id, page_addr);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Recover a page file, the specified file id must be monotonically
+    /// increasing.
+    async fn recover_page_file(&mut self, file: NewFile) -> Result<()> {
+        let file_id = file.id;
+        if self.virtual_files.contains(&file_id) {
+            // This page file has compounded into a map file, which has been recovered
+            // early.
+            debug!("ignore page file {file_id} in recovery, since it has been compounded");
+            return Ok(());
+        }
+
+        let meta_reader = self.facade.open_page_file_meta_reader(file_id).await?;
+        let file_meta = meta_reader.file_metadata();
+
+        // 1. read dealloc pages.
+        let delete_pages = meta_reader.read_delete_pages().await?;
+        let mut referenced_files = HashSet::new();
+        for page_addr in &delete_pages {
+            referenced_files.insert((page_addr >> 32) as u32);
+        }
+        self.dealloc_pages.insert(file_id, delete_pages);
+
+        // 2. recover file info
+        let active_pages = file_meta.pages_bitmap();
+        let active_size = file_meta.total_page_size();
+        let info = FileInfo::new(
+            active_pages,
+            active_size,
+            file.up1,
+            file.up2,
+            referenced_files,
+            file_meta,
+        );
+        self.page_files.insert(file_id, info);
+
+        // 3. recover page table
+        for (page_id, page_addr) in meta_reader.read_page_table().await? {
+            // Dealloc pages are not considered here, because currently by design, pages are
+            // released after being updated.
+            self.page_table_builder.set(page_id, page_addr);
+        }
+
+        Ok(())
+    }
+
+    /// Build page files, map files and page table.
+    fn build(mut self) -> (HashMap<u32, FileInfo>, HashMap<u32, MapFileInfo>, PageTable) {
+        self.maintain_active_pages();
+        let page_table = self.page_table_builder.build();
+        (self.page_files, self.map_files, page_table)
+    }
+
+    fn maintain_active_pages(&mut self) {
+        for (&updated_at, delete_pages) in &self.dealloc_pages {
+            for &page_addr in delete_pages {
+                let file_id = (page_addr >> 32) as u32;
+                if let Some(info) = self.page_files.get_mut(&file_id) {
+                    info.deactivate_page(updated_at, page_addr);
+                    if let Some(map_file_id) = info.get_map_file_id() {
+                        self.map_files
+                            .get_mut(&map_file_id)
+                            .expect("The map file must exists")
+                            .on_update(updated_at);
+                    }
+                }
+            }
+        }
     }
 }
