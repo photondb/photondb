@@ -6,12 +6,14 @@ use std::{
 use super::{
     version::Version,
     write_buffer::{RecordHeader, ReleaseState},
-    Error, PageFiles, PageTable, Result, WriteBuffer, NAN_ID,
+    CacheEntry, ClockCache, Error, PageFiles, PageTable, Result, WriteBuffer, NAN_ID,
 };
 use crate::{
     env::Env,
     page::{PageBuf, PageRef},
 };
+
+type CacheEntryGuard = CacheEntry<Vec<u8>, ClockCache<Vec<u8>>>;
 
 pub(crate) struct Guard<E: Env>
 where
@@ -20,7 +22,7 @@ where
     version: Arc<Version>,
     page_table: PageTable,
     page_files: Arc<PageFiles<E>>,
-    owned_pages: Mutex<Vec<Vec<u8>>>,
+    cache_guards: Mutex<Vec<CacheEntryGuard>>,
 }
 
 impl<E: Env> Guard<E> {
@@ -33,7 +35,7 @@ impl<E: Env> Guard<E> {
             version,
             page_table,
             page_files,
-            owned_pages: Mutex::default(),
+            cache_guards: Mutex::default(),
         }
     }
 
@@ -73,47 +75,31 @@ impl<E: Env> Guard<E> {
             panic!("File {file_id} is not exists");
         };
         assert_eq!(file_info.get_file_id(), file_id);
-        if let Some(map_file_id) = file_info.get_map_file_id() {
+
+        let page_handle = if let Some(map_file_id) = file_info.get_map_file_id() {
             // This is partial page file, read page from the corresponding map file.
-            let Some(handle) = file_info.get_page_handle(addr) else {
+            let Some(_) = file_info.get_page_handle(addr) else {
                 panic!("The addr {addr} is not belongs to the target map file {file_id}");
             };
 
-            // TODO: cache page file reader for speed up.
-            let reader = self
-                .page_files
-                .open_map_file_reader(map_file_id, file_info.meta().block_size())
-                .await?;
-            let mut buf = vec![0u8; handle.size as usize];
-            reader.read_exact_at(&mut buf, handle.offset as u64).await?;
-
-            let mut owned_pages = self.owned_pages.lock().expect("Poisoned");
-            owned_pages.push(buf);
-            let page = owned_pages.last().expect("Verified");
-            let page = page.as_slice();
-
-            return Ok(PageRef::new(unsafe {
-                // Safety: the lifetime is guarranted by `guard`.
-                std::slice::from_raw_parts(page.as_ptr(), page.len())
-            }));
-        }
-
-        let Some(handle) = file_info.get_page_handle(addr) else {
-            panic!("The addr {addr} is not belongs to the target page file {file_id}");
+            todo!("read page from map file {map_file_id}");
+        } else {
+            let Some(handle) = file_info.get_page_handle(addr) else {
+                panic!("The addr {addr} is not belongs to the target page file {file_id}");
+            };
+            handle
         };
 
-        // TODO: cache page file reader for speed up.
-        let reader = self
+        let entry = self
             .page_files
-            .open_page_reader(file_id, file_info.meta().block_size())
+            .read_page(file_id, addr, page_handle, file_info)
             .await?;
-        let mut buf = vec![0u8; handle.size as usize];
-        reader.read_exact_at(&mut buf, handle.offset as u64).await?;
 
-        let mut owned_pages = self.owned_pages.lock().expect("Poisoned");
-        owned_pages.push(buf);
-        let page = owned_pages.last().expect("Verified");
-        let page = page.as_slice();
+        let mut owned_pages = self.cache_guards.lock().expect("Poisoned");
+        owned_pages.push(entry);
+
+        let last_guard = owned_pages.last().unwrap();
+        let page = last_guard.value();
 
         Ok(PageRef::new(unsafe {
             // Safety: the lifetime is guarranted by `guard`.
@@ -354,9 +340,12 @@ impl<'a, E: Env> Drop for PageTxn<'a, E> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::page_store::{
-        page_table::PageTable,
-        version::{DeltaVersion, Version},
+    use crate::{
+        page_store::{
+            page_table::PageTable,
+            version::{DeltaVersion, Version},
+        },
+        PageStoreOptions,
     };
 
     fn new_version(size: u32) -> Arc<Version> {
@@ -367,7 +356,7 @@ mod tests {
     async fn page_txn_update_page() {
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_txn_update_page").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
         let version = new_version(512);
         let page_table = PageTable::default();
         let guard = Guard::new(version.clone(), page_table, files);
@@ -384,7 +373,7 @@ mod tests {
     async fn page_txn_failed_update_page() {
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_txn_failed_update_page").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
 
         let version = new_version(1 << 10);
         let page_table = PageTable::default();
@@ -409,7 +398,7 @@ mod tests {
     async fn page_txn_increment_page_addr_update() {
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_increment_page_addr_update").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
 
         let version = new_version(512);
         let page_table = PageTable::default();
@@ -422,7 +411,7 @@ mod tests {
     async fn page_txn_replace_page() {
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_txn_replace_page").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
 
         let version = new_version(1 << 10);
         let page_table = PageTable::default();
@@ -453,7 +442,7 @@ mod tests {
     async fn page_txn_seal_write_buffer() {
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_seal_write_buffer").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
 
         let version = new_version(512);
         let page_table = PageTable::default();
@@ -466,7 +455,7 @@ mod tests {
     async fn page_txn_seal_write_buffer_twice() {
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_seal_write_buffer_twice").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
 
         let version = new_version(512);
         let page_table = PageTable::default();
@@ -482,7 +471,7 @@ mod tests {
         env_logger::init();
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_insert_page").unwrap();
-        let files = Arc::new(PageFiles::new(env, base.path(), false).await);
+        let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
 
         let version = new_version(512);
         let page_table = PageTable::default();
@@ -501,5 +490,12 @@ mod tests {
         let buf = current.last_writer_buffer();
         buf.seal().unwrap();
         assert!(buf.is_flushable());
+    }
+
+    fn test_option() -> PageStoreOptions {
+        PageStoreOptions {
+            cache_capacity: 2 << 10,
+            ..Default::default()
+        }
     }
 }

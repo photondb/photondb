@@ -51,7 +51,7 @@ impl<E: Env> PageStore<E> {
         let versions = manifest.list_versions().await?;
         let summary = Self::apply_version_edits(versions);
 
-        let page_files = PageFiles::new(env, path.as_ref(), options.use_direct_io).await;
+        let page_files = PageFiles::new(env, path.as_ref(), options).await;
 
         // WARNING: recover map files before page files.
         let mut builder = FileInfoBuilder::new(&page_files);

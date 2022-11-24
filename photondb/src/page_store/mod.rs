@@ -38,6 +38,8 @@ mod recover;
 mod strategy;
 pub(crate) use strategy::{MinDeclineRateStrategyBuilder, StrategyBuilder};
 
+mod cache;
+pub(crate) use cache::{clock::ClockCache, Cache, CacheEntry};
 /// Options to configure a page store.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
@@ -78,6 +80,37 @@ pub struct Options {
     ///
     /// Default: 64MB
     pub file_base_size: usize,
+
+    /// The capacity of the page read cache in bytes.
+    ///
+    /// Default: 8 Mib
+    pub cache_capacity: usize,
+
+    /// The estimated average `charge` associated with cache entries.
+    ///
+    /// Default: 8 Kib
+    ///
+    /// This is a ritical configuration parameter for good performance for page
+    /// read cache, because having a table size that is fixed at creation
+    /// time greatly reduces the required synchronization between threads.
+    ///
+    /// - If the estimate is substantially too low (e.g. less than half the true
+    ///   average) then metadata space overhead with be substantially higher
+    ///   (e.g. 200 bytes per entry rather than 100). This can slightly reduce
+    ///   cache hit rates, and slightly reduce access times due to the larger
+    ///   working memory size.
+    /// - If the estimate is substantially too high (e.g. 25% higher than the
+    ///   true average) then there might not be sufficient slots in the hash
+    ///   table for both efficient operation and capacity utilization (hit
+    ///   rate). The cache will evict entries to prevent load factors that could
+    ///   dramatically affect lookup times, instead letting the hit rate suffer
+    ///   by not utilizing the full capacity.
+    pub cache_estimated_entry_charge: usize,
+
+    /// Insert warm pages into PageCache during flush if true.
+    ///
+    /// Default: false
+    pub prepopulate_cache_on_flush: bool,
 }
 
 impl Default for Options {
@@ -89,6 +122,9 @@ impl Default for Options {
             max_space_amplification_percent: 100,
             space_used_high: u64::MAX,
             file_base_size: 64 << 20,
+            cache_capacity: 8 << 20,
+            cache_estimated_entry_charge: 8 << 10,
+            prepopulate_cache_on_flush: false,
         }
     }
 }

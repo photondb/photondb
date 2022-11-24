@@ -8,6 +8,9 @@ pub(crate) enum Error {
     Corrupted,
     #[error("Invalid argument")]
     InvalidArgument,
+    #[error("Memory Limit")]
+    #[allow(dead_code)]
+    MemoryLimit,
     #[error("IO {0}")]
     Io(#[from] std::io::Error),
 }

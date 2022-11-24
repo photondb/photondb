@@ -5,27 +5,39 @@ pub use table::{Guard, Pages, Table};
 
 #[cfg(test)]
 mod tree_test {
-    use ::std::collections::BTreeMap;
+    use ::std::{collections::BTreeMap, panic, path::Path};
+    use log::info;
     use quickcheck::*;
     use rand_distr::*;
 
     use crate::*;
 
-    #[photonio::test]
+    #[test]
     #[ignore]
-    async fn btreemap_cmp_test() {
+    fn btreemap_cmp_test() {
+        env_logger::init();
         let f = |ops| {
-            if let Err(e) = prop_cmp_btreemap(ops) {
-                eprintln!("check fail: {:?}", e);
-                false
-            } else {
-                true
-            }
+            // let path = tempdir::TempDir::new("sdd").unwrap();
+            let path = tempdir::TempDir::new_in("/home/robi/test1", "sdd").unwrap();
+            let r = match panic::catch_unwind(|| {
+                if let Err(e) = prop_cmp_btreemap(ops, path.path()) {
+                    eprintln!("check fail: {:?}", e);
+                    false
+                } else {
+                    true
+                }
+            }) {
+                Ok(r) => r,
+                Err(err) => panic!("{err:?}"),
+            };
+            info!("test finish and cleanup file");
+            let _ = path.close();
+            r
         };
         QuickCheck::new()
-            .gen(Gen::new(1000))
-            .tests(100)
-            .max_tests(100 * 10)
+            .gen(Gen::new(2000))
+            .tests(200)
+            .max_tests(100 * 20)
             .quickcheck(f as fn(Vec<Op>) -> bool);
     }
 
@@ -105,9 +117,11 @@ mod tree_test {
         }
     }
 
-    fn prop_cmp_btreemap(ops: Vec<Op>) -> Result<()> {
-        let path = tempdir::TempDir::new("prop_cmp_btreemap").unwrap();
-        let mut table = std::Table::open(path.path(), TableOptions::default())?;
+    fn prop_cmp_btreemap(ops: Vec<Op>, path: impl AsRef<Path>) -> Result<()> {
+        let mut table_opt = TableOptions::default();
+        table_opt.page_store.write_buffer_capacity = 16 << 10;
+        let mut table = std::Table::open(path.as_ref(), table_opt)?;
+        info!("open table");
         let mut treemap: BTreeMap<Key, u16> = BTreeMap::new();
 
         let mut lsn = 0;
@@ -116,6 +130,7 @@ mod tree_test {
                 Op::Set(k, v) => {
                     let prev_tab = table.get(&k.0, lsn).unwrap();
                     lsn += 1;
+                    info!("put {:?}", k);
                     table.put(&k.0, lsn, &[0, v]).unwrap();
                     lsn += 1;
                     let prev_map = treemap.insert(k.clone(), u16::from(v));
@@ -135,20 +150,23 @@ mod tree_test {
                     assert_eq!(
                         res1, res2,
                         "when get key {:?}, expected old returned value to be {:?}\n{:?}",
-                        k.0, res2, table,
+                        k, res2, table,
                     );
                 }
                 Op::Del(k) => {
+                    info!("delete {:?}", k);
                     table.delete(&k.0, lsn).unwrap();
                     lsn += 1;
                     treemap.remove(&k);
                 }
                 Op::Restart => {
                     table.close().unwrap();
-                    table = std::Table::open(path.path(), TableOptions::default())?;
+                    table = std::Table::open(path.as_ref(), TableOptions::default())?;
                 }
             }
         }
+
+        table.close().unwrap();
 
         Ok(())
     }

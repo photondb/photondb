@@ -595,14 +595,18 @@ mod tests {
         let notifier = ShutdownNotifier::new();
         let shutdown = notifier.subscribe();
         let strategy_builder = Box::new(MinDeclineRateStrategyBuilder);
-        let options = Options::default();
+        let options = Options {
+            cache_capacity: 2 << 10,
+            ..Default::default()
+        };
+        let page_files = Arc::new(PageFiles::new(Photon, dir, &options).await);
         ReclaimCtx {
             options,
             shutdown,
             rewriter,
             strategy_builder,
             page_table: PageTable::default(),
-            page_files: Arc::new(PageFiles::new(Photon, dir, false).await),
+            page_files,
             cleaned_files: HashSet::default(),
         }
     }
