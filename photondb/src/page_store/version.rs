@@ -76,24 +76,23 @@ impl VersionOwner {
 
     /// Try install new version into version chains.
     ///
-    /// TODO: It is assumed that all installations come in [`WriteBuffer`]
-    /// order, so there is no need to consider concurrency issues.
-    pub(crate) fn install(&self, file_id: u32, delta: DeltaVersion) {
+    /// # Safety
+    ///
+    /// The installer should hold the mutable reference of [`Manifest`].
+    pub(crate) unsafe fn install(&self, delta: DeltaVersion) {
         let guard = version_guard::pin();
 
         // Safety: guard by `buffer_set_guard::pin`.
         let current = unsafe { self.current_without_guard() };
-        if current.first_buffer_id != file_id {
-            panic!(
-                "Version should be installed in the order of write buffers, expect {}, but got {}",
-                current.first_buffer_id, file_id
-            );
+        let mut first_buffer_id = current.first_buffer_id;
+
+        // Advance to next buffer if current has been persisted.
+        if delta.page_files.contains_key(&first_buffer_id) {
+            debug!("Install new version with file {first_buffer_id}");
+            first_buffer_id = current.first_buffer_id + 1;
         }
 
-        debug!("Install new version with file {file_id}");
-
         let buffer_set = current.buffer_set.clone();
-        let first_buffer_id = current.first_buffer_id + 1;
         let new = Version::with_buffer_set(first_buffer_id, buffer_set, delta);
         let new = Box::new(Arc::new(new));
         self.switch_version(new, guard);
@@ -303,6 +302,16 @@ impl Drop for Version {
     }
 }
 
+impl From<&Version> for DeltaVersion {
+    fn from(version: &Version) -> Self {
+        DeltaVersion {
+            page_files: version.page_files().clone(),
+            map_files: version.map_files().clone(),
+            ..DeltaVersion::default()
+        }
+    }
+}
+
 mod version_guard {
     use crossbeam_epoch::{Collector, Guard, LocalHandle};
     use once_cell::sync::Lazy;
@@ -339,7 +348,10 @@ mod version_guard {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+    use crate::page_store::page_file::FileMeta;
 
     #[test]
     fn version_access_newly_buffers() {
@@ -376,7 +388,24 @@ mod tests {
         drop(version);
 
         // install new version
-        owner.install(buffer_id, DeltaVersion::default());
+        let mut page_files = HashMap::default();
+        page_files.insert(
+            buffer_id,
+            FileInfo::new(
+                roaring::RoaringBitmap::new(),
+                0,
+                0,
+                0,
+                HashSet::default(),
+                Arc::new(FileMeta::new(buffer_id, 0, 0, vec![], BTreeMap::default())),
+            ),
+        );
+        let delta = DeltaVersion {
+            page_files,
+            ..Default::default()
+        };
+        // Safety: No concurrent here
+        unsafe { owner.install(delta) };
 
         // now latest version could not access former buffer since no guard held.
         let version = owner.current();

@@ -292,7 +292,7 @@ impl FileMeta {
     }
 }
 
-#[allow(unused)]
+#[derive(Clone)]
 pub(crate) struct MapFileInfo {
     up1: u32,
     up2: u32,
@@ -300,7 +300,6 @@ pub(crate) struct MapFileInfo {
     meta: Arc<MapFileMeta>,
 }
 
-#[allow(unused)]
 impl MapFileInfo {
     pub(crate) fn new(up1: u32, up2: u32, meta: Arc<MapFileMeta>) -> Self {
         MapFileInfo { up1, up2, meta }

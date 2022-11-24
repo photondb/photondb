@@ -3,7 +3,7 @@ pub(crate) use file_builder::FileBuilder;
 pub(self) use file_builder::{BlockHandler, BufferedWriter, CommonFileBuilder};
 
 mod file_reader;
-pub(crate) use file_reader::{read_page_table, PageFileReader};
+pub(crate) use file_reader::PageFileReader;
 
 mod types;
 pub(crate) use facade::PageFiles;

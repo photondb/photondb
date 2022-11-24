@@ -10,10 +10,12 @@ use log::{info, trace};
 use crate::{
     env::Env,
     page_store::{
-        page_file::{read_page_table, MapFileBuilder, PartialFileBuilder},
+        page_file::{MapFileBuilder, PartialFileBuilder},
         page_table::PageTable,
         strategy::{PickedFile, ReclaimPickStrategy},
-        Error, FileInfo, Guard, MapFileInfo, Options, PageFiles, Result, StrategyBuilder, Version,
+        version::{DeltaVersion, VersionOwner},
+        Error, FileInfo, Guard, Manifest, MapFileInfo, NewFile, Options, PageFiles, Result,
+        StrategyBuilder, StreamEdit, Version, VersionEdit,
     },
     util::shutdown::{with_shutdown, Shutdown},
 };
@@ -41,7 +43,10 @@ where
 
     page_table: PageTable,
     page_files: Arc<PageFiles<E>>,
+    version_owner: Arc<VersionOwner>,
+    manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
 
+    next_map_file_id: u32,
     cleaned_files: HashSet<u32>,
 }
 
@@ -70,6 +75,8 @@ where
     E: Env,
     R: RewritePage<E>,
 {
+    // FIXME: reduce number of arguments
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         options: Options,
         shutdown: Shutdown,
@@ -77,6 +84,9 @@ where
         strategy_builder: Box<dyn StrategyBuilder>,
         page_table: PageTable,
         page_files: Arc<PageFiles<E>>,
+        version_owner: Arc<VersionOwner>,
+        manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
+        next_map_file_id: u32,
     ) -> Self {
         ReclaimCtx {
             options,
@@ -85,6 +95,9 @@ where
             strategy_builder,
             page_table,
             page_files,
+            version_owner,
+            manifest,
+            next_map_file_id,
             cleaned_files: HashSet::default(),
         }
     }
@@ -134,18 +147,6 @@ where
         empty_files
     }
 
-    async fn rewrite_files(&mut self, files: Vec<u32>, version: &Arc<Version>) {
-        for file_id in files {
-            if self.shutdown.is_terminated() || version.has_next_version() {
-                break;
-            }
-
-            if let Err(err) = self.rewrite_file(file_id, version).await {
-                todo!("rewrite files: {err:?}");
-            }
-        }
-    }
-
     async fn reclaim_files_by_strategy(
         &mut self,
         version: &Arc<Version>,
@@ -181,15 +182,42 @@ where
 
     /// Reclaim page files by compounding victims into a new map file, and
     /// install new version.
-    async fn reclaim_page_files(&self, version: &Arc<Version>, victims: HashSet<u32>) {
-        // TODO: alloc map file id.
-        let new_map_file_id = 1;
+    async fn reclaim_page_files(&mut self, version: &Arc<Version>, victims: HashSet<u32>) {
+        let file_id = self.next_map_file_id + 1;
+        self.next_map_file_id += 1;
+
         let file_infos = version.page_files();
-        self.compound_page_files(new_map_file_id, file_infos, victims)
+        let (virtual_page_files, map_file, obsoleted_files) = self
+            .compound_and_clean_page_files(version, file_id, file_infos, victims)
             .await
             .unwrap();
 
-        // TODO: install new version.
+        let edit = make_compound_version_edit(file_id, &obsoleted_files);
+        let mut manifest = self.manifest.lock().await;
+        let version = self.version_owner.current();
+        manifest
+            .record_version_edit(edit, || super::version_snapshot(&version))
+            .await
+            .unwrap();
+
+        let mut delta = DeltaVersion::from(version.as_ref());
+        delta.map_files.insert(file_id, map_file);
+        delta.page_files.extend(virtual_page_files.into_iter());
+        delta.obsoleted_page_files = obsoleted_files.into_iter().collect();
+        // Safety: the mutable reference of [`Manifest`] is hold.
+        unsafe { self.version_owner.install(delta) };
+    }
+
+    async fn rewrite_files(&mut self, files: Vec<u32>, version: &Arc<Version>) {
+        for file_id in files {
+            if self.shutdown.is_terminated() || version.has_next_version() {
+                break;
+            }
+
+            if let Err(err) = self.rewrite_file(file_id, version).await {
+                todo!("rewrite files: {err:?}");
+            }
+        }
     }
 
     async fn rewrite_file(&mut self, file_id: u32, version: &Arc<Version>) -> Result<()> {
@@ -380,33 +408,41 @@ where
         }
     }
 
-    /// Compound a set of page files into a map file.
-    ///
-    /// We don't add `victims` into `ReclaimCtx::cleaned_files`, because there
-    /// might exists dealloc pages.
+    /// Compound a set of page files into a map file, and rewrite the dealloc
+    /// pages.
     ///
     /// NOTE: We don't mix page file and map file in compounding, because they
     /// have different age (update frequency).
-    #[allow(unused)]
-    async fn compound_page_files(
-        &self,
+    async fn compound_and_clean_page_files(
+        &mut self,
+        version: &Arc<Version>,
         new_file_id: u32,
         file_infos: &HashMap<u32, FileInfo>,
         victims: HashSet<u32>,
-    ) -> Result<(HashMap<u32, FileInfo>, MapFileInfo)> {
+    ) -> Result<(HashMap<u32, FileInfo>, MapFileInfo, Vec<u32>)> {
         let mut builder = self.page_files.new_map_file_builder(new_file_id).await?;
+        let mut obsoleted_files = vec![];
         for id in victims {
+            let dealloc_pages;
+
+            // Compound page file into map file
             let file_builder = builder.add_file(id);
             let file_info = file_infos.get(&id).expect("Victims must exists");
-            let page_file = self
-                .page_files
-                .open_page_reader(id, file_info.meta().block_size())
-                .await?;
-            builder = self
+            (builder, dealloc_pages) = self
                 .compound_partial_page_file(file_builder, file_info)
                 .await?;
+
+            // .. and rewrite dealloc pages if exists
+            if dealloc_pages.is_empty() {
+                obsoleted_files.push(id);
+            } else {
+                self.rewrite_dealloc_pages(id, version, &dealloc_pages)
+                    .await?;
+            }
+            self.cleaned_files.insert(id);
         }
-        builder.finish().await
+        let (virtual_infos, file_info) = builder.finish().await?;
+        Ok((virtual_infos, file_info, obsoleted_files))
     }
 
     /// Write all active pages of the corresponding page file into a map file
@@ -415,15 +451,12 @@ where
         &self,
         mut builder: PartialFileBuilder<'a, E>,
         file_info: &FileInfo,
-    ) -> Result<MapFileBuilder<'a, E>> {
+    ) -> Result<(MapFileBuilder<'a, E>, Vec<u64>)> {
         let file_id = file_info.get_file_id();
-        let file_meta = file_info.meta();
-        let block_size = file_meta.block_size();
-        let reader = self
-            .page_files
-            .open_page_reader(file_id, block_size)
-            .await?;
-        let page_table = read_page_table(&reader, &file_meta).await?;
+        let reader = self.page_files.open_page_file_meta_reader(file_id).await?;
+        let page_table = reader.read_page_table().await?;
+        let dealloc_pages = reader.read_delete_pages().await?;
+        let reader = reader.into_inner();
         let mut page = vec![];
         for page_addr in file_info.iter() {
             let page_id = page_table
@@ -444,7 +477,8 @@ where
                 .add_page(page_id, page_addr, &page[..page_size])
                 .await?;
         }
-        builder.finish().await
+        let builder = builder.finish().await?;
+        Ok((builder, dealloc_pages))
     }
 
     /// Compact a set of map files into a new map file, and release mark the
@@ -535,6 +569,20 @@ fn compute_used_space(files: &HashMap<u32, FileInfo>, cleaned_files: &HashSet<u3
         .sum::<usize>() as u64
 }
 
+fn make_compound_version_edit(file_id: u32, obsoleted_files: &[u32]) -> VersionEdit {
+    let new_files = vec![NewFile::from(file_id)];
+    VersionEdit {
+        map_stream: Some(StreamEdit {
+            new_files,
+            deleted_files: vec![],
+        }),
+        page_stream: Some(StreamEdit {
+            new_files: vec![],
+            deleted_files: obsoleted_files.to_owned(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -599,6 +647,15 @@ mod tests {
             cache_capacity: 2 << 10,
             ..Default::default()
         };
+        let manifest = Arc::new(futures::lock::Mutex::new(
+            Manifest::open(Photon, &dir).await.unwrap(),
+        ));
+        let version_owner = Arc::new(VersionOwner::new(Version::new(
+            1 << 20,
+            1,
+            10,
+            DeltaVersion::default(),
+        )));
         let page_files = Arc::new(PageFiles::new(Photon, dir, &options).await);
         ReclaimCtx {
             options,
@@ -607,7 +664,10 @@ mod tests {
             strategy_builder,
             page_table: PageTable::default(),
             page_files,
+            manifest,
+            version_owner,
             cleaned_files: HashSet::default(),
+            next_map_file_id: 1,
         }
     }
 
@@ -669,7 +729,7 @@ mod tests {
         let root = root.into_path();
 
         let rewriter = PageRewriter::default();
-        let ctx = build_reclaim_ctx(&root, rewriter.clone()).await;
+        let mut ctx = build_reclaim_ctx(&root, rewriter.clone()).await;
         let file_id_1 = 2;
         let file_id_2 = 3;
         let mut file_info_1 = build_page_file(
@@ -703,8 +763,12 @@ mod tests {
         files.insert(file_id_1, file_info_1.clone());
         files.insert(file_id_2, file_info_2.clone());
 
+        let version = ctx.version_owner.current();
         let victims = files.keys().cloned().collect::<HashSet<_>>();
-        let (new_files, map_file) = ctx.compound_page_files(1, &files, victims).await.unwrap();
+        let (new_files, map_file, _) = ctx
+            .compound_and_clean_page_files(&version, 1, &files, victims)
+            .await
+            .unwrap();
         assert_eq!(map_file.meta().num_page_files(), 2);
         assert!(new_files.contains_key(&file_id_1));
         assert!(new_files.contains_key(&file_id_2));

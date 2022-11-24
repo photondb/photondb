@@ -129,7 +129,14 @@ impl<R: PositionalReader> MetaReader<R> {
 
     /// Returns the page table in the file.
     pub(crate) async fn read_page_table(&self) -> Result<BTreeMap<u64, u64>> {
-        read_page_table(&self.reader, &self.file_meta).await
+        let (page_table_offset, page_table_len) = self.file_meta.get_page_table_meta_page()?;
+        let mut buf = vec![0u8; page_table_len];
+        self.reader
+            .read_exact_at(&mut buf, page_table_offset)
+            .await
+            .expect("read page table meta page fail");
+        let table = PageTable::decode(&buf)?;
+        Ok(table.into())
     }
 
     /// Returns the delete page addrs in the file.
@@ -147,6 +154,11 @@ impl<R: PositionalReader> MetaReader<R> {
     //// Returns the file metadata for current reader.
     pub(crate) fn file_metadata(&self) -> Arc<FileMeta> {
         self.file_meta.clone()
+    }
+
+    #[inline]
+    pub(crate) fn into_inner(self) -> Arc<PageFileReader<R>> {
+        self.reader
     }
 }
 
@@ -209,18 +221,4 @@ impl<E: Env> ReaderCache<E> {
     pub(super) async fn invalidate(&self, file_id: &u32) {
         self.cache.invalidate(file_id).await
     }
-}
-
-pub(crate) async fn read_page_table<R: PositionalReader>(
-    reader: &PageFileReader<R>,
-    file_meta: &FileMeta,
-) -> Result<BTreeMap<u64, u64>> {
-    let (page_table_offset, page_table_len) = file_meta.get_page_table_meta_page()?;
-    let mut buf = vec![0u8; page_table_len];
-    reader
-        .read_exact_at(&mut buf, page_table_offset)
-        .await
-        .expect("read page table meta page fail");
-    let table = PageTable::decode(&buf)?;
-    Ok(table.into())
 }

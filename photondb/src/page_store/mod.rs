@@ -90,7 +90,7 @@ pub struct Options {
     ///
     /// Default: 8 Kib
     ///
-    /// This is a ritical configuration parameter for good performance for page
+    /// This is a critical configuration parameter for good performance for page
     /// read cache, because having a table size that is fixed at creation
     /// time greatly reduces the required synchronization between threads.
     ///
@@ -151,12 +151,12 @@ impl<E: Env> PageStore<E> {
         P: AsRef<Path>,
         R: RewritePage<E>,
     {
-        let (next_file_id, manifest, table, page_files, delta) =
+        let (next_page_file_id, next_map_file_id, manifest, table, page_files, delta) =
             Self::recover(env.to_owned(), path, &options).await?;
 
         let version = Version::new(
             options.write_buffer_capacity,
-            next_file_id,
+            next_page_file_id,
             options.max_write_buffers,
             delta,
         );
@@ -180,7 +180,7 @@ impl<E: Env> PageStore<E> {
         // Spawn background jobs.
         store.spawn_flush_job();
         store.spawn_cleanup_job();
-        store.spawn_reclaim_job(rewriter);
+        store.spawn_reclaim_job(next_map_file_id, rewriter);
 
         Ok(store)
     }
@@ -220,7 +220,7 @@ impl<E: Env> PageStore<E> {
         self.jobs.push(handle);
     }
 
-    fn spawn_reclaim_job<R>(&mut self, rewriter: R)
+    fn spawn_reclaim_job<R>(&mut self, next_map_file_id: u32, rewriter: R)
     where
         R: RewritePage<E>,
     {
@@ -232,6 +232,9 @@ impl<E: Env> PageStore<E> {
             strategy_builder,
             self.table.clone(),
             self.page_files.clone(),
+            self.version_owner.clone(),
+            self.manifest.clone(),
+            next_map_file_id,
         );
         let handle = self.env.spawn_background(job.run(self.version()));
         self.jobs.push(handle);
