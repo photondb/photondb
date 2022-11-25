@@ -52,6 +52,7 @@ where
 
 #[derive(Debug)]
 struct ReclaimJobBuilder {
+    enable: bool,
     target_file_base: usize,
     hot_threshold: u32,
 
@@ -154,7 +155,11 @@ where
         cleaned_files: &HashSet<u32>,
     ) {
         let mut strategy = self.build_strategy(version, cleaned_files);
-        let mut builder = ReclaimJobBuilder::new(self.options.file_base_size, version);
+        let mut builder = ReclaimJobBuilder::new(
+            self.options.separate_hot_cold_files,
+            self.options.file_base_size,
+            version,
+        );
         while let Some((file, active_size)) = strategy.apply() {
             if let Some(job) = builder.add(file, active_size) {
                 match job {
@@ -524,13 +529,14 @@ where
 }
 
 impl ReclaimJobBuilder {
-    fn new(target_file_base: usize, version: &Version) -> ReclaimJobBuilder {
+    fn new(enable: bool, target_file_base: usize, version: &Version) -> ReclaimJobBuilder {
         let max_id = version.min_write_buffer().file_id();
         let min_id = version.page_files().keys().cloned().min().unwrap_or(max_id);
         let hot_threshold = min_id + (max_id.saturating_sub(min_id) as f64 * 0.618) as u32;
         let hot_threshold = std::cmp::min(hot_threshold, max_id.saturating_sub(16));
 
         ReclaimJobBuilder {
+            enable,
             target_file_base,
             hot_threshold,
 
@@ -543,7 +549,7 @@ impl ReclaimJobBuilder {
 
     fn add(&mut self, file: FileId, active_size: usize) -> Option<ReclaimJob> {
         // A switch disable map files before we have full supports.
-        if false {
+        if !self.enable {
             let FileId::Page(file_id) = file else { panic!("not implemented") };
             return Some(ReclaimJob::Rewrite(file_id));
         }

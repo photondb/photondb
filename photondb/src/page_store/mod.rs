@@ -111,6 +111,13 @@ pub struct Options {
     ///
     /// Default: false
     pub prepopulate_cache_on_flush: bool,
+
+    /// Separate page files into hot/cold parts.
+    ///
+    /// This is temproray options for validating.
+    ///
+    /// Default: false
+    pub separate_hot_cold_files: bool,
 }
 
 impl Default for Options {
@@ -125,6 +132,7 @@ impl Default for Options {
             cache_capacity: 8 << 20,
             cache_estimated_entry_charge: 8 << 10,
             prepopulate_cache_on_flush: false,
+            separate_hot_cold_files: false,
         }
     }
 }
