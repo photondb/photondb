@@ -41,7 +41,8 @@ impl<E: Env> PageStore<E> {
         path: P,
         options: &crate::PageStoreOptions,
     ) -> Result<(
-        u32, /* next file id */
+        u32, /* next page file id */
+        u32, /* next map file id */
         Manifest<E>,
         PageTable,
         PageFiles<E>,
@@ -61,13 +62,21 @@ impl<E: Env> PageStore<E> {
 
         Self::delete_unreferenced_page_files(&page_files, &summary).await?;
 
-        let next_file_id = summary.active_page_files.keys().cloned().max().unwrap_or(0) + 1;
+        let next_page_file_id = summary.active_page_files.keys().cloned().max().unwrap_or(0) + 1;
+        let next_map_file_id = summary.active_map_files.keys().cloned().max().unwrap_or(0) + 1;
         let delta = DeltaVersion {
             page_files: file_infos,
             map_files,
             ..Default::default()
         };
-        Ok((next_file_id, manifest, page_table, page_files, delta))
+        Ok((
+            next_page_file_id,
+            next_map_file_id,
+            manifest,
+            page_table,
+            page_files,
+            delta,
+        ))
     }
 
     fn apply_version_edits(versions: Vec<VersionEdit>) -> FilesSummary {

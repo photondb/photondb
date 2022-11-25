@@ -61,7 +61,7 @@ impl<E: Env> FlushCtx<E> {
                 }
             }
 
-            match self.flush(&version, write_buffer.as_ref()).await {
+            match self.flush(write_buffer.as_ref()).await {
                 Ok(()) => {}
                 Err(err) => {
                     todo!("flush write buffer: {err:?}");
@@ -70,7 +70,7 @@ impl<E: Env> FlushCtx<E> {
         }
     }
 
-    async fn flush(&self, version: &Version, write_buffer: &WriteBuffer) -> Result<()> {
+    async fn flush(&self, write_buffer: &WriteBuffer) -> Result<()> {
         let start_at = Instant::now();
         let file_id = write_buffer.file_id();
         let (dealloc_pages, file_info, reclaimed_files) =
@@ -84,34 +84,42 @@ impl<E: Env> FlushCtx<E> {
             start_at.elapsed().as_micros()
         );
 
-        let mut files = self.apply_dealloc_pages(version, file_id, dealloc_pages.to_owned());
-        let obsoleted_files = drain_obsoleted_files(&mut files, reclaimed_files);
-        files.insert(file_id, file_info);
-
-        self.save_version_edit(version, file_id, &obsoleted_files)
+        self.save_and_install_version(file_id, file_info, dealloc_pages, reclaimed_files)
             .await?;
-        self.install_version(version, file_id, files, obsoleted_files)
-            .await;
         Ok(())
     }
 
-    async fn install_version(
+    async fn save_and_install_version(
         &self,
-        version: &Version,
         file_id: u32,
-        files: HashMap<u32, FileInfo>,
-        obsoleted_files: HashSet<u32>,
-    ) {
+        file_info: FileInfo,
+        dealloc_pages: Vec<u64>,
+        reclaimed_files: HashSet<u32>,
+    ) -> Result<()> {
+        let mut manifest = self.manifest.lock().await;
+        let version = self.version_owner.current();
+
+        let mut files = self.apply_dealloc_pages(&version, file_id, dealloc_pages.to_owned());
+        let obsoleted_page_files = drain_obsoleted_files(&mut files, reclaimed_files);
+        files.insert(file_id, file_info);
+
+        let edit = make_flush_version_edit(file_id, &obsoleted_page_files);
+        manifest
+            .record_version_edit(edit, || version_snapshot(&version))
+            .await?;
+
         // Release buffer permit and ensure the new buffer is installed, before install
         // new version.
         version.buffer_set.release_permit_and_wait(file_id).await;
 
         let delta = DeltaVersion {
             page_files: files,
-            obsoleted_page_files: obsoleted_files,
-            ..Default::default()
+            obsoleted_page_files,
+            ..DeltaVersion::from(version.as_ref())
         };
-        self.version_owner.install(file_id, delta);
+        // Safety: the mutable reference of [`Manifest`] is hold.
+        unsafe { self.version_owner.install(delta) };
+        Ok(())
     }
 
     /// Flush [`WriteBuffer`] to page files and returns dealloc pages.
@@ -149,32 +157,6 @@ impl<E: Env> FlushCtx<E> {
         builder.add_delete_pages(&dealloc_pages);
         let file_info = builder.finish().await?;
         Ok((dealloc_pages, file_info, reclaimed_files))
-    }
-
-    async fn save_version_edit(
-        &self,
-        version: &Version,
-        file_id: u32,
-        obsoleted_files: &HashSet<u32>,
-    ) -> Result<()> {
-        let deleted_files = obsoleted_files.iter().cloned().collect();
-        let stream = StreamEdit {
-            new_files: vec![NewFile {
-                id: file_id,
-                up1: file_id,
-                up2: file_id,
-            }],
-            deleted_files,
-        };
-        let edit = VersionEdit {
-            page_stream: Some(stream),
-            map_stream: None,
-        };
-
-        let mut manifest = self.manifest.lock().await;
-        manifest
-            .record_version_edit(edit, || version_snapshot(version))
-            .await
     }
 
     fn apply_dealloc_pages(
@@ -280,7 +262,7 @@ fn collect_dealloc_pages_and_stats(
     (dealloc_pages, skip_pages, reclaimed_files)
 }
 
-fn version_snapshot(version: &Version) -> VersionEdit {
+pub(super) fn version_snapshot(version: &Version) -> VersionEdit {
     let new_files: Vec<NewFile> = version
         .page_files()
         .values()
@@ -311,6 +293,19 @@ fn version_snapshot(version: &Version) -> VersionEdit {
     VersionEdit {
         page_stream: Some(page_stream),
         map_stream: Some(map_stream),
+    }
+}
+
+fn make_flush_version_edit(file_id: u32, obsoleted_files: &HashSet<u32>) -> VersionEdit {
+    let deleted_files = obsoleted_files.iter().cloned().collect();
+    let new_files = vec![NewFile::from(file_id)];
+    let stream = StreamEdit {
+        new_files,
+        deleted_files,
+    };
+    VersionEdit {
+        page_stream: Some(stream),
+        map_stream: None,
     }
 }
 
@@ -461,7 +456,7 @@ mod tests {
             let (addr1, _, _) = unsafe { buf.alloc_page(1, 32, false) }.unwrap();
             let (addr2, _, _) = unsafe { buf.alloc_page(2, 32, false) }.unwrap();
             seal_and_install_new_buffer(&version, &buf);
-            ctx.flush(&version, &buf).await.unwrap();
+            ctx.flush(&buf).await.unwrap();
             (addr1, addr2, buf.file_id())
         };
         println!("Alloc two pages {addr1} {addr2} at file {file_1}");
@@ -472,7 +467,7 @@ mod tests {
             let buf = version.min_write_buffer();
             unsafe { buf.dealloc_pages(&[addr1], false) }.unwrap();
             seal_and_install_new_buffer(&version, &buf);
-            ctx.flush(&version, &buf).await.unwrap();
+            ctx.flush(&buf).await.unwrap();
             buf.file_id()
         };
         println!("Dealloc page {addr1} at file {file_2}");
@@ -503,7 +498,7 @@ mod tests {
         {
             let version = ctx.version_owner.current();
             let buf = version.get(buffer_2).unwrap().clone();
-            ctx.flush(&version, &buf).await.unwrap();
+            ctx.flush(&buf).await.unwrap();
         }
         println!("Flush write buffer {buffer_2}, it make file {file_1} become empty");
 
@@ -511,7 +506,7 @@ mod tests {
         {
             let version = ctx.version_owner.current();
             let buf = version.get(buffer_3).unwrap().clone();
-            ctx.flush(&version, &buf).await.unwrap();
+            ctx.flush(&buf).await.unwrap();
         }
     }
 
