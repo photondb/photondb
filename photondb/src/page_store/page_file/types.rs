@@ -5,6 +5,12 @@ use std::{
 
 use crate::page_store::{Error, Result};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum FileId {
+    Page(u32),
+    Map(u32),
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PageHandle {
     pub(crate) offset: u32,

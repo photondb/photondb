@@ -7,7 +7,7 @@ pub(crate) use file_reader::PageFileReader;
 
 mod types;
 pub(crate) use facade::PageFiles;
-pub(crate) use types::{FileInfo, FileMeta, MapFileInfo};
+pub(crate) use types::{FileId, FileInfo, FileMeta, MapFileInfo};
 
 mod map_file_builder;
 pub(crate) use map_file_builder::{MapFileBuilder, PartialFileBuilder};
@@ -131,7 +131,7 @@ pub(crate) mod facade {
 
         pub(crate) async fn read_page(
             &self,
-            file_id: u32,
+            file_id: FileId,
             addr: u64,
             handle: PageHandle,
             file_info: &FileInfo,
@@ -161,14 +161,18 @@ pub(crate) mod facade {
         /// and version.active_files.
         pub(crate) async fn open_page_reader(
             &self,
-            file_id: u32,
+            file_id: FileId,
             block_size: usize,
         ) -> Result<Arc<PageFileReader<E::PositionalReader>>> {
             let r = self
                 .reader_cache
                 .get_with(file_id, async move {
+                    let (prefix, id) = match file_id {
+                        FileId::Page(id) => (PAGE_FILE_PREFIX, id),
+                        FileId::Map(id) => (MAP_FILE_PREFIX, id),
+                    };
                     let (file, file_size) = self
-                        .open_positional_reader(PAGE_FILE_PREFIX, file_id)
+                        .open_positional_reader(prefix, id)
                         .await
                         .expect("open reader for file_id: {file_id} fail");
                     let use_direct = self.use_direct && file.direct_io_ify().is_ok();
@@ -181,16 +185,6 @@ pub(crate) mod facade {
                 })
                 .await;
             Ok(r)
-        }
-
-        /// Open a reader for the specified map file.
-        #[allow(unused)]
-        pub(crate) async fn open_map_file_reader(
-            &self,
-            file_id: u32,
-            block_size: usize,
-        ) -> Result<Arc<MapFileReader<E::PositionalReader>>> {
-            todo!("support file cache")
         }
 
         pub(crate) async fn open_page_file_meta_reader(
@@ -211,7 +205,7 @@ pub(crate) mod facade {
 
         pub(crate) async fn read_map_file_meta(&self, file_id: u32) -> Result<MapFileMetaHolder> {
             let (file, file_size) = self
-                .open_positional_reader(PAGE_FILE_PREFIX, file_id)
+                .open_positional_reader(MAP_FILE_PREFIX, file_id)
                 .await?;
             let page_file_reader = Arc::new(MapFileReader::from(
                 file,
@@ -246,7 +240,7 @@ pub(crate) mod facade {
             for file_id in files {
                 // FIXME: handle error.
                 self.remove_page_file(file_id).await?;
-                self.reader_cache.invalidate(&file_id).await;
+                self.reader_cache.invalidate(FileId::Page(file_id)).await;
             }
             Ok(())
         }
@@ -255,6 +249,7 @@ pub(crate) mod facade {
             for file_id in files {
                 // FIXME: handle error.
                 self.remove_map_file(file_id).await?;
+                self.reader_cache.invalidate(FileId::Map(file_id)).await;
             }
             Ok(())
         }
@@ -366,7 +361,7 @@ pub(crate) mod facade {
             };
 
             let page_reader = files
-                .open_page_reader(info.meta().get_file_id(), 4096)
+                .open_page_reader(FileId::Page(info.meta().get_file_id()), 4096)
                 .await
                 .unwrap();
 
@@ -448,7 +443,10 @@ pub(crate) mod facade {
 
                 {
                     let (page3_offset, page3_size) = meta.get_page_handle(page_addr(2, 4)).unwrap();
-                    let page_reader = files.open_page_reader(file_id, 4096).await.unwrap();
+                    let page_reader = files
+                        .open_page_reader(FileId::Page(file_id), 4096)
+                        .await
+                        .unwrap();
                     let mut buf = vec![0u8; page3_size];
                     page_reader
                         .read_exact_at(&mut buf, page3_offset)

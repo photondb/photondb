@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::{FileInfo, MapFileInfo};
+use super::{page_file::FileId, FileInfo, MapFileInfo};
 
 pub(crate) trait StrategyBuilder: Send + Sync {
     fn build(&self, now: u32) -> Box<dyn ReclaimPickStrategy>;
@@ -15,14 +15,7 @@ pub(crate) trait ReclaimPickStrategy: Send + Sync {
     fn collect_map_file(&mut self, virtual_infos: &HashMap<u32, FileInfo>, file_info: &MapFileInfo);
 
     /// Return the most suitable files for reclaiming under the strategy.
-    fn apply(&mut self) -> Option<(PickedFile, usize /* active size */)>;
-}
-
-/// The file picked by relaiming strategy.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum PickedFile {
-    PageFile(u32),
-    MapFile(u32),
+    fn apply(&mut self) -> Option<(FileId, usize /* active size */)>;
 }
 
 pub(crate) struct MinDeclineRateStrategy {
@@ -41,7 +34,7 @@ struct FileScore {
     effective_rate: f64,
     write_amplify: f64,
     active_size: usize,
-    file_id: PickedFile,
+    file_id: FileId,
 }
 
 struct FileSummary {
@@ -63,7 +56,7 @@ impl MinDeclineRateStrategy {
         }
     }
 
-    fn collect(&mut self, file_id: PickedFile, summary: &FileSummary) {
+    fn collect(&mut self, file_id: FileId, summary: &FileSummary) {
         let score = decline_rate(summary, self.now);
         let effective_rate = summary.effective_rate;
         let write_amplify = write_amplification(summary.empty_pages_rate);
@@ -85,7 +78,7 @@ impl ReclaimPickStrategy for MinDeclineRateStrategy {
     fn collect_page_file(&mut self, file_info: &FileInfo) {
         let file_id = file_info.get_file_id();
         let summary = FileSummary::from(file_info);
-        self.collect(PickedFile::PageFile(file_id), &summary);
+        self.collect(FileId::Page(file_id), &summary);
     }
 
     fn collect_map_file(
@@ -95,10 +88,10 @@ impl ReclaimPickStrategy for MinDeclineRateStrategy {
     ) {
         let file_id = file_info.file_id();
         let summary = FileSummary::from((virtual_infos, file_info));
-        self.collect(PickedFile::MapFile(file_id), &summary);
+        self.collect(FileId::Map(file_id), &summary);
     }
 
-    fn apply(&mut self) -> Option<(PickedFile, usize)> {
+    fn apply(&mut self) -> Option<(FileId, usize)> {
         if !self.sorted {
             self.sorted = true;
             self.scores.sort_unstable_by(|a, b| {
@@ -173,7 +166,7 @@ fn decline_rate(summary: &FileSummary, now: u32) -> f64 {
 
     let file_size = summary.file_size;
     let effective_size = summary.effective_size;
-    let free_size = file_size - effective_size;
+    let free_size = file_size.saturating_sub(effective_size);
     if free_size == 0 || summary.up2 == now {
         return f64::MIN;
     }

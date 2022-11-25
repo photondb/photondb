@@ -17,7 +17,7 @@ mod meta;
 pub(crate) use meta::{NewFile, StreamEdit, VersionEdit};
 
 mod version;
-use version::{DeltaVersion, Version, VersionOwner};
+use version::{DeltaVersion, Version, VersionOwner, VersionUpdateReason};
 
 mod jobs;
 pub(crate) use jobs::RewritePage;

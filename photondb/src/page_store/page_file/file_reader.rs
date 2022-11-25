@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 use futures::Future;
 use moka::future::Cache;
 
-use super::{file_builder::*, types::FileMeta};
+use super::{file_builder::*, types::FileMeta, FileId};
 use crate::{
     env::{Env, PositionalReader, PositionalReaderExt},
     page_store::{Error, Result},
@@ -194,7 +194,7 @@ impl<R: PositionalReader> MetaReader<R> {
 }
 
 pub(super) struct ReaderCache<E: Env> {
-    cache: moka::future::Cache<u32 /* file_id */, Arc<PageFileReader<E::PositionalReader>>>,
+    cache: moka::future::Cache<FileId, Arc<PageFileReader<E::PositionalReader>>>,
     _marker: PhantomData<E>,
 }
 
@@ -212,13 +212,13 @@ impl<E: Env> ReaderCache<E> {
 
     pub(super) async fn get_with(
         &self,
-        file_id: u32,
+        file_id: FileId,
         init: impl Future<Output = Arc<PageFileReader<E::PositionalReader>>>,
     ) -> Arc<PageFileReader<E::PositionalReader>> {
         self.cache.get_with(file_id, init).await
     }
 
-    pub(super) async fn invalidate(&self, file_id: &u32) {
-        self.cache.invalidate(file_id).await
+    pub(super) async fn invalidate(&self, file_id: FileId) {
+        self.cache.invalidate(&file_id).await
     }
 }

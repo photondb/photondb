@@ -113,6 +113,7 @@ impl<E: Env> FlushCtx<E> {
         version.buffer_set.release_permit_and_wait(file_id).await;
 
         let delta = DeltaVersion {
+            reason: VersionUpdateReason::Flush,
             page_files: files,
             obsoleted_page_files,
             ..DeltaVersion::from(version.as_ref())
@@ -198,25 +199,27 @@ fn drain_obsoleted_files(
 ) -> HashSet<u32> {
     assert_files_are_deletable(files, &reclaimed_files);
     let active_files = files
-        .keys()
-        .filter(|&id| !reclaimed_files.contains(id))
-        .cloned()
+        .iter()
+        // Virtual file could ignore reclaimed info.
+        .filter(|(id, info)| info.get_map_file_id().is_some() || !reclaimed_files.contains(id))
+        .map(|(&id, _)| id)
         .collect::<HashSet<_>>();
     let mut obsoleted_files = reclaimed_files;
     for (id, info) in &mut *files {
-        if info.is_obsoleted(&active_files) {
+        if info.get_map_file_id().is_none() && info.is_obsoleted(&active_files) {
             obsoleted_files.insert(*id);
         }
     }
-    files.drain_filter(|id, _| obsoleted_files.contains(id));
+    // Ignore virtual file.
+    files.drain_filter(|id, info| info.get_map_file_id().is_none() && obsoleted_files.contains(id));
     obsoleted_files
 }
 
 fn assert_files_are_deletable(files: &HashMap<u32, FileInfo>, reclaimed_files: &HashSet<u32>) {
     for file_id in reclaimed_files {
         if let Some(info) = files.get(file_id) {
-            if !info.is_empty() {
-                panic!("The reclamied file {file_id} has active pages");
+            if !info.is_empty() && info.get_map_file_id().is_none() {
+                panic!("The reclaimed page file {file_id} has active pages");
             }
         }
     }
@@ -266,6 +269,7 @@ pub(super) fn version_snapshot(version: &Version) -> VersionEdit {
     let new_files: Vec<NewFile> = version
         .page_files()
         .values()
+        .filter(|info| info.get_map_file_id().is_none())
         .map(Into::into)
         .collect::<Vec<_>>();
 

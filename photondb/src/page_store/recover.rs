@@ -223,8 +223,9 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
         // 3. recover page table.
         for (_, page_table) in meta_reader.page_tables {
             for (page_addr, page_id) in page_table {
-                // TODO: the page addr in map file isn't ensure the address order.
-                self.page_table_builder.set(page_id, page_addr);
+                if self.page_table_builder.get(page_id) < page_addr {
+                    self.page_table_builder.set(page_id, page_addr);
+                }
             }
         }
 
@@ -235,13 +236,6 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
     /// increasing.
     async fn recover_page_file(&mut self, file: NewFile) -> Result<()> {
         let file_id = file.id;
-        if self.virtual_files.contains(&file_id) {
-            // This page file has compounded into a map file, which has been recovered
-            // early.
-            debug!("ignore page file {file_id} in recovery, since it has been compounded");
-            return Ok(());
-        }
-
         let meta_reader = self.facade.open_page_file_meta_reader(file_id).await?;
         let file_meta = meta_reader.file_metadata();
 
@@ -252,6 +246,13 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
             referenced_files.insert((page_addr >> 32) as u32);
         }
         self.dealloc_pages.insert(file_id, delete_pages);
+
+        if self.virtual_files.contains(&file_id) {
+            // This page file has compounded into a map file, which has been recovered
+            // early.
+            debug!("ignore page file {file_id} in recovery, since it has been compounded");
+            return Ok(());
+        }
 
         // 2. recover file info
         let active_pages = file_meta.pages_bitmap();
@@ -267,10 +268,10 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
         self.page_files.insert(file_id, info);
 
         // 3. recover page table
-        for (page_id, page_addr) in meta_reader.read_page_table().await? {
-            // Dealloc pages are not considered here, because currently by design, pages are
-            // released after being updated.
-            self.page_table_builder.set(page_id, page_addr);
+        for (page_addr, page_id) in meta_reader.read_page_table().await? {
+            if self.page_table_builder.get(page_id) < page_addr {
+                self.page_table_builder.set(page_id, page_addr);
+            }
         }
 
         Ok(())
@@ -284,7 +285,10 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
     }
 
     fn maintain_active_pages(&mut self) {
-        for (&updated_at, delete_pages) in &self.dealloc_pages {
+        let mut updates = self.dealloc_pages.keys().cloned().collect::<Vec<_>>();
+        updates.sort_unstable();
+        for updated_at in updates {
+            let delete_pages = self.dealloc_pages.get(&updated_at).expect("Always exists");
             for &page_addr in delete_pages {
                 let file_id = (page_addr >> 32) as u32;
                 if let Some(info) = self.page_files.get_mut(&file_id) {
@@ -298,5 +302,16 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
                 }
             }
         }
+    }
+}
+
+impl std::fmt::Debug for FilesSummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FilesSummary")
+            .field("page_files", &self.active_page_files.keys())
+            .field("map_files", &self.active_map_files.keys())
+            .field("obsoleted_map_files", &self.obsoleted_map_files)
+            .field("obsoleted_page_files", &self.obsoleted_page_files)
+            .finish()
     }
 }

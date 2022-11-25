@@ -20,6 +20,7 @@ pub(crate) struct VersionOwner {
 pub(crate) struct Version {
     pub(crate) buffer_set: Arc<BufferSet>,
 
+    reason: VersionUpdateReason,
     page_files: HashMap<u32, FileInfo>,
     map_files: HashMap<u32, MapFileInfo>,
 
@@ -39,10 +40,18 @@ pub(crate) struct Version {
 
 #[derive(Default)]
 pub(crate) struct DeltaVersion {
+    pub(crate) reason: VersionUpdateReason,
     pub(crate) page_files: HashMap<u32, FileInfo>,
     pub(crate) map_files: HashMap<u32, MapFileInfo>,
     pub(crate) obsoleted_page_files: HashSet<u32>,
     pub(crate) obsoleted_map_files: HashSet<u32>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) enum VersionUpdateReason {
+    #[default]
+    Flush,
+    Compact,
 }
 
 impl VersionOwner {
@@ -87,7 +96,7 @@ impl VersionOwner {
         let mut first_buffer_id = current.first_buffer_id;
 
         // Advance to next buffer if current has been persisted.
-        if delta.page_files.contains_key(&first_buffer_id) {
+        if matches!(delta.reason, VersionUpdateReason::Flush) {
             debug!("Install new version with file {first_buffer_id}");
             first_buffer_id = current.first_buffer_id + 1;
         }
@@ -175,6 +184,7 @@ impl Version {
         let (sender, receiver) = oneshot::channel();
         Version {
             first_buffer_id,
+            reason: delta.reason,
             page_files: delta.page_files,
             map_files: delta.map_files,
             obsoleted_page_files: delta.obsoleted_page_files,
@@ -251,7 +261,9 @@ impl Version {
 
     /// Release all previous writer buffers which is invisible.
     pub(crate) fn release_previous_buffers(&self) {
-        self.buffer_set.release_until(self.first_buffer_id);
+        if matches!(self.reason, VersionUpdateReason::Flush) {
+            self.buffer_set.release_until(self.first_buffer_id);
+        }
     }
 
     #[inline]
@@ -312,6 +324,18 @@ impl From<&Version> for DeltaVersion {
     }
 }
 
+impl std::fmt::Debug for DeltaVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeltaVersion")
+            .field("reason", &self.reason)
+            .field("map_files", &self.map_files.keys())
+            .field("page_files", &self.page_files.keys())
+            .field("obsoleted_map_files", &self.obsoleted_map_files)
+            .field("obsoleted_page_files", &self.obsoleted_page_files)
+            .finish()
+    }
+}
+
 mod version_guard {
     use crossbeam_epoch::{Collector, Guard, LocalHandle};
     use once_cell::sync::Lazy;
@@ -348,10 +372,40 @@ mod version_guard {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
     use super::*;
-    use crate::page_store::page_file::FileMeta;
+
+    #[test]
+    fn version_install() {
+        let version = Version::new(1 << 10, 1, 8, DeltaVersion::default());
+        let owner = VersionOwner::new(version);
+        let version = owner.current();
+        let buffer_id = version.first_buffer_id;
+        for i in 1..100 {
+            // 1. install compact version.
+            let delta = DeltaVersion {
+                reason: VersionUpdateReason::Compact,
+                ..Default::default()
+            };
+            // Safety: no concurrent operations
+            unsafe { owner.install(delta) };
+
+            // 2. seal buffer and flush
+            {
+                let current = version.buffer_set.current();
+                let buf = current.last_writer_buffer();
+                buf.seal().unwrap();
+            }
+            let buf = Arc::new(WriteBuffer::with_capacity(buffer_id + i, 1 << 10));
+            version.buffer_set.install(buf);
+
+            let delta = DeltaVersion {
+                reason: VersionUpdateReason::Flush,
+                ..Default::default()
+            };
+            // Safety: no concurrent operations
+            unsafe { owner.install(delta) };
+        }
+    }
 
     #[test]
     fn version_access_newly_buffers() {
@@ -388,20 +442,8 @@ mod tests {
         drop(version);
 
         // install new version
-        let mut page_files = HashMap::default();
-        page_files.insert(
-            buffer_id,
-            FileInfo::new(
-                roaring::RoaringBitmap::new(),
-                0,
-                0,
-                0,
-                HashSet::default(),
-                Arc::new(FileMeta::new(buffer_id, 0, 0, vec![], BTreeMap::default())),
-            ),
-        );
         let delta = DeltaVersion {
-            page_files,
+            reason: VersionUpdateReason::Flush,
             ..Default::default()
         };
         // Safety: No concurrent here

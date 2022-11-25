@@ -88,6 +88,7 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
 
     pub(crate) async fn finish(mut self) -> Result<(HashMap<u32, FileInfo>, MapFileInfo)> {
         let file_size = self.finish_tail_blocks().await?;
+        self.writer.flush_and_sync().await?;
         let page_files = self
             .file_infos
             .iter()
@@ -107,10 +108,10 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
         let page_index_block = self.page_index.finish();
         let offset = self.writer.write(&page_index_block).await?;
         let length = page_index_block.len() as u64;
-        let page_index_handler = BlockHandler { offset, length };
+        let page_index_handle = BlockHandler { offset, length };
         let footer = Footer {
             magic: MAP_FILE_MAGIC,
-            page_index_handle: page_index_handler,
+            page_index_handle,
         };
         let payload = footer.encode();
         let foot_offset = self.writer.write(&payload).await?;
@@ -174,7 +175,7 @@ impl PageIndexBuilder {
 impl PageIndex {
     #[inline]
     pub(super) const fn encoded_size() -> usize {
-        core::mem::size_of::<u32>() + core::mem::size_of::<u64>() * 4
+        core::mem::size_of::<u32>() + BlockHandler::encoded_size() * 2
     }
 
     #[inline]

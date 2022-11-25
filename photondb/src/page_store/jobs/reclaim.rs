@@ -10,10 +10,10 @@ use log::{info, trace};
 use crate::{
     env::Env,
     page_store::{
-        page_file::{MapFileBuilder, PartialFileBuilder},
+        page_file::{FileId, MapFileBuilder, PartialFileBuilder},
         page_table::PageTable,
-        strategy::{PickedFile, ReclaimPickStrategy},
-        version::{DeltaVersion, VersionOwner},
+        strategy::ReclaimPickStrategy,
+        version::{DeltaVersion, VersionOwner, VersionUpdateReason},
         Error, FileInfo, Guard, Manifest, MapFileInfo, NewFile, Options, PageFiles, Result,
         StrategyBuilder, StreamEdit, Version, VersionEdit,
     },
@@ -53,6 +53,7 @@ where
 #[derive(Debug)]
 struct ReclaimJobBuilder {
     target_file_base: usize,
+    hot_threshold: u32,
 
     compound_files: HashSet<u32>,
     compound_size: usize,
@@ -140,7 +141,7 @@ where
                 continue;
             }
 
-            if file.is_empty() {
+            if file.is_empty() && file.get_map_file_id().is_none() {
                 empty_files.push(*id);
             }
         }
@@ -153,7 +154,7 @@ where
         cleaned_files: &HashSet<u32>,
     ) {
         let mut strategy = self.build_strategy(version, cleaned_files);
-        let mut builder = ReclaimJobBuilder::new(self.options.file_base_size);
+        let mut builder = ReclaimJobBuilder::new(self.options.file_base_size, version);
         while let Some((file, active_size)) = strategy.apply() {
             if let Some(job) = builder.add(file, active_size) {
                 match job {
@@ -201,6 +202,7 @@ where
             .unwrap();
 
         let mut delta = DeltaVersion::from(version.as_ref());
+        delta.reason = VersionUpdateReason::Compact;
         delta.map_files.insert(file_id, map_file);
         delta.page_files.extend(virtual_page_files.into_iter());
         delta.obsoleted_page_files = obsoleted_files.into_iter().collect();
@@ -360,7 +362,8 @@ where
                 continue;
             }
 
-            if !file.is_empty() {
+            // Skip empty or virtual page file.
+            if !file.is_empty() && file.get_map_file_id().is_none() {
                 strategy.collect_page_file(file);
             }
         }
@@ -399,9 +402,11 @@ where
             true
         } else {
             trace!(
-                "db is not reclaimable, base size {}, additional size {}, space amp {:.4}",
+                "db is not reclaimable, base size {}, additional size {}, used space {}, used high {}, space amp {:.4}",
                 base_size,
                 additional_size,
+                used_space,
+                space_used_high,
                 space_amp
             );
             false
@@ -420,17 +425,28 @@ where
         file_infos: &HashMap<u32, FileInfo>,
         victims: HashSet<u32>,
     ) -> Result<(HashMap<u32, FileInfo>, MapFileInfo, Vec<u32>)> {
+        let start_at = Instant::now();
+        let mut num_active_pages = 0;
+        let mut num_dealloc_pages = 0;
+        let mut input_size = 0;
+        let mut output_size = 0;
         let mut builder = self.page_files.new_map_file_builder(new_file_id).await?;
         let mut obsoleted_files = vec![];
-        for id in victims {
+        let mut victims = victims.into_iter().collect::<Vec<_>>();
+        victims.sort_unstable();
+        for &id in &victims {
             let dealloc_pages;
 
             // Compound page file into map file
             let file_builder = builder.add_file(id);
             let file_info = file_infos.get(&id).expect("Victims must exists");
+            input_size += file_info.file_size();
+            output_size += file_info.effective_size();
+            num_active_pages += file_info.num_active_pages();
             (builder, dealloc_pages) = self
                 .compound_partial_page_file(file_builder, file_info)
                 .await?;
+            num_dealloc_pages += dealloc_pages.len();
 
             // .. and rewrite dealloc pages if exists
             if dealloc_pages.is_empty() {
@@ -442,6 +458,19 @@ where
             self.cleaned_files.insert(id);
         }
         let (virtual_infos, file_info) = builder.finish().await?;
+
+        let elapsed = start_at.elapsed().as_micros();
+        let free_size = input_size.saturating_sub(output_size);
+        let free_ratio = free_size as f64 / input_size as f64;
+        info!(
+            "Compound page files {victims:?} into map file {new_file_id} \
+                with {num_active_pages} active pages, \
+                {num_dealloc_pages} dealloc pages, \
+                relocate {output_size} bytes, \
+                free {free_size} bytes, free ratio {free_ratio:.4}, \
+                latest {elapsed} microseconds",
+        );
+
         Ok((virtual_infos, file_info, obsoleted_files))
     }
 
@@ -495,9 +524,15 @@ where
 }
 
 impl ReclaimJobBuilder {
-    fn new(target_file_base: usize) -> ReclaimJobBuilder {
+    fn new(target_file_base: usize, version: &Version) -> ReclaimJobBuilder {
+        let max_id = version.min_write_buffer().file_id();
+        let min_id = version.page_files().keys().cloned().min().unwrap_or(max_id);
+        let hot_threshold = min_id + (max_id.saturating_sub(min_id) as f64 * 0.618) as u32;
+        let hot_threshold = std::cmp::min(hot_threshold, max_id.saturating_sub(16));
+
         ReclaimJobBuilder {
             target_file_base,
+            hot_threshold,
 
             compact_files: HashSet::default(),
             compact_size: 0,
@@ -506,16 +541,16 @@ impl ReclaimJobBuilder {
         }
     }
 
-    fn add(&mut self, file: PickedFile, active_size: usize) -> Option<ReclaimJob> {
+    fn add(&mut self, file: FileId, active_size: usize) -> Option<ReclaimJob> {
         // A switch disable map files before we have full supports.
-        if true {
-            let PickedFile::PageFile(file_id) = file else { panic!("not implemented") };
+        if false {
+            let FileId::Page(file_id) = file else { panic!("not implemented") };
             return Some(ReclaimJob::Rewrite(file_id));
         }
 
         match file {
-            PickedFile::PageFile(file_id) => {
-                // Rewrite small page files or hot pages directly.
+            FileId::Page(file_id) => {
+                // Rewrite small page files (16KB <=) or hot pages directly.
                 if active_size < 16 << 10 || self.is_top_k(file_id) {
                     return Some(ReclaimJob::Rewrite(file_id));
                 }
@@ -529,7 +564,12 @@ impl ReclaimJobBuilder {
                     )));
                 }
             }
-            PickedFile::MapFile(file_id) => {
+            FileId::Map(file_id) => {
+                // We don't support compact map file now.
+                if true {
+                    return None;
+                }
+
                 // TODO: rewrite small map file directly.
                 self.compact_size += active_size;
                 self.compact_files.insert(file_id);
@@ -542,15 +582,19 @@ impl ReclaimJobBuilder {
         None
     }
 
-    fn is_top_k(&self, _file_id: u32) -> bool {
-        todo!()
+    #[inline]
+    fn is_top_k(&self, file_id: u32) -> bool {
+        self.hot_threshold <= file_id
     }
 }
 
 fn compute_base_size(files: &HashMap<u32, FileInfo>, cleaned_files: &HashSet<u32>) -> u64 {
     // skip files that are already being cleaned.
-    let allow_file =
-        |info: &&FileInfo| !info.is_empty() && !cleaned_files.contains(&info.get_file_id());
+    let allow_file = |info: &&FileInfo| {
+        !info.is_empty()
+            && info.get_map_file_id().is_none()
+            && !cleaned_files.contains(&info.get_file_id())
+    };
     files
         .values()
         .filter(allow_file)
@@ -560,8 +604,11 @@ fn compute_base_size(files: &HashMap<u32, FileInfo>, cleaned_files: &HashSet<u32
 
 fn compute_used_space(files: &HashMap<u32, FileInfo>, cleaned_files: &HashSet<u32>) -> u64 {
     // skip files that are already being cleaned.
-    let allow_file =
-        |info: &&FileInfo| !info.is_empty() && !cleaned_files.contains(&info.get_file_id());
+    let allow_file = |info: &&FileInfo| {
+        !info.is_empty()
+            && info.get_map_file_id().is_none()
+            && !cleaned_files.contains(&info.get_file_id())
+    };
     files
         .values()
         .filter(allow_file)

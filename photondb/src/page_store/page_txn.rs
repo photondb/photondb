@@ -11,6 +11,7 @@ use super::{
 use crate::{
     env::Env,
     page::{PageBuf, PageRef},
+    page_store::page_file::FileId,
 };
 
 type CacheEntryGuard = CacheEntry<Vec<u8>, ClockCache<Vec<u8>>>;
@@ -65,34 +66,31 @@ impl<E: Env> Guard<E> {
     }
 
     pub(crate) async fn read_page(&self, addr: u64) -> Result<PageRef> {
-        let file_id = (addr >> 32) as u32;
-        if let Some(buf) = self.version.get(file_id) {
+        let logic_id = (addr >> 32) as u32;
+        if let Some(buf) = self.version.get(logic_id) {
             // Safety: all mutable references are released.
             return Ok(unsafe { buf.page(addr) });
         }
 
-        let Some(file_info) = self.version.page_files().get(&file_id) else {
-            panic!("File {file_id} is not exists");
+        let Some(file_info) = self.version.page_files().get(&logic_id) else {
+            panic!("File {logic_id} is not exists");
         };
-        assert_eq!(file_info.get_file_id(), file_id);
+        assert_eq!(file_info.get_file_id(), logic_id);
 
-        let page_handle = if let Some(map_file_id) = file_info.get_map_file_id() {
+        let physical_id = if let Some(id) = file_info.get_map_file_id() {
             // This is partial page file, read page from the corresponding map file.
-            let Some(_) = file_info.get_page_handle(addr) else {
-                panic!("The addr {addr} is not belongs to the target map file {file_id}");
-            };
-
-            todo!("read page from map file {map_file_id}");
+            FileId::Map(id)
         } else {
-            let Some(handle) = file_info.get_page_handle(addr) else {
-                panic!("The addr {addr} is not belongs to the target page file {file_id}");
-            };
-            handle
+            FileId::Page(logic_id)
+        };
+
+        let Some(handle) = file_info.get_page_handle(addr) else {
+            panic!("The addr {addr} is not belongs to the target file {physical_id:?}");
         };
 
         let entry = self
             .page_files
-            .read_page(file_id, addr, page_handle, file_info)
+            .read_page(physical_id, addr, handle, file_info)
             .await?;
 
         let mut owned_pages = self.cache_guards.lock().expect("Poisoned");
