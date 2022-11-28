@@ -561,11 +561,9 @@ where
                 page.resize(page_size, 0u8);
             }
             self.page_files
-                .read_file_page_from_reader(reader.clone(), file_info.meta(), handle)
+                .read_file_page_from_reader(reader.clone(), file_info.meta(), handle, &mut page)
                 .await?;
-            builder
-                .add_page(page_id, page_addr, &page[..page_size])
-                .await?;
+            builder.add_page(page_id, page_addr, &page).await?;
         }
         let builder = builder.finish().await?;
         Ok((builder, dealloc_pages))
@@ -581,7 +579,14 @@ where
         victims: &HashSet<u32>,
     ) -> Result<(HashMap<u32, FileInfo>, MapFileInfo)> {
         let start_at = Instant::now();
-        let mut builder = self.page_files.new_map_file_builder(new_file_id).await?;
+        let mut builder = self
+            .page_files
+            .new_map_file_builder(
+                new_file_id,
+                self.options.compression_on_cold_compact,
+                self.options.page_checksum_type,
+            )
+            .await?;
         let mut victims = victims.iter().cloned().collect::<Vec<_>>();
         victims.sort_unstable();
         let mut stats = CompactStats::default();
@@ -642,12 +647,10 @@ where
                 if page.len() < page_size {
                     page.resize(page_size, 0u8);
                 }
-                reader
-                    .read_exact_at(&mut page[..page_size], handle.offset as u64)
+                self.page_files
+                    .read_file_page_from_reader(reader.clone(), info.meta(), handle, &mut page)
                     .await?;
-                partial_builder
-                    .add_page(page_id, page_addr, &page[..page_size])
-                    .await?;
+                partial_builder.add_page(page_id, page_addr, &page).await?;
             }
             builder = partial_builder.finish().await?;
         }
@@ -809,7 +812,8 @@ mod tests {
     use crate::{
         env::Photon,
         page_store::{
-            page_file::Compression, version::DeltaVersion, MinDeclineRateStrategyBuilder, RecordRef,
+            page_file::Compression, version::DeltaVersion, ChecksumType,
+            MinDeclineRateStrategyBuilder, RecordRef,
         },
         util::shutdown::ShutdownNotifier,
     };
@@ -1008,7 +1012,10 @@ mod tests {
         file_id: u32,
         pages: HashMap<u32, Vec<(u64, u64)>>,
     ) -> (HashMap<u32, FileInfo>, MapFileInfo) {
-        let mut builder = page_files.new_map_file_builder(file_id).await.unwrap();
+        let mut builder = page_files
+            .new_map_file_builder(file_id, Compression::ZSTD, ChecksumType::CRC32)
+            .await
+            .unwrap();
         for (id, pages) in pages {
             let mut file_builder = builder.add_file(id);
             for (page_id, page_addr) in pages {

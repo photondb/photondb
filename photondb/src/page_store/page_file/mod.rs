@@ -186,8 +186,10 @@ pub(crate) mod facade {
                 .open_page_reader(file_id, file_meta.block_size())
                 .await?;
 
-            self.read_file_page_from_reader(reader, file_meta, handle)
-                .await
+            let mut buf = vec![0u8; handle.size as usize]; // TODO: aligned buffer pool
+            self.read_file_page_from_reader(reader, file_meta, handle, &mut buf)
+                .await?;
+            Ok(buf)
         }
 
         pub(crate) async fn read_file_page_from_reader(
@@ -195,37 +197,40 @@ pub(crate) mod facade {
             reader: Arc<CommonFileReader<<E as Env>::PositionalReader>>,
             file_meta: Arc<FileMeta>,
             handle: PageHandle,
-        ) -> Result<Vec<u8>> {
+            output: &mut Vec<u8>,
+        ) -> Result<()> {
             const CHECKSUM_LEN: usize = std::mem::size_of::<u32>();
 
-            let mut buf = vec![0u8; handle.size as usize]; // TODO: aligned buffer pool
-            reader.read_exact_at(&mut buf, handle.offset as u64).await?;
+            reader.read_exact_at(output, handle.offset as u64).await?;
 
             if file_meta.checksum_type() != ChecksumType::NONE {
                 let checksum = u32::from_le_bytes(
-                    buf[buf.len() - CHECKSUM_LEN..buf.len()]
+                    output[output.len() - CHECKSUM_LEN..output.len()]
                         .try_into()
                         .map_err(|_| Error::Corrupted)?,
                 );
-                buf.truncate(buf.len() - CHECKSUM_LEN);
-                checksum::check_checksum(file_meta.checksum_type(), &buf, checksum)?;
+                output.truncate(output.len() - CHECKSUM_LEN);
+                checksum::check_checksum(file_meta.checksum_type(), output, checksum)?;
             }
 
             let compression = file_meta.compression();
-            Ok(if compression != Compression::NONE {
-                let (decompress_len, skip) = compression::decompress_len(compression, &buf)?;
+            if compression != Compression::NONE {
+                let (decompress_len, skip) = compression::decompress_len(compression, output)?;
                 let mut dbuf = vec![0u8; decompress_len];
-                compression::decompress_into(compression, &buf[skip..], &mut dbuf)?;
-                dbuf
-            } else {
-                buf
-            })
+                compression::decompress_into(compression, &output[skip..], &mut dbuf)?;
+                if output.len() < dbuf.len() {
+                    output.resize(dbuf.len(), 0u8);
+                }
+                output[..dbuf.len()].copy_from_slice(&dbuf);
+                output.truncate(dbuf.len());
+            }
+            Ok(())
         }
 
         /// Open page_reader for a page_file.
         /// page_store could get file_id & block_size from page_addr's high bit
         /// and version.active_files.
-        async fn open_page_reader(
+        pub(crate) async fn open_page_reader(
             &self,
             file_id: FileId,
             block_size: usize,
