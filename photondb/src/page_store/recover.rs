@@ -62,8 +62,8 @@ impl<E: Env> PageStore<E> {
 
         Self::delete_unreferenced_page_files(&page_files, &summary).await?;
 
-        let next_page_file_id = summary.active_page_files.keys().cloned().max().unwrap_or(0) + 1;
-        let next_map_file_id = summary.active_map_files.keys().cloned().max().unwrap_or(0) + 1;
+        let next_page_file_id = summary.next_page_file_id();
+        let next_map_file_id = summary.next_map_file_id();
         let delta = DeltaVersion {
             page_files: file_infos,
             map_files,
@@ -302,6 +302,24 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
                 }
             }
         }
+    }
+}
+
+impl FilesSummary {
+    fn next_page_file_id(&self) -> u32 {
+        let val = std::cmp::max(
+            self.active_page_files.keys().cloned().max().unwrap_or(0),
+            self.obsoleted_page_files.iter().cloned().max().unwrap_or(0),
+        );
+        val + 1
+    }
+
+    fn next_map_file_id(&self) -> u32 {
+        let val = std::cmp::max(
+            self.active_map_files.keys().cloned().max().unwrap_or(0),
+            self.obsoleted_map_files.iter().cloned().max().unwrap_or(0),
+        );
+        val + 1
     }
 }
 
