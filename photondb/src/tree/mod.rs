@@ -281,20 +281,28 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     ///
     /// This function returns when it reaches the end of the chain or the
     /// applied function returns true.
-    async fn walk_page<'g, F>(&'g self, mut page: PageRef<'g>, mut f: F) -> Result<()>
+    async fn walk_page<'g, F>(
+        &'g self,
+        mut addr: u64,
+        mut page: PageRef<'g>,
+        mut f: F,
+    ) -> Result<()>
     where
-        F: FnMut(PageRef<'g>) -> bool,
+        F: FnMut(u64, PageRef<'g>) -> bool,
     {
         loop {
-            if f(page) || page.chain_next() == 0 {
+            if f(addr, page) {
                 return Ok(());
             }
-            page = self.guard.read_page(page.chain_next()).await?;
+            addr = page.chain_next();
+            if addr == 0 {
+                return Ok(());
+            }
+            page = self.guard.read_page(addr).await?;
         }
     }
 
     /// Creates an iterator over the key-value pairs in the page.
-    #[allow(dead_code)]
     async fn iter_page<'g, K, V>(&'g self, view: &PageView<'g>) -> Result<MergingPageIter<'g, K, V>>
     where
         K: SortedPageKey,
@@ -302,7 +310,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     {
         let mut builder = MergingIterBuilder::with_capacity(view.page.chain_len() as usize);
         let mut range_limit = None;
-        self.walk_page(view.page, |page| {
+        self.walk_page(view.addr, view.page, |_, page| {
             match page.kind() {
                 PageKind::Data => {
                     builder.add(SortedPageIter::from(page));
@@ -333,7 +341,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         view: &PageView<'g>,
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
-        self.walk_page(view.page, |page| {
+        self.walk_page(view.addr, view.page, |_, page| {
             debug_assert!(page.tier().is_leaf());
             // We only care about data pages here.
             if page.kind().is_data() {
@@ -367,7 +375,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         view: &PageView<'g>,
     ) -> Result<Option<(Index, Range<'g>)>> {
         let mut child = None;
-        self.walk_page(view.page, |page| {
+        self.walk_page(view.addr, view.page, |_, page| {
             debug_assert!(page.tier().is_inner());
             // We only care about data pages here.
             if page.kind().is_data() {
@@ -575,7 +583,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         new_page.set_chain_next(parent.addr);
         txn.update_page(parent.id, parent.addr, new_addr)
             .map(|_| {
-                trace!("reconciled split page {:?} with delta {:?}", view, delta);
+                trace!("reconcile split page {:?} with delta {:?}", view, delta);
                 parent.addr = new_addr;
                 parent.page = new_page.into();
             })
@@ -583,51 +591,21 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
         // Try to consolidate the parent page if it is too long.
         if self.should_consolidate_page(parent.page) {
-            let _ = self
-                .consolidate_page(parent, ConsolidationKind::Partial)
-                .await;
+            let _ = self.consolidate_page(parent).await;
         }
-        Ok(())
-    }
-
-    /// Rewrites the page to reclaim its space.
-    async fn rewrite_page(&self, id: u64) -> Result<()> {
-        loop {
-            match self.try_rewrite_page(id).await {
-                Ok(()) => return Ok(()),
-                Err(Error::Again) => continue,
-                Err(err) => return Err(err),
-            }
-        }
-    }
-
-    async fn try_rewrite_page(&self, id: u64) -> Result<()> {
-        let view = self.page_view(id, None).await?;
-        self.consolidate_page(view, ConsolidationKind::Full).await?;
         Ok(())
     }
 
     /// Consolidates delta pages on the page chain.
-    ///
-    /// If `kind` is [`ConsolidationKind::Full`], consolidates all delta pages
-    /// on the chain.
-    /// If `kind` is [`ConsolidationKind::Partial`], the implementation may
-    /// choose to consolidate only a subset of delta pages on the chain.
-    async fn consolidate_page<'g>(
-        &'g self,
-        view: PageView<'g>,
-        kind: ConsolidationKind,
-    ) -> Result<PageView<'g>> {
+    async fn consolidate_page<'g>(&'g self, view: PageView<'g>) -> Result<PageView<'g>> {
         match view.page.tier() {
             PageTier::Leaf => {
                 let safe_lsn = self.tree.safe_lsn();
-                self.consolidate_page_impl(view, kind, |iter| {
-                    MergingLeafPageIter::new(iter, safe_lsn)
-                })
-                .await
+                self.consolidate_page_impl(view, |iter| MergingLeafPageIter::new(iter, safe_lsn))
+                    .await
             }
             PageTier::Inner => {
-                self.consolidate_page_impl(view, kind, MergingInnerPageIter::new)
+                self.consolidate_page_impl(view, MergingInnerPageIter::new)
                     .await
             }
         }
@@ -636,7 +614,6 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     async fn consolidate_page_impl<'g, F, I, K, V>(
         &'g self,
         mut view: PageView<'g>,
-        kind: ConsolidationKind,
         f: F,
     ) -> Result<PageView<'g>>
     where
@@ -646,7 +623,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         V: SortedPageValue,
     {
         // Collect information for this consolidation.
-        let info = self.collect_consolidation_info(&view, kind).await?;
+        let info = self.collect_consolidation_info(&view).await?;
         let iter = f(info.iter);
         let builder = SortedPageBuilder::new(view.page.tier(), PageKind::Data).with_iter(iter);
         let mut txn = self.guard.begin().await;
@@ -659,7 +636,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         txn.replace_page(view.id, view.addr, new_addr, &info.page_addrs)
             .await
             .map(|_| {
-                trace!("consolidated page {:?}", view);
+                trace!("consolidate page {:?}", view);
                 self.tree.stats.success.consolidate_page.inc();
                 view.addr = new_addr;
                 view.page = new_page.into();
@@ -675,7 +652,6 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     async fn collect_consolidation_info<'g, K, V>(
         &'g self,
         view: &PageView<'g>,
-        kind: ConsolidationKind,
     ) -> Result<ConsolidationInfo<'g, K, V>>
     where
         K: SortedPageKey,
@@ -685,16 +661,14 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         let mut builder = MergingIterBuilder::with_capacity(chain_len);
         let mut page_size = 0;
         let mut last_page = view.page;
-        let mut next_addr = view.addr;
         let mut page_addrs = Vec::with_capacity(chain_len);
         let mut range_limit = None;
-        self.walk_page(view.page, |page| {
+        self.walk_page(view.addr, view.page, |addr, page| {
             match page.kind() {
                 PageKind::Data => {
                     // Inner pages can not do partial consolidations because of the placeholders.
                     // This is fine since inner pages doesn't consolidate as often as leaf pages.
-                    if kind == ConsolidationKind::Partial
-                        && page.tier().is_leaf()
+                    if page.tier().is_leaf()
                         && builder.len() >= 2
                         && page_size < page.size() / 2
                         && range_limit.is_none()
@@ -712,9 +686,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                     }
                 }
             }
-            page_addrs.push(next_addr);
             last_page = page;
-            next_addr = page.chain_next();
+            page_addrs.push(addr);
             false
         })
         .await?;
@@ -732,14 +705,107 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         mut view: PageView<'g>,
         parent: Option<PageView<'g>>,
     ) -> Result<()> {
-        view = self
-            .consolidate_page(view, ConsolidationKind::Partial)
-            .await?;
+        view = self.consolidate_page(view).await?;
         // Try to split the page if it is too large.
         if self.should_split_page(view.page) {
             let _ = self.split_page(view, parent).await;
         }
         Ok(())
+    }
+
+    /// Rewrites the page to reclaim its space.
+    async fn rewrite_page(&self, id: u64) -> Result<()> {
+        loop {
+            match self.try_rewrite_page(id).await {
+                Ok(()) => return Ok(()),
+                Err(Error::Again) => continue,
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    async fn try_rewrite_page(&self, id: u64) -> Result<()> {
+        let view = self.page_view(id, None).await?;
+        match view.page.tier() {
+            PageTier::Leaf => {
+                self.rewrite_page_impl::<Key, Value>(view).await?;
+            }
+            PageTier::Inner => {
+                self.rewrite_page_impl::<&[u8], Index>(view).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn rewrite_page_impl<'g, K, V>(&'g self, mut view: PageView<'g>) -> Result<PageView<'g>>
+    where
+        K: SortedPageKey,
+        V: SortedPageValue,
+    {
+        // Skip the first page if it is a split delta.
+        let (old_addr, old_page) = if view.page.kind() != PageKind::Split {
+            (view.addr, view.page)
+        } else {
+            let addr = view.page.chain_next();
+            assert!(addr != 0);
+            let page = self.guard.read_page(addr).await?;
+            (addr, page)
+        };
+
+        // Collect delta pages.
+        let chain_len = old_page.chain_len() as usize;
+        let mut builder = MergingIterBuilder::with_capacity(chain_len);
+        let mut page_addrs = Vec::with_capacity(chain_len);
+        let mut range_limit = None;
+        self.walk_page(old_addr, old_page, |addr, page| {
+            match page.kind() {
+                PageKind::Data => {
+                    builder.add(SortedPageIter::<K, V>::from(page));
+                }
+                PageKind::Split => {
+                    if range_limit.is_none() {
+                        let (split_key, _) = split_delta_from_page(page);
+                        range_limit = Some(split_key);
+                    }
+                }
+            }
+            page_addrs.push(addr);
+            false
+        })
+        .await?;
+
+        // Merge the delta pages.
+        let iter = MergingPageIter::new(builder.build(), range_limit);
+        let builder = SortedPageBuilder::new(old_page.tier(), PageKind::Data).with_iter(iter);
+        let mut txn = self.guard.begin().await;
+        let (mut new_addr, mut new_page) = txn.alloc_page(builder.size()).await?;
+        builder.build(&mut new_page);
+        new_page.set_epoch(old_page.epoch());
+        // Relocate the first page if it is skipped.
+        if view.addr != old_addr {
+            let (addr, mut page) = txn.alloc_page(view.page.size()).await?;
+            page.copy_from(view.page);
+            page.set_chain_len(new_page.chain_len() + 1);
+            page.set_chain_next(new_addr);
+            new_addr = addr;
+            new_page = page;
+            page_addrs.push(view.addr);
+        }
+
+        // Replace the old delta chain with the new one.
+        txn.replace_page(view.id, view.addr, new_addr, &page_addrs)
+            .await
+            .map(|_| {
+                trace!("rewrite page {:?}", view);
+                self.tree.stats.success.rewrite_page.inc();
+                view.addr = new_addr;
+                view.page = new_page.into();
+                view
+            })
+            .map_err(|_| {
+                self.tree.stats.conflict.rewrite_page.inc();
+                Error::Again
+            })
     }
 
     // Returns true if the page should be split.
@@ -823,14 +889,6 @@ impl<'a, 't: 'a, E: Env> TreeIter<'a, 't, E> {
             Ok(None)
         }
     }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum ConsolidationKind {
-    /// Consolidates all delta pages on the chain.
-    Full,
-    /// Consolidates two or more delta pages on the chain.
-    Partial,
 }
 
 struct ConsolidationInfo<'a, K, V>

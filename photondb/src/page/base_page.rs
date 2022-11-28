@@ -143,6 +143,13 @@ impl PagePtr {
     fn content_size(&self) -> usize {
         self.len - PAGE_HEADER_LEN
     }
+
+    fn copy_from_slice(&mut self, data: &[u8]) {
+        assert_eq!(self.len, data.len());
+        unsafe {
+            self.ptr.as_ptr().copy_from(data.as_ptr(), data.len());
+        }
+    }
 }
 
 unsafe impl Sync for PagePtr {}
@@ -180,6 +187,15 @@ impl<'a> PageBuf<'a> {
             let ptr = NonNull::new_unchecked(buf.as_mut_ptr());
             PagePtr::new(ptr, buf.len()).into()
         }
+    }
+
+    /// Copies data from another page.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if `self` and `other` have different sizes.
+    pub(crate) fn copy_from(&mut self, other: PageRef<'_>) {
+        self.ptr.copy_from_slice(other.data());
     }
 }
 

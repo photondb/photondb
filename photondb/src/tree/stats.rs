@@ -32,6 +32,7 @@ pub struct TxnStats {
     pub split_page: u64,
     pub reconcile_page: u64,
     pub consolidate_page: u64,
+    pub rewrite_page: u64,
 }
 
 #[derive(Default)]
@@ -41,6 +42,7 @@ pub(super) struct AtomicTxnStats {
     pub(super) split_page: Counter,
     pub(super) reconcile_page: Counter,
     pub(super) consolidate_page: Counter,
+    pub(super) rewrite_page: Counter,
 }
 
 impl AtomicTxnStats {
@@ -51,6 +53,7 @@ impl AtomicTxnStats {
             split_page: self.split_page.get(),
             reconcile_page: self.reconcile_page.get(),
             consolidate_page: self.consolidate_page.get(),
+            rewrite_page: self.rewrite_page.get(),
         }
     }
 }
