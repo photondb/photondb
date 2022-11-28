@@ -108,8 +108,13 @@ impl<E: Env> Guard<E> {
 
 /// A transaction to manipulate pages in a page store.
 ///
-/// On drop, the transaction will be aborted and all its operations will be
-/// rolled back.
+/// A `PageTxn` may allocate memory from a `WriteBuffer`, allocate new entries
+/// from `PageTable`, or update a `PageTable` entry with new page address.
+/// All these operations are tracked by *records* and *page_ids*.
+///
+/// On commit, the transaction will clear these operations.
+/// On drop, if there are operations exists, the transaction will be aborted and
+/// all its operations will be rolled back.
 pub(crate) struct PageTxn<'a, E: Env>
 where
     Self: Send,
@@ -117,6 +122,10 @@ where
     guard: &'a Guard<E>,
 
     buffer_id: u32,
+    // We may allocate multiple page buffers inside one PageTxn, for example when we split a tree
+    // node. We only count the BufferState#num_writer once since we are dealing with the same
+    // WriteBuffer. "hold_write_guard" is set to true when the first time we allocate a page
+    // buffer from WriteBuffer.
     hold_write_guard: bool,
     records: HashMap<u64 /* page addr */, &'a mut RecordHeader>,
     page_ids: Vec<u64>,
@@ -136,9 +145,8 @@ impl<'a, E: Env> PageTxn<'a, E> {
         Ok((addr, buf))
     }
 
-    /// Inserts a new page into the store.
-    ///
-    /// Returns the id of the inserted page.
+    /// Inserts a new page into the store. Insertion happens when page splits or
+    /// tree initializes. It returns the id of the inserted page.
     ///
     /// If the transaction aborts, the inserted page will be deleted.
     ///
