@@ -47,7 +47,7 @@ where
     manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
 
     next_map_file_id: u32,
-    cleaned_files: HashSet<u32>,
+    cleaned_files: HashSet<FileId>,
 }
 
 #[derive(Debug)]
@@ -70,6 +70,13 @@ enum ReclaimJob {
     Compound(HashSet<u32>),
     /// Compact a set of map files into a new map file.
     Compact(HashSet<u32>),
+}
+
+#[derive(Debug, Default)]
+struct CompactStats {
+    num_active_pages: usize,
+    input_size: usize,
+    output_size: usize,
 }
 
 impl<E, R> ReclaimCtx<E, R>
@@ -133,12 +140,12 @@ where
     fn pick_empty_page_files(
         &mut self,
         version: &Version,
-        cleaned_files: &HashSet<u32>,
+        cleaned_files: &HashSet<FileId>,
     ) -> Vec<u32> {
         let mut empty_files = Vec::default();
         for (id, file) in version.page_files() {
-            if cleaned_files.contains(id) {
-                self.cleaned_files.insert(*id);
+            if cleaned_files.contains(&FileId::Page(*id)) {
+                self.cleaned_files.insert(FileId::Page(*id));
                 continue;
             }
 
@@ -152,7 +159,7 @@ where
     async fn reclaim_files_by_strategy(
         &mut self,
         version: &Arc<Version>,
-        cleaned_files: &HashSet<u32>,
+        cleaned_files: &HashSet<FileId>,
     ) {
         let mut strategy = self.build_strategy(version, cleaned_files);
         let mut builder = ReclaimJobBuilder::new(
@@ -171,8 +178,8 @@ where
                     ReclaimJob::Compound(victims) => {
                         self.reclaim_page_files(version, victims).await;
                     }
-                    ReclaimJob::Compact(_map_files) => {
-                        todo!()
+                    ReclaimJob::Compact(victims) => {
+                        self.reclaim_map_files(version, victims).await;
                     }
                 }
             }
@@ -209,8 +216,39 @@ where
         let mut delta = DeltaVersion::from(version.as_ref());
         delta.reason = VersionUpdateReason::Compact;
         delta.map_files.insert(file_id, map_file);
+        // FIXME: need remove empty infos if it is not contained in virtual_info.
         delta.page_files.extend(virtual_page_files.into_iter());
         delta.obsoleted_page_files = obsoleted_files.into_iter().collect();
+        // Safety: the mutable reference of [`Manifest`] is hold.
+        unsafe { self.version_owner.install(delta) };
+    }
+
+    async fn reclaim_map_files(&mut self, version: &Arc<Version>, victims: HashSet<u32>) {
+        let file_id = self.next_map_file_id;
+        self.next_map_file_id += 1;
+
+        let map_files = version.map_files();
+        let page_files = version.page_files();
+        let (virtual_infos, file_info) = self
+            .compact_map_files(file_id, map_files, page_files, &victims)
+            .await
+            .unwrap();
+
+        // All input are obsoleted, since it doesn't relocate pages.
+        let edit = make_compact_version_edit(file_id, &victims);
+        let mut manifest = self.manifest.lock().await;
+        let version = self.version_owner.current();
+        manifest
+            .record_version_edit(edit, || super::version_snapshot(&version))
+            .await
+            .unwrap();
+
+        let mut delta = DeltaVersion::from(version.as_ref());
+        delta.reason = VersionUpdateReason::Compact;
+        delta.map_files.insert(file_id, file_info);
+        // FIXME: need remove empty infos if it is not contained in virtual_info.
+        delta.page_files.extend(virtual_infos.into_iter());
+        delta.obsoleted_map_files = victims.into_iter().collect();
         // Safety: the mutable reference of [`Manifest`] is hold.
         unsafe { self.version_owner.install(delta) };
     }
@@ -228,7 +266,7 @@ where
     }
 
     async fn rewrite_file(&mut self, file_id: u32, version: &Arc<Version>) -> Result<()> {
-        if self.cleaned_files.contains(&file_id) {
+        if self.cleaned_files.contains(&FileId::Page(file_id)) {
             // This file has been rewritten.
             return Ok(());
         }
@@ -238,7 +276,7 @@ where
             .get(&file_id)
             .expect("File must exists");
         self.rewrite_file_impl(file, version).await?;
-        self.cleaned_files.insert(file_id);
+        self.cleaned_files.insert(FileId::Page(file_id));
         Ok(())
     }
 
@@ -356,14 +394,15 @@ where
     fn build_strategy(
         &mut self,
         version: &Version,
-        cleaned_files: &HashSet<u32>,
+        cleaned_files: &HashSet<FileId>,
     ) -> Box<dyn ReclaimPickStrategy> {
         let files = version.page_files();
+        // FIXME: what happen if the latest file was removed.
         let now = files.keys().cloned().max().unwrap_or(1);
         let mut strategy = self.strategy_builder.build(now);
-        for (id, file) in files {
-            if cleaned_files.contains(id) {
-                self.cleaned_files.insert(*id);
+        for (&id, file) in files {
+            if cleaned_files.contains(&FileId::Page(id)) {
+                self.cleaned_files.insert(FileId::Page(id));
                 continue;
             }
 
@@ -372,11 +411,21 @@ where
                 strategy.collect_page_file(file);
             }
         }
+        let map_files = version.map_files();
+        for (&id, file) in map_files {
+            if cleaned_files.contains(&FileId::Map(id)) {
+                self.cleaned_files.insert(FileId::Map(id));
+                continue;
+            }
+
+            strategy.collect_map_file(files, file);
+        }
         strategy
     }
 
-    fn is_reclaimable(&self, version: &Version, cleaned_files: &HashSet<u32>) -> bool {
-        let used_space = compute_used_space(version.page_files(), cleaned_files);
+    fn is_reclaimable(&self, version: &Version, cleaned_files: &HashSet<FileId>) -> bool {
+        let used_space =
+            compute_used_space(version.page_files(), version.map_files(), cleaned_files);
         let base_size = compute_base_size(version.page_files(), cleaned_files);
         let additional_size = used_space.saturating_sub(base_size);
         let target_space_amp = self.options.max_space_amplification_percent as u64;
@@ -460,7 +509,7 @@ where
                 self.rewrite_dealloc_pages(id, version, &dealloc_pages)
                     .await?;
             }
-            self.cleaned_files.insert(id);
+            self.cleaned_files.insert(FileId::Page(id));
         }
         let (virtual_infos, file_info) = builder.finish().await?;
 
@@ -517,14 +566,85 @@ where
 
     /// Compact a set of map files into a new map file, and release mark the
     /// compacted files as obsoleted to reclaim space.
-    #[allow(unused)]
     async fn compact_map_files(
-        &self,
+        &mut self,
         new_file_id: u32,
         map_files: &HashMap<u32, MapFileInfo>,
-        victims: HashSet<u32>,
+        page_files: &HashMap<u32, FileInfo>,
+        victims: &HashSet<u32>,
     ) -> Result<(HashMap<u32, FileInfo>, MapFileInfo)> {
-        todo!()
+        let start_at = Instant::now();
+        let mut builder = self.page_files.new_map_file_builder(new_file_id).await?;
+        let mut victims = victims.iter().cloned().collect::<Vec<_>>();
+        victims.sort_unstable();
+        let mut stats = CompactStats::default();
+        for &id in &victims {
+            let info = map_files.get(&id).expect("Must exists");
+            builder = self
+                .compact_map_file(builder, &mut stats, info, page_files)
+                .await?;
+            self.cleaned_files.insert(FileId::Map(id));
+        }
+        let (virtual_infos, file_info) = builder.finish().await?;
+
+        let elapsed = start_at.elapsed().as_micros();
+        let CompactStats {
+            num_active_pages,
+            input_size,
+            output_size,
+        } = stats;
+        let free_size = input_size.saturating_sub(output_size);
+        let free_ratio = (free_size as f64) / (input_size as f64);
+        info!(
+            "Compact map files {victims:?} into a new map file {new_file_id}\
+                    with {num_active_pages} active pages, \
+                    relocate {output_size} bytes, \
+                    free {free_size} bytes, free ratio {free_ratio:.4}, \
+                    latest {elapsed} microseconds"
+        );
+
+        Ok((virtual_infos, file_info))
+    }
+
+    async fn compact_map_file<'a>(
+        &self,
+        mut builder: MapFileBuilder<'a, E>,
+        stats: &mut CompactStats,
+        file_info: &MapFileInfo,
+        page_files: &HashMap<u32, FileInfo>,
+    ) -> Result<MapFileBuilder<'a, E>> {
+        let file_id = file_info.file_id();
+        let file_meta = self.page_files.read_map_file_meta(file_id).await?;
+        let reader = self
+            .page_files
+            .open_page_reader(FileId::Map(file_id), 4096)
+            .await?;
+        let mut target_files = file_meta.file_meta_map.keys().cloned().collect::<Vec<_>>();
+        target_files.sort_unstable();
+        let mut page = vec![];
+        for id in target_files {
+            let info = page_files.get(&id).expect("Must exists");
+            stats.collect(info);
+            let page_table = file_meta.page_tables.get(&id).expect("Must exists");
+            let mut partial_builder = builder.add_file(id);
+            for page_addr in info.iter() {
+                let page_id = *page_table.get(&page_addr).expect("Must exists");
+                let handle = info.get_page_handle(page_addr).expect("Must exists");
+
+                let page_size = handle.size as usize;
+                if page.len() < page_size {
+                    page.resize(page_size, 0u8);
+                }
+                reader
+                    .read_exact_at(&mut page[..page_size], handle.offset as u64)
+                    .await?;
+                partial_builder
+                    .add_page(page_id, page_addr, &page[..page_size])
+                    .await?;
+            }
+            builder = partial_builder.finish().await?;
+        }
+        Ok(builder)
     }
 }
 
@@ -572,7 +692,7 @@ impl ReclaimJobBuilder {
             }
             FileId::Map(file_id) => {
                 // We don't support compact map file now.
-                if true {
+                if false {
                     return None;
                 }
 
@@ -594,32 +714,52 @@ impl ReclaimJobBuilder {
     }
 }
 
-fn compute_base_size(files: &HashMap<u32, FileInfo>, cleaned_files: &HashSet<u32>) -> u64 {
+impl CompactStats {
+    fn collect(&mut self, info: &FileInfo) {
+        self.num_active_pages += info.num_active_pages();
+        self.input_size += info.file_size();
+        self.output_size += info.effective_size();
+    }
+}
+
+fn compute_base_size(page_files: &HashMap<u32, FileInfo>, cleaned_files: &HashSet<FileId>) -> u64 {
     // skip files that are already being cleaned.
     let allow_file = |info: &&FileInfo| {
         !info.is_empty()
-            && info.get_map_file_id().is_none()
-            && !cleaned_files.contains(&info.get_file_id())
+            && if let Some(map_file_id) = info.get_map_file_id() {
+                !cleaned_files.contains(&FileId::Map(map_file_id))
+            } else {
+                !cleaned_files.contains(&FileId::Page(info.get_file_id()))
+            }
     };
-    files
+    page_files
         .values()
         .filter(allow_file)
         .map(FileInfo::effective_size)
         .sum::<usize>() as u64
 }
 
-fn compute_used_space(files: &HashMap<u32, FileInfo>, cleaned_files: &HashSet<u32>) -> u64 {
+fn compute_used_space(
+    page_files: &HashMap<u32, FileInfo>,
+    map_files: &HashMap<u32, MapFileInfo>,
+    cleaned_files: &HashSet<FileId>,
+) -> u64 {
     // skip files that are already being cleaned.
     let allow_file = |info: &&FileInfo| {
         !info.is_empty()
             && info.get_map_file_id().is_none()
-            && !cleaned_files.contains(&info.get_file_id())
+            && !cleaned_files.contains(&FileId::Page(info.get_file_id()))
     };
-    files
+    let page_file_size = page_files
         .values()
         .filter(allow_file)
         .map(FileInfo::file_size)
-        .sum::<usize>() as u64
+        .sum::<usize>() as u64;
+    let map_file_size = map_files
+        .values()
+        .map(MapFileInfo::file_size)
+        .sum::<usize>() as u64;
+    map_file_size + page_file_size
 }
 
 fn make_compound_version_edit(file_id: u32, obsoleted_files: &[u32]) -> VersionEdit {
@@ -633,6 +773,18 @@ fn make_compound_version_edit(file_id: u32, obsoleted_files: &[u32]) -> VersionE
             new_files: vec![],
             deleted_files: obsoleted_files.to_owned(),
         }),
+    }
+}
+
+fn make_compact_version_edit(file_id: u32, obsoleted_files: &HashSet<u32>) -> VersionEdit {
+    let deleted_files = obsoleted_files.iter().cloned().collect::<Vec<_>>();
+    let new_files = vec![NewFile::from(file_id)];
+    VersionEdit {
+        map_stream: Some(StreamEdit {
+            new_files,
+            deleted_files,
+        }),
+        page_stream: None,
     }
 }
 
@@ -837,5 +989,71 @@ mod tests {
             .get(&file_id_2)
             .unwrap()
             .is_page_active(pa(file_id_2, 32)));
+    }
+
+    async fn build_map_file(
+        page_files: &PageFiles<Photon>,
+        file_id: u32,
+        pages: HashMap<u32, Vec<(u64, u64)>>,
+    ) -> (HashMap<u32, FileInfo>, MapFileInfo) {
+        let mut builder = page_files.new_map_file_builder(file_id).await.unwrap();
+        for (id, pages) in pages {
+            let mut file_builder = builder.add_file(id);
+            for (page_id, page_addr) in pages {
+                file_builder
+                    .add_page(page_id, page_addr, &[0])
+                    .await
+                    .unwrap();
+            }
+            builder = file_builder.finish().await.unwrap();
+        }
+        builder.finish().await.unwrap()
+    }
+
+    #[photonio::test]
+    async fn compact_map_files() {
+        let root = TempDir::new("compact_map_files").unwrap();
+        let root = root.into_path();
+
+        let rewriter = PageRewriter::default();
+        let mut ctx = build_reclaim_ctx(&root, rewriter.clone()).await;
+
+        let (f1, f2, f3, f4) = (1, 2, 3, 4);
+        let (m1, m2, m3) = (1, 2, 3);
+        let mut pages = HashMap::new();
+        pages.insert(f1, vec![(1, pa(f1, 16)), (2, pa(f1, 32)), (3, pa(f1, 64))]);
+        pages.insert(f2, vec![(4, pa(f2, 16)), (5, pa(f2, 32)), (6, pa(f2, 64))]);
+        let (virtual_infos, m1_info) = build_map_file(&ctx.page_files, m1, pages).await;
+        let mut page_files = virtual_infos;
+
+        let mut pages = HashMap::new();
+        pages.insert(f3, vec![(7, pa(f3, 16)), (8, pa(f3, 32)), (9, pa(f3, 64))]);
+        pages.insert(f4, vec![(1, pa(f4, 16)), (2, pa(f4, 32)), (3, pa(f4, 64))]);
+        let (virtual_infos, m2_info) = build_map_file(&ctx.page_files, m2, pages).await;
+        page_files.extend(virtual_infos.into_iter());
+
+        let mut map_files = HashMap::new();
+        map_files.insert(m1, m1_info);
+        map_files.insert(m2, m2_info);
+        let victims = HashSet::from_iter(vec![m1, m2].into_iter());
+        let (virtual_infos, _) = ctx
+            .compact_map_files(m3, &map_files, &page_files, &victims)
+            .await
+            .unwrap();
+
+        assert!(virtual_infos.contains_key(&f1));
+        assert!(virtual_infos.contains_key(&f2));
+        assert!(virtual_infos.contains_key(&f3));
+        assert!(virtual_infos.contains_key(&f4));
+
+        let f1_info = virtual_infos.get(&f1).unwrap();
+        assert!(f1_info.get_page_handle(pa(f1, 32)).is_some());
+        assert!(f1_info.get_page_handle(pa(f1, 64)).is_some());
+        assert!(f1_info.get_page_handle(pa(f1, 128)).is_none());
+
+        let f4_info = virtual_infos.get(&f4).unwrap();
+        assert!(f4_info.get_page_handle(pa(f4, 0)).is_none());
+        assert!(f4_info.get_page_handle(pa(f2, 32)).is_none());
+        assert!(f4_info.get_page_handle(pa(f4, 64)).is_some());
     }
 }

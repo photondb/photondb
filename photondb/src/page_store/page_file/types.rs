@@ -324,6 +324,11 @@ impl MapFileInfo {
     }
 
     #[inline]
+    pub(crate) fn file_size(&self) -> usize {
+        self.meta.file_size
+    }
+
+    #[inline]
     pub(crate) fn meta(&self) -> &Arc<MapFileMeta> {
         &self.meta
     }
