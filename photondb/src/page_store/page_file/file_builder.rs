@@ -5,7 +5,13 @@ use std::{
     sync::Arc,
 };
 
-use super::{constant::*, types::split_page_addr, FileInfo, FileMeta};
+use super::{
+    checksum,
+    compression::{compress_max_len, compress_page, Compression},
+    constant::*,
+    types::split_page_addr,
+    ChecksumType, FileInfo, FileMeta,
+};
 use crate::{
     env::{Directory, Env, SequentialWriter, SequentialWriterExt},
     page_store::{Error, Result},
@@ -40,11 +46,13 @@ impl<'a, E: Env> FileBuilder<'a, E> {
         file: E::SequentialWriter,
         use_direct: bool,
         block_size: usize,
+        comperssion: Compression,
+        checksum: ChecksumType,
     ) -> Self {
         let writer = BufferedWriter::new(file, IO_BUFFER_SIZE, use_direct, block_size, base_dir);
         Self {
             writer,
-            inner: CommonFileBuilder::new(file_id, block_size),
+            inner: CommonFileBuilder::new(file_id, block_size, comperssion, checksum),
         }
     }
 
@@ -81,6 +89,8 @@ impl<'a, E: Env> FileBuilder<'a, E> {
             magic: PAGE_FILE_MAGIC,
             data_handle,
             meta_handle,
+            compression: self.inner.compression,
+            checksum_type: self.inner.checksum,
         };
 
         let footer_dat = footer.encode();
@@ -94,16 +104,25 @@ impl<'a, E: Env> FileBuilder<'a, E> {
 pub(crate) struct CommonFileBuilder {
     file_id: u32,
     block_size: usize,
+    compression: Compression,
+    checksum: ChecksumType,
 
     index: IndexBlockBuilder,
     meta: MetaBlockBuilder,
 }
 
 impl CommonFileBuilder {
-    pub(super) fn new(file_id: u32, block_size: usize) -> Self {
+    pub(super) fn new(
+        file_id: u32,
+        block_size: usize,
+        compression: Compression,
+        checksum: ChecksumType,
+    ) -> Self {
         CommonFileBuilder {
             file_id,
             block_size,
+            compression,
+            checksum,
             index: IndexBlockBuilder::default(),
             meta: MetaBlockBuilder::default(),
         }
@@ -117,7 +136,10 @@ impl CommonFileBuilder {
         page_addr: u64,
         page_content: &[u8],
     ) -> Result<()> {
-        let file_offset = writer.write(page_content).await?;
+        let mut tmp_buf = vec![0u8; compress_max_len(self.compression, page_content)]; // TODO: pool this.
+        let page_content = compress_page(self.compression, page_content, &mut tmp_buf)?;
+        let checksum = checksum::checksum(self.checksum, page_content);
+        let file_offset = writer.write_with_checksum(page_content, checksum).await?;
         self.index.add_data_block(page_addr, file_offset);
         self.meta.add_page(page_addr, page_id);
         Ok(())
@@ -183,6 +205,8 @@ impl CommonFileBuilder {
                     self.block_size,
                     indexes,
                     offsets,
+                    self.compression,
+                    self.checksum,
                 )
             };
             Arc::new(file_meta)
@@ -258,12 +282,14 @@ pub(crate) struct Footer {
     magic: u64,
     pub(crate) data_handle: BlockHandler,
     pub(crate) meta_handle: BlockHandler,
+    pub(crate) compression: Compression,
+    pub(crate) checksum_type: ChecksumType,
 }
 
 impl Footer {
     #[inline]
     pub(crate) fn size() -> u32 {
-        (core::mem::size_of::<u64>() * 5) as u32
+        (core::mem::size_of::<u64>() * 5 + 1 + 1) as u32
     }
 
     fn encode(&self) -> Vec<u8> {
@@ -271,6 +297,8 @@ impl Footer {
         bytes.extend_from_slice(&self.magic.to_le_bytes());
         self.data_handle.encode(&mut bytes);
         self.meta_handle.encode(&mut bytes);
+        bytes.push(self.compression.bits());
+        bytes.push(self.checksum_type.bits());
         bytes
     }
 
@@ -288,10 +316,16 @@ impl Footer {
         let data_handle = BlockHandler::decode(&bytes[idx..idx + core::mem::size_of::<u64>() * 2])?;
         idx += core::mem::size_of::<u64>() * 2;
         let meta_handle = BlockHandler::decode(&bytes[idx..idx + core::mem::size_of::<u64>() * 2])?;
+        idx += core::mem::size_of::<u64>() * 2;
+        let compression = Compression::from_bits(bytes[idx]).ok_or(Error::Corrupted)?;
+        idx += 1;
+        let checksum_type = ChecksumType::from_bits(bytes[idx]).ok_or(Error::Corrupted)?;
         Ok(Self {
             magic,
             data_handle,
             meta_handle,
+            compression,
+            checksum_type,
         })
     }
 }
@@ -556,23 +590,46 @@ impl<'a, E: Env> BufferedWriter<'a, E> {
     }
 
     pub(super) async fn write(&mut self, page: &[u8]) -> Result<u64> {
-        let mut page_consumed = 0;
+        self.write_with_checksum(page, None).await
+    }
+
+    pub(super) async fn write_with_checksum(
+        &mut self,
+        page: &[u8],
+        checksum: Option<u32>,
+    ) -> Result<u64> {
+        self.fill_buf(page).await?;
+
+        if let Some(checksum) = checksum {
+            let checksum_bytes = checksum.to_le_bytes();
+            self.fill_buf(&checksum_bytes).await?;
+        }
+
+        let page_offset = self.next_page_offset;
+        self.next_page_offset += if checksum.is_none() {
+            page.len() as u64
+        } else {
+            const CHECKSUM_LEN: usize = std::mem::size_of::<u32>();
+            page.len() as u64 + CHECKSUM_LEN as u64
+        };
+        Ok(page_offset)
+    }
+
+    async fn fill_buf(&mut self, data: &[u8]) -> Result<()> {
         let buf_cap = self.buffer.len();
-        while page_consumed < page.len() {
+        let mut consumed = 0;
+        while consumed < data.len() {
             if self.buf_pos < buf_cap {
                 let free_buf = &mut self.buffer.as_bytes_mut()[self.buf_pos..buf_cap];
-                let fill_end = (page_consumed + free_buf.len()).min(page.len());
-                free_buf[..(fill_end - page_consumed)]
-                    .copy_from_slice(&page[page_consumed..fill_end]);
-                self.buf_pos += fill_end - page_consumed;
-                page_consumed = fill_end;
+                let fill_end = (consumed + free_buf.len()).min(data.len());
+                free_buf[..(fill_end - consumed)].copy_from_slice(&data[consumed..fill_end]);
+                self.buf_pos += fill_end - consumed;
+                consumed = fill_end;
             } else {
                 self.flush().await?;
             }
         }
-        let page_offset = self.next_page_offset;
-        self.next_page_offset += page.len() as u64;
-        Ok(page_offset)
+        Ok(())
     }
 
     async fn flush(&mut self) -> Result<()> {

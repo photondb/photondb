@@ -2,8 +2,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use super::{
-    constant::*, types::MapFileMeta, BlockHandler, BufferedWriter, CommonFileBuilder, FileInfo,
-    MapFileInfo,
+    compression::Compression, constant::*, types::MapFileMeta, BlockHandler, BufferedWriter,
+    ChecksumType, CommonFileBuilder, FileInfo, MapFileInfo,
 };
 use crate::{
     env::Env,
@@ -82,7 +82,12 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
         PartialFileBuilder {
             file_id,
             builder: self,
-            inner: CommonFileBuilder::new(file_id, block_size),
+            inner: CommonFileBuilder::new(
+                file_id,
+                block_size,
+                Compression::NONE,
+                ChecksumType::CRC32,
+            ),
         }
     }
 

@@ -3,6 +3,7 @@ use std::{
     sync::Arc,
 };
 
+use super::{compression::Compression, ChecksumType};
 use crate::page_store::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -180,6 +181,9 @@ pub(crate) struct FileMeta {
 
     // [0] -> page_table, [1] ->  delete page, [2], meta_block_end
     meta_indexes: Vec<u64>,
+
+    compression: Compression,
+    checksum_type: ChecksumType,
 }
 
 impl FileMeta {
@@ -189,6 +193,8 @@ impl FileMeta {
         block_size: usize,
         meta_indexes: Vec<u64>,
         data_offsets: BTreeMap<u64, u64>,
+        compression: Compression,
+        checksum_type: ChecksumType,
     ) -> Self {
         Self {
             file_id,
@@ -197,6 +203,8 @@ impl FileMeta {
             meta_indexes,
             data_offsets,
             block_size,
+            compression,
+            checksum_type,
         }
     }
 
@@ -214,6 +222,8 @@ impl FileMeta {
             belong_to: Some(map_file_id),
             meta_indexes,
             data_offsets,
+            compression: Compression::NONE,
+            checksum_type: ChecksumType::CRC32,
         }
     }
 
@@ -239,7 +249,8 @@ impl FileMeta {
         };
         let end_offset = match iter.next() {
             Some((_, offset)) => *offset,
-            None => self.total_page_size() as u64, /* it's the last page use total-page-size as
+            None => self.total_page_size() as u64, /* it's the last page use
+                                                    * total-page-size as
                                                     * end val. */
         };
         Some((start_offset, (end_offset - start_offset) as usize))
@@ -266,6 +277,16 @@ impl FileMeta {
     #[inline]
     pub(crate) fn data_offsets(&self) -> &BTreeMap<u64, u64> {
         &self.data_offsets
+    }
+
+    #[inline]
+    pub(crate) fn compression(&self) -> Compression {
+        self.compression
+    }
+
+    #[inline]
+    pub(crate) fn checksum_type(&self) -> ChecksumType {
+        self.checksum_type
     }
 
     pub(crate) fn get_page_table_meta_page(

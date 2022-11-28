@@ -801,7 +801,9 @@ mod tests {
     use super::*;
     use crate::{
         env::Photon,
-        page_store::{version::DeltaVersion, MinDeclineRateStrategyBuilder, RecordRef},
+        page_store::{
+            page_file::Compression, version::DeltaVersion, MinDeclineRateStrategyBuilder, RecordRef,
+        },
         util::shutdown::ShutdownNotifier,
     };
 
@@ -833,7 +835,10 @@ mod tests {
         pages: &[(u64, u64)],
         dealloc_pages: &[u64],
     ) -> FileInfo {
-        let mut builder = page_files.new_page_file_builder(file_id).await.unwrap();
+        let mut builder = page_files
+            .new_page_file_builder(file_id, Compression::ZSTD)
+            .await
+            .unwrap();
         for (page_id, page_addr) in pages {
             builder.add_page(*page_id, *page_addr, &[0]).await.unwrap();
         }
