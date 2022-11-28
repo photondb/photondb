@@ -256,19 +256,21 @@ impl FileMeta {
         Some((start_offset, (end_offset - start_offset) as usize))
     }
 
-    // Return the total page (include inactive page).
+    /// Return the total page (include inactive page).
     #[inline]
     pub(crate) fn total_pages(&self) -> usize {
         self.data_offsets.len()
     }
 
-    // Return the total page size(include inactive page).
+    /// Return the total page size(include inactive page).
+    ///
+    /// NOTES: Only works for page file.
     #[inline]
     pub(crate) fn total_page_size(&self) -> usize {
         (**self.meta_indexes.first().as_ref().unwrap()) as usize
     }
 
-    // Return the block_size for the file's device.
+    /// Return the block_size for the file's device.
     #[inline]
     pub(crate) fn block_size(&self) -> usize {
         self.block_size

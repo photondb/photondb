@@ -433,13 +433,9 @@ where
         // For log
         let space_amp = (additional_size as f64) / (base_size as f64);
 
-        // Recalculate `space_used_high`, and allow a amount of free space when the base
-        // data size exceeds the threshold.
-        let space_used_high = std::cmp::max(
-            self.options.space_used_high,
-            (base_size as f64 * 1.1) as u64,
-        );
-        if space_used_high < used_space {
+        if self.options.space_used_high < used_space
+            && 2 * self.options.file_base_size < additional_size as usize
+        {
             trace!(
                 "db is reclaimable: space used {} exceeds water mark {}, base size {}, amp {:.4}",
                 used_space,
@@ -460,7 +456,7 @@ where
                 base_size,
                 additional_size,
                 used_space,
-                space_used_high,
+                self.options.space_used_high,
                 space_amp
             );
             false
@@ -608,7 +604,7 @@ where
         let free_size = input_size.saturating_sub(output_size);
         let free_ratio = (free_size as f64) / (input_size as f64);
         info!(
-            "Compact map files {victims:?} into a new map file {new_file_id}\
+            "Compact map files {victims:?} into a new map file {new_file_id} \
                     with {num_active_pages} active pages, \
                     relocate {output_size} bytes, \
                     free {free_size} bytes, free ratio {free_ratio:.4}, \
@@ -767,6 +763,7 @@ fn compute_used_space(
         .sum::<usize>() as u64;
     let map_file_size = map_files
         .values()
+        .filter(|info| !cleaned_files.contains(&FileId::Map(info.file_id())))
         .map(MapFileInfo::file_size)
         .sum::<usize>() as u64;
     map_file_size + page_file_size
@@ -1055,7 +1052,7 @@ mod tests {
         map_files.insert(m1, m1_info);
         map_files.insert(m2, m2_info);
         let victims = HashSet::from_iter(vec![m1, m2].into_iter());
-        let (virtual_infos, _) = ctx
+        let (virtual_infos, m3_info) = ctx
             .compact_map_files(m3, &map_files, &page_files, &victims)
             .await
             .unwrap();
@@ -1074,5 +1071,14 @@ mod tests {
         assert!(f4_info.get_page_handle(pa(f4, 0)).is_none());
         assert!(f4_info.get_page_handle(pa(f2, 32)).is_none());
         assert!(f4_info.get_page_handle(pa(f4, 64)).is_some());
+
+        let base_size = virtual_infos
+            .values()
+            .map(|info| info.effective_size())
+            .sum::<usize>();
+        let used_size = m3_info.file_size();
+        println!("base size {base_size}");
+        println!("used size {used_size}");
+        assert!(base_size < used_size);
     }
 }

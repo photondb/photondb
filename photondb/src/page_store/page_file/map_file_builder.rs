@@ -30,6 +30,7 @@ pub(crate) struct MapFileBuilder<'a, E: Env> {
     page_index: PageIndexBuilder,
     file_infos: HashMap<u32, FileInfo>,
     block_size: usize,
+    file_offset: usize,
     compression: Compression,
     checksum: ChecksumType,
 }
@@ -77,6 +78,7 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
             writer,
             page_index: PageIndexBuilder::default(),
             file_infos: HashMap::default(),
+            file_offset: 0,
             block_size,
             compression,
             checksum,
@@ -151,7 +153,21 @@ impl<'a, E: Env> PartialFileBuilder<'a, E> {
         self.builder
             .page_index
             .add_page_file(self.file_id, data, meta);
-        let file_info = self.inner.as_file_info(0, data, Some(self.builder.file_id));
+
+        let file_meta = self.inner.as_partial_file_meta(self.builder.file_id, data);
+        let active_pages = file_meta.pages_bitmap();
+        let active_size = file_meta
+            .total_page_size()
+            .saturating_sub(self.builder.file_offset);
+        self.builder.file_offset = self.builder.writer.next_offset() as usize;
+        let file_info = FileInfo::new(
+            active_pages,
+            active_size,
+            self.file_id,
+            self.file_id,
+            self.inner.get_referenced_files(),
+            file_meta,
+        );
         self.builder.file_infos.insert(self.file_id, file_info);
         Ok(self.builder)
     }
