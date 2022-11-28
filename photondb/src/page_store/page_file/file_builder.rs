@@ -227,7 +227,7 @@ pub(crate) struct BlockHandler {
 }
 
 impl BlockHandler {
-    pub(super) fn encoded_size() -> usize {
+    pub(super) const fn encoded_size() -> usize {
         core::mem::size_of::<u64>() * 2
     }
 
@@ -592,7 +592,7 @@ impl<'a, E: Env> BufferedWriter<'a, E> {
         Ok(())
     }
 
-    async fn flush_and_sync(&mut self) -> Result<()> {
+    pub(crate) async fn flush_and_sync(&mut self) -> Result<()> {
         self.flush().await?;
         if self.use_direct {
             self.file
