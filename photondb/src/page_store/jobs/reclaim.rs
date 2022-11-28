@@ -484,7 +484,14 @@ where
         let mut num_dealloc_pages = 0;
         let mut input_size = 0;
         let mut output_size = 0;
-        let mut builder = self.page_files.new_map_file_builder(new_file_id).await?;
+        let mut builder = self
+            .page_files
+            .new_map_file_builder(
+                new_file_id,
+                self.options.compression_on_cold_compact,
+                self.options.page_checksum_type,
+            )
+            .await?;
         let mut obsoleted_files = vec![];
         let mut victims = victims.into_iter().collect::<Vec<_>>();
         victims.sort_unstable();
@@ -553,8 +560,8 @@ where
             if page.len() < page_size {
                 page.resize(page_size, 0u8);
             }
-            reader
-                .read_exact_at(&mut page[..page_size], handle.offset as u64)
+            self.page_files
+                .read_file_page_from_reader(reader.clone(), file_info.meta(), handle)
                 .await?;
             builder
                 .add_page(page_id, page_addr, &page[..page_size])

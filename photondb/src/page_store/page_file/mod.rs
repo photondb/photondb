@@ -40,7 +40,7 @@ pub(crate) mod facade {
 
     use super::{
         constant::{DEFAULT_BLOCK_SIZE, MAX_OPEN_READER_FD_NUM},
-        file_reader::{self, MetaReader, ReaderCache},
+        file_reader::{self, CommonFileReader, MetaReader, ReaderCache},
         types::PageHandle,
         *,
     };
@@ -126,7 +126,12 @@ pub(crate) mod facade {
         }
 
         /// Create `MapFileBuilder` to write a new map file.
-        pub(crate) async fn new_map_file_builder(&self, file_id: u32) -> Result<MapFileBuilder<E>> {
+        pub(crate) async fn new_map_file_builder(
+            &self,
+            file_id: u32,
+            compression: Compression,
+            checksum: ChecksumType,
+        ) -> Result<MapFileBuilder<E>> {
             // TODO: switch to env in suitable time.
             let path = self.base.join(format!("{}_{file_id}", MAP_FILE_PREFIX));
             let writer = self
@@ -141,6 +146,8 @@ pub(crate) mod facade {
                 writer,
                 use_direct,
                 DEFAULT_BLOCK_SIZE,
+                compression,
+                checksum,
             ))
         }
 
@@ -178,6 +185,18 @@ pub(crate) mod facade {
             let reader = self
                 .open_page_reader(file_id, file_meta.block_size())
                 .await?;
+
+            self.read_file_page_from_reader(reader, file_meta, handle)
+                .await
+        }
+
+        pub(crate) async fn read_file_page_from_reader(
+            &self,
+            reader: Arc<CommonFileReader<<E as Env>::PositionalReader>>,
+            file_meta: Arc<FileMeta>,
+            handle: PageHandle,
+        ) -> Result<Vec<u8>> {
+            const CHECKSUM_LEN: usize = std::mem::size_of::<u32>();
 
             let mut buf = vec![0u8; handle.size as usize]; // TODO: aligned buffer pool
             reader.read_exact_at(&mut buf, handle.offset as u64).await?;
@@ -411,7 +430,6 @@ pub(crate) mod facade {
                     .await
                     .unwrap();
                 let info = b.finish().await.unwrap();
-
                 assert_eq!(info.effective_size(), 8192 + 8192 / 2 + 8192 / 3);
                 info
             };
@@ -466,8 +484,7 @@ pub(crate) mod facade {
                 b.add_page(3, page_addr(2, 4), &[9].repeat(8192 / 3))
                     .await
                     .unwrap();
-                let info = b.finish().await.unwrap();
-                info
+                b.finish().await.unwrap()
             };
             {
                 let meta = {
