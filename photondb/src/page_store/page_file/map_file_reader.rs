@@ -56,6 +56,8 @@ impl MapFileMetaHolder {
                 reader.align_size,
                 indexes,
                 offsets,
+                footer.compression,
+                footer.checksum_type,
             );
             let page_table = Self::read_page_table(&reader, &file_meta).await?;
             file_meta_map.insert(page_index.file_id, Arc::new(file_meta));

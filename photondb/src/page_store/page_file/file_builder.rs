@@ -219,6 +219,8 @@ impl CommonFileBuilder {
             self.block_size,
             indexes,
             offsets,
+            self.compression,
+            self.checksum,
         ))
     }
 

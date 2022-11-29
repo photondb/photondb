@@ -60,6 +60,8 @@ pub(super) struct PageIndex {
 pub(crate) struct Footer {
     pub(super) magic: u64,
     pub(super) page_index_handle: BlockHandler,
+    pub(super) compression: Compression,
+    pub(super) checksum_type: ChecksumType,
 }
 
 impl<'a, E: Env> MapFileBuilder<'a, E> {
@@ -122,6 +124,8 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
         let footer = Footer {
             magic: MAP_FILE_MAGIC,
             page_index_handle,
+            compression: self.compression,
+            checksum_type: self.checksum,
         };
         let payload = footer.encode();
         let foot_offset = self.writer.write(&payload).await?;
@@ -244,7 +248,7 @@ impl PageIndex {
 impl Footer {
     #[inline]
     pub(super) const fn encoded_size() -> usize {
-        core::mem::size_of::<u64>() * 3
+        core::mem::size_of::<u64>() * 3 + 1 + 1
     }
 
     #[inline]
@@ -252,6 +256,8 @@ impl Footer {
         let mut bytes = Vec::with_capacity(Self::encoded_size());
         bytes.extend_from_slice(&self.magic.to_le_bytes());
         self.page_index_handle.encode(&mut bytes);
+        bytes.push(self.compression.bits());
+        bytes.push(self.checksum_type.bits());
         bytes
     }
 
@@ -267,9 +273,14 @@ impl Footer {
         let idx = end;
         let end = idx + BlockHandler::encoded_size();
         let page_index_handler = BlockHandler::decode(&bytes[idx..end])?;
+        let compression = Compression::from_bits(bytes[end]).ok_or(Error::Corrupted)?;
+        let checksum_type = ChecksumType::from_bits(bytes[end + 1]).ok_or(Error::Corrupted)?;
+
         Ok(Self {
             magic,
             page_index_handle: page_index_handler,
+            compression,
+            checksum_type,
         })
     }
 }
@@ -287,6 +298,8 @@ mod tests {
                 offset: 1234,
                 length: 64234,
             },
+            compression: Compression::NONE,
+            checksum_type: ChecksumType::NONE,
         };
 
         let payload = footer.encode();
