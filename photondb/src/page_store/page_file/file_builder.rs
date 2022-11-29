@@ -97,7 +97,17 @@ impl<'a, E: Env> FileBuilder<'a, E> {
         let foot_offset = self.writer.write(&footer_dat).await?;
         let file_size = foot_offset as usize + footer_dat.len();
 
-        Ok(self.inner.as_file_info(file_size, footer.data_handle, None))
+        let meta = self.inner.as_page_file_meta(file_size, footer.data_handle);
+        let active_pages = meta.pages_bitmap();
+        let active_size = meta.total_page_size();
+        Ok(FileInfo::new(
+            active_pages,
+            active_size,
+            self.inner.file_id,
+            self.inner.file_id,
+            self.inner.get_referenced_files(),
+            meta,
+        ))
     }
 }
 
@@ -188,59 +198,45 @@ impl CommonFileBuilder {
         Ok((data_handle, meta_handle))
     }
 
-    pub(super) fn as_file_info(
+    pub(crate) fn get_referenced_files(&self) -> HashSet<u32> {
+        let mut files = HashSet::new();
+        for page_addr in self.meta.get_deleted_pages() {
+            let (file_id, _) = split_page_addr(page_addr);
+            files.insert(file_id);
+        }
+        files
+    }
+
+    pub(crate) fn as_partial_file_meta(
+        &self,
+        map_file_id: u32,
+        data_handle: BlockHandler,
+    ) -> Arc<FileMeta> {
+        let (indexes, offsets) = self.index.index_block.as_meta_file_cached(data_handle);
+        Arc::new(FileMeta::new_partial(
+            self.file_id,
+            map_file_id,
+            self.block_size,
+            indexes,
+            offsets,
+        ))
+    }
+
+    pub(super) fn as_page_file_meta(
         &self,
         file_size: usize,
         data_handle: BlockHandler,
-        map_file_id: Option<u32>,
-    ) -> FileInfo {
-        let meta = {
-            let (indexes, offsets) = self.index.index_block.as_meta_file_cached(data_handle);
-            let file_meta = if let Some(map_file_id) = map_file_id {
-                FileMeta::new_partial(self.file_id, map_file_id, self.block_size, indexes, offsets)
-            } else {
-                FileMeta::new(
-                    self.file_id,
-                    file_size as usize,
-                    self.block_size,
-                    indexes,
-                    offsets,
-                    self.compression,
-                    self.checksum,
-                )
-            };
-            Arc::new(file_meta)
-        };
-
-        let active_pages = {
-            let mut active_pages = roaring::RoaringBitmap::new();
-            for page_addr in meta.data_offsets().keys() {
-                let (_, index) = split_page_addr(*page_addr);
-                active_pages.insert(index);
-            }
-            active_pages
-        };
-
-        let referenced_files = {
-            let mut files = HashSet::new();
-            for page_addr in self.meta.get_deleted_pages() {
-                let (file_id, _) = split_page_addr(page_addr);
-                files.insert(file_id);
-            }
-            files
-        };
-
-        let active_size = meta.total_page_size();
-
-        let file_id = meta.get_file_id();
-        FileInfo::new(
-            active_pages,
-            active_size,
-            file_id,
-            file_id,
-            referenced_files,
-            meta,
-        )
+    ) -> Arc<FileMeta> {
+        let (indexes, offsets) = self.index.index_block.as_meta_file_cached(data_handle);
+        Arc::new(FileMeta::new(
+            self.file_id,
+            file_size as usize,
+            self.block_size,
+            indexes,
+            offsets,
+            self.compression,
+            self.checksum,
+        ))
     }
 }
 
@@ -661,6 +657,11 @@ impl<'a, E: Env> BufferedWriter<'a, E> {
         self.file.sync_all().await.expect("sync file fail");
         self.base_dir.sync_all().await.expect("sync base dir fail");
         Ok(())
+    }
+
+    #[inline]
+    pub(super) fn next_offset(&self) -> u64 {
+        self.next_page_offset
     }
 }
 

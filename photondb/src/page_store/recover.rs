@@ -51,6 +51,7 @@ impl<E: Env> PageStore<E> {
         let manifest = Manifest::open(env.to_owned(), path.as_ref()).await?;
         let versions = manifest.list_versions().await?;
         let summary = Self::apply_version_edits(versions);
+        debug!("Recover with file summary {summary:?}");
 
         let page_files = PageFiles::new(env, path.as_ref(), options).await;
 
@@ -200,9 +201,12 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
         let meta_reader = self.facade.read_map_file_meta(file.id).await?;
 
         // 1. recover virtual file infos.
-        for (file_id, file_meta) in meta_reader.file_meta_map {
+        for (&file_id, file_meta) in &meta_reader.file_meta_map {
+            let offset = meta_reader
+                .file_offset(file_id)
+                .expect("File offset must exists") as usize;
             let active_pages = file_meta.pages_bitmap();
-            let active_size = file_meta.total_page_size();
+            let active_size = file_meta.total_page_size().saturating_sub(offset);
             let file_info = FileInfo::new(
                 active_pages,
                 active_size,
