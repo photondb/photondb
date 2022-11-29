@@ -214,6 +214,8 @@ impl FileMeta {
         block_size: usize,
         meta_indexes: Vec<u64>,
         data_offsets: BTreeMap<u64, u64>,
+        compression: Compression,
+        checksum_type: ChecksumType,
     ) -> Self {
         FileMeta {
             file_id,
@@ -222,8 +224,8 @@ impl FileMeta {
             belong_to: Some(map_file_id),
             meta_indexes,
             data_offsets,
-            compression: Compression::NONE,
-            checksum_type: ChecksumType::CRC32,
+            compression,
+            checksum_type,
         }
     }
 
