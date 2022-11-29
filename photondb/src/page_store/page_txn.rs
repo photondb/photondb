@@ -145,6 +145,20 @@ impl<'a, E: Env> PageTxn<'a, E> {
         Ok((addr, buf))
     }
 
+    /// Similar to `alloc_page`, but also set the page id for the allocated page
+    /// buffer.
+    pub(crate) async fn alloc_page_with_id(
+        &mut self,
+        id: u64,
+        size: usize,
+    ) -> Result<(u64, PageBuf<'a>)> {
+        let page_size = size as u32;
+        let (addr, header, buf) = self.alloc_page_impl(page_size).await?;
+        header.set_page_id(id);
+        self.records.insert(addr, header);
+        Ok((addr, buf))
+    }
+
     /// Inserts a new page into the store. Insertion happens when page splits or
     /// tree initializes. It returns the id of the inserted page.
     ///
