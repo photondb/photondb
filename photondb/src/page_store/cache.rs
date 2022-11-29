@@ -687,7 +687,7 @@ pub(crate) mod clock {
             let mut probe = 0;
             let base = self.mod_table_size(Self::remix1(hash));
             let increment = Self::remix2(hash) | 1;
-            let mut current = self.mod_table_size(base + probe * increment);
+            let mut current = self.mod_table_size(base.wrapping_add(probe * increment));
             while probe <= self.length_bits_mask {
                 let h = self.handles.get(current as usize).unwrap();
                 if match_fn(h) {
@@ -699,7 +699,7 @@ pub(crate) mod clock {
                 }
                 probe += 1;
                 update_fn(h);
-                current = self.mod_table_size(current + increment);
+                current = self.mod_table_size(current.wrapping_add(increment));
             }
             (None, probe)
         }
@@ -721,7 +721,7 @@ pub(crate) mod clock {
                 old_clock_pointer + ((MAX_COUNT_DOWN as u64) << self.length_bits);
             loop {
                 for i in 0..STEP_SIZE {
-                    let idx = self.mod_table_size((old_clock_pointer + i) as u32);
+                    let idx = self.mod_table_size((old_clock_pointer.wrapping_add(i)) as u32);
                     let hp = self.handles.get(idx as usize).unwrap();
                     let evicting = self.clock_update(hp);
                     if evicting {
@@ -796,7 +796,7 @@ pub(crate) mod clock {
                 }
                 let hh = self.handles.get(current as usize).unwrap();
                 hh.as_ref().displacements.fetch_sub(1, Ordering::Relaxed);
-                current = self.mod_table_size(current + increment);
+                current = self.mod_table_size(current.wrapping_add(increment));
             }
         }
 
