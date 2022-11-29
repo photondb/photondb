@@ -1,4 +1,4 @@
-use std::{fmt, mem, path::Path, sync::Arc};
+use std::{collections::HashSet, fmt, mem, path::Path, sync::Arc};
 
 use crate::{env::Env, util::shutdown::ShutdownNotifier};
 
@@ -140,16 +140,16 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            write_buffer_capacity: 128 << 20,
+            write_buffer_capacity: 16 << 20,
             max_write_buffers: 8,
             use_direct_io: false,
             max_space_amplification_percent: 100,
             space_used_high: u64::MAX,
-            file_base_size: 64 << 20,
+            file_base_size: 8 << 20,
             cache_capacity: 8 << 20,
             cache_estimated_entry_charge: 8 << 10,
             prepopulate_cache_on_flush: false,
-            separate_hot_cold_files: false,
+            separate_hot_cold_files: true,
             compression_on_flush: Compression::SNAPPY,
             compression_on_cold_compact: Compression::ZSTD,
             page_checksum_type: ChecksumType::NONE,
@@ -178,8 +178,15 @@ impl<E: Env> PageStore<E> {
         P: AsRef<Path>,
         R: RewritePage<E>,
     {
-        let (next_page_file_id, next_map_file_id, manifest, table, page_files, delta) =
-            Self::recover(env.to_owned(), path, &options).await?;
+        let (
+            next_page_file_id,
+            next_map_file_id,
+            manifest,
+            table,
+            page_files,
+            delta,
+            orphan_page_files,
+        ) = Self::recover(env.to_owned(), path, &options).await?;
 
         let version = Version::new(
             options.write_buffer_capacity,
@@ -207,7 +214,7 @@ impl<E: Env> PageStore<E> {
         // Spawn background jobs.
         store.spawn_flush_job();
         store.spawn_cleanup_job();
-        store.spawn_reclaim_job(next_map_file_id, rewriter);
+        store.spawn_reclaim_job(next_map_file_id, rewriter, orphan_page_files);
 
         Ok(store)
     }
@@ -248,8 +255,12 @@ impl<E: Env> PageStore<E> {
         self.jobs.push(handle);
     }
 
-    fn spawn_reclaim_job<R>(&mut self, next_map_file_id: u32, rewriter: R)
-    where
+    fn spawn_reclaim_job<R>(
+        &mut self,
+        next_map_file_id: u32,
+        rewriter: R,
+        orphan_page_files: HashSet<u32>,
+    ) where
         R: RewritePage<E>,
     {
         let strategy_builder = Box::new(MinDeclineRateStrategyBuilder);
@@ -263,6 +274,7 @@ impl<E: Env> PageStore<E> {
             self.version_owner.clone(),
             self.manifest.clone(),
             next_map_file_id,
+            orphan_page_files,
         );
         let handle = self.env.spawn_background(job.run(self.version()));
         self.jobs.push(handle);

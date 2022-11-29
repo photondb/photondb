@@ -25,6 +25,7 @@ struct FileInfoBuilder<'a, E: Env> {
     page_table_builder: PageTableBuilder,
 
     /// Records the dealloc pages.
+    orphan_page_files: HashSet<u32>,
     dealloc_pages: HashMap<u32, Vec<u64>>,
 }
 
@@ -47,6 +48,7 @@ impl<E: Env> PageStore<E> {
         PageTable,
         PageFiles<E>,
         DeltaVersion,
+        HashSet<u32>, /* orphan page files */
     )> {
         let manifest = Manifest::open(env.to_owned(), path.as_ref()).await?;
         let versions = manifest.list_versions().await?;
@@ -59,7 +61,7 @@ impl<E: Env> PageStore<E> {
         let mut builder = FileInfoBuilder::new(&page_files);
         Self::recover_map_file_infos(&mut builder, &summary.active_map_files).await?;
         Self::recover_page_file_infos(&mut builder, &summary.active_page_files).await?;
-        let (file_infos, map_files, page_table) = builder.build();
+        let (file_infos, map_files, orphan_page_files, page_table) = builder.build();
 
         Self::delete_unreferenced_page_files(&page_files, &summary).await?;
 
@@ -77,6 +79,7 @@ impl<E: Env> PageStore<E> {
             page_table,
             page_files,
             delta,
+            orphan_page_files,
         ))
     }
 
@@ -187,6 +190,7 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
             page_files: HashMap::default(),
             map_files: HashMap::default(),
             page_table_builder: PageTableBuilder::default(),
+            orphan_page_files: HashSet::default(),
             dealloc_pages: HashMap::default(),
         }
     }
@@ -246,15 +250,20 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
         // 1. read dealloc pages.
         let delete_pages = meta_reader.read_delete_pages().await?;
         let mut referenced_files = HashSet::new();
-        for page_addr in &delete_pages {
-            referenced_files.insert((page_addr >> 32) as u32);
+        if !delete_pages.is_empty() {
+            for page_addr in &delete_pages {
+                referenced_files.insert((page_addr >> 32) as u32);
+            }
+            self.dealloc_pages.insert(file_id, delete_pages);
         }
-        self.dealloc_pages.insert(file_id, delete_pages);
 
         if self.virtual_files.contains(&file_id) {
             // This page file has compounded into a map file, which has been recovered
             // early.
             debug!("ignore page file {file_id} in recovery, since it has been compounded");
+            if !self.dealloc_pages.is_empty() {
+                self.orphan_page_files.insert(file_id);
+            }
             return Ok(());
         }
 
@@ -281,11 +290,23 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
         Ok(())
     }
 
-    /// Build page files, map files and page table.
-    fn build(mut self) -> (HashMap<u32, FileInfo>, HashMap<u32, MapFileInfo>, PageTable) {
+    /// Build page files, map files, orphan page files, and page table.
+    fn build(
+        mut self,
+    ) -> (
+        HashMap<u32, FileInfo>,
+        HashMap<u32, MapFileInfo>,
+        HashSet<u32>,
+        PageTable,
+    ) {
         self.maintain_active_pages();
         let page_table = self.page_table_builder.build();
-        (self.page_files, self.map_files, page_table)
+        (
+            self.page_files,
+            self.map_files,
+            self.orphan_page_files,
+            page_table,
+        )
     }
 
     fn maintain_active_pages(&mut self) {
