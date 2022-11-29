@@ -717,28 +717,36 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     async fn rewrite_page(&self, id: u64) -> Result<()> {
         loop {
             match self.try_rewrite_page(id).await {
-                Ok(()) => return Ok(()),
+                Ok(_) => return Ok(()),
                 Err(Error::Again) => continue,
                 Err(err) => return Err(err),
             }
         }
     }
 
-    async fn try_rewrite_page(&self, id: u64) -> Result<()> {
+    async fn try_rewrite_page<'g>(&'g self, id: u64) -> Result<PageView<'g>> {
         let view = self.page_view(id, None).await?;
         match view.page.tier() {
             PageTier::Leaf => {
-                self.rewrite_page_impl::<Key, Value>(view).await?;
+                let safe_lsn = self.tree.safe_lsn();
+                self.rewrite_page_impl(view, |iter| MergingLeafPageIter::new(iter, safe_lsn))
+                    .await
             }
             PageTier::Inner => {
-                self.rewrite_page_impl::<&[u8], Index>(view).await?;
+                self.rewrite_page_impl(view, MergingInnerPageIter::new)
+                    .await
             }
         }
-        Ok(())
     }
 
-    async fn rewrite_page_impl<'g, K, V>(&'g self, mut view: PageView<'g>) -> Result<PageView<'g>>
+    async fn rewrite_page_impl<'g, F, I, K, V>(
+        &'g self,
+        mut view: PageView<'g>,
+        f: F,
+    ) -> Result<PageView<'g>>
     where
+        F: Fn(MergingPageIter<'g, K, V>) -> I,
+        I: RewindableIterator<Item = (K, V)>,
         K: SortedPageKey,
         V: SortedPageValue,
     {
@@ -775,10 +783,10 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         .await?;
 
         // Merge the delta pages.
-        let iter = MergingPageIter::new(builder.build(), range_limit);
+        let iter = f(MergingPageIter::new(builder.build(), range_limit));
         let builder = SortedPageBuilder::new(old_page.tier(), PageKind::Data).with_iter(iter);
         let mut txn = self.guard.begin().await;
-        let (mut new_addr, mut new_page) = txn.alloc_page(builder.size()).await?;
+        let (mut new_addr, mut new_page) = txn.alloc_page_with_id(view.id, builder.size()).await?;
         builder.build(&mut new_page);
         new_page.set_epoch(old_page.epoch());
         // Relocate the first page if it is skipped.
