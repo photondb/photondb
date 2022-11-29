@@ -48,6 +48,7 @@ where
 
     next_map_file_id: u32,
     cleaned_files: HashSet<FileId>,
+    orphan_page_files: HashSet<u32>,
 }
 
 #[derive(Debug)]
@@ -96,6 +97,7 @@ where
         version_owner: Arc<VersionOwner>,
         manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
         next_map_file_id: u32,
+        orphan_page_files: HashSet<u32>,
     ) -> Self {
         ReclaimCtx {
             options,
@@ -108,10 +110,12 @@ where
             manifest,
             next_map_file_id,
             cleaned_files: HashSet::default(),
+            orphan_page_files,
         }
     }
 
     pub(crate) async fn run(mut self, mut version: Arc<Version>) {
+        self.reclaim_orphan_page_files().await;
         loop {
             self.reclaim(&version).await;
             match with_shutdown(&mut self.shutdown, version.wait_next_version()).await {
@@ -154,6 +158,44 @@ where
             }
         }
         empty_files
+    }
+
+    async fn reclaim_orphan_page_files(&mut self) {
+        let version = self.version_owner.current();
+        let orphan_page_files = std::mem::take(&mut self.orphan_page_files);
+        if orphan_page_files.is_empty() {
+            return;
+        }
+
+        info!("reclaim orphan page files {:?}", orphan_page_files);
+        for &file_id in &orphan_page_files {
+            let reader = self
+                .page_files
+                .open_page_file_meta_reader(file_id)
+                .await
+                .unwrap();
+            let dealloc_pages = reader.read_delete_pages().await.unwrap();
+            self.rewrite_dealloc_pages(file_id, &version, &dealloc_pages)
+                .await
+                .unwrap();
+        }
+
+        let edit = make_orphan_page_file_edit(&orphan_page_files);
+        let mut manifest = self.manifest.lock().await;
+        let version = self.version_owner.current();
+        manifest
+            .record_version_edit(edit, || super::version_snapshot(&version))
+            .await
+            .unwrap();
+        let mut delta = DeltaVersion::from(version.as_ref());
+        delta.reason = VersionUpdateReason::Compact;
+        delta.page_files.drain_filter(|id, info| {
+            info.get_map_file_id().is_none() && orphan_page_files.contains(id)
+        });
+        delta.obsoleted_page_files = orphan_page_files;
+
+        // Safety: the mutable reference of [`Manifest`] is hold.
+        unsafe { self.version_owner.install(delta) };
     }
 
     async fn reclaim_files_by_strategy(
@@ -200,8 +242,8 @@ where
         self.next_map_file_id += 1;
 
         let file_infos = version.page_files();
-        let (virtual_page_files, map_file, obsoleted_files) = self
-            .compound_and_clean_page_files(version, file_id, file_infos, victims)
+        let (virtual_page_files, map_file, obsoleted_files, dealloc_page_map) = self
+            .compound_page_files(file_id, file_infos, victims)
             .await
             .unwrap();
 
@@ -221,6 +263,16 @@ where
         delta.obsoleted_page_files = obsoleted_files.into_iter().collect();
         // Safety: the mutable reference of [`Manifest`] is hold.
         unsafe { self.version_owner.install(delta) };
+
+        // Rewrite dealloc pages for compounded page files.
+        //
+        // It's recoverable, see `reclaim_orphan_page_files` for details.
+        drop(manifest);
+        for (id, dealloc_pages) in dealloc_page_map {
+            self.rewrite_dealloc_pages(id, &version, &dealloc_pages)
+                .await
+                .unwrap();
+        }
     }
 
     async fn reclaim_map_files(&mut self, version: &Arc<Version>, victims: HashSet<u32>) {
@@ -464,18 +516,21 @@ where
         }
     }
 
-    /// Compound a set of page files into a map file, and rewrite the dealloc
-    /// pages.
+    /// Compound a set of page files into a map file
     ///
     /// NOTE: We don't mix page file and map file in compounding, because they
     /// have different age (update frequency).
-    async fn compound_and_clean_page_files(
+    async fn compound_page_files(
         &mut self,
-        version: &Arc<Version>,
         new_file_id: u32,
         file_infos: &HashMap<u32, FileInfo>,
         victims: HashSet<u32>,
-    ) -> Result<(HashMap<u32, FileInfo>, MapFileInfo, Vec<u32>)> {
+    ) -> Result<(
+        HashMap<u32, FileInfo>,
+        MapFileInfo,
+        Vec<u32>,
+        HashMap<u32, Vec<u64>>,
+    )> {
         let start_at = Instant::now();
         let mut num_active_pages = 0;
         let mut num_dealloc_pages = 0;
@@ -490,6 +545,7 @@ where
             )
             .await?;
         let mut obsoleted_files = vec![];
+        let mut dealloc_page_map = HashMap::default();
         let mut victims = victims.into_iter().collect::<Vec<_>>();
         victims.sort_unstable();
         for &id in &victims {
@@ -510,8 +566,7 @@ where
             if dealloc_pages.is_empty() {
                 obsoleted_files.push(id);
             } else {
-                self.rewrite_dealloc_pages(id, version, &dealloc_pages)
-                    .await?;
+                dealloc_page_map.insert(id, dealloc_pages);
             }
             self.cleaned_files.insert(FileId::Page(id));
         }
@@ -529,7 +584,7 @@ where
                 latest {elapsed} microseconds",
         );
 
-        Ok((virtual_infos, file_info, obsoleted_files))
+        Ok((virtual_infos, file_info, obsoleted_files, dealloc_page_map))
     }
 
     /// Write all active pages of the corresponding page file into a map file
@@ -540,9 +595,14 @@ where
         file_info: &FileInfo,
     ) -> Result<(MapFileBuilder<'a, E>, Vec<u64>)> {
         let file_id = file_info.get_file_id();
-        let reader = self.page_files.open_page_file_meta_reader(file_id).await?;
-        let page_table = reader.read_page_table().await?;
-        let dealloc_pages = reader.read_delete_pages().await?;
+        info!("compound partial page file {file_id}");
+        let reader = self
+            .page_files
+            .open_page_file_meta_reader(file_id)
+            .await
+            .unwrap();
+        let page_table = reader.read_page_table().await.unwrap();
+        let dealloc_pages = reader.read_delete_pages().await.unwrap();
         let reader = reader.into_inner();
         let mut page = vec![];
         for page_addr in file_info.iter() {
@@ -560,10 +620,11 @@ where
             page.truncate(page_size);
             self.page_files
                 .read_file_page_from_reader(reader.clone(), file_info.meta(), handle, &mut page)
-                .await?;
-            builder.add_page(page_id, page_addr, &page).await?;
+                .await
+                .unwrap();
+            builder.add_page(page_id, page_addr, &page).await.unwrap();
         }
-        let builder = builder.finish().await?;
+        let builder = builder.finish().await.unwrap();
         Ok((builder, dealloc_pages))
     }
 
@@ -624,6 +685,7 @@ where
         page_files: &HashMap<u32, FileInfo>,
     ) -> Result<MapFileBuilder<'a, E>> {
         let file_id = file_info.file_id();
+        log::debug!("compact file {file_id}");
         let file_meta = self.page_files.read_map_file_meta(file_id).await?;
         let reader = self
             .page_files
@@ -798,6 +860,17 @@ fn make_compact_version_edit(file_id: u32, obsoleted_files: &HashSet<u32>) -> Ve
     }
 }
 
+fn make_orphan_page_file_edit(obsoleted_files: &HashSet<u32>) -> VersionEdit {
+    let deleted_files = obsoleted_files.iter().cloned().collect::<Vec<_>>();
+    VersionEdit {
+        map_stream: None,
+        page_stream: Some(StreamEdit {
+            new_files: vec![],
+            deleted_files,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -878,6 +951,7 @@ mod tests {
             DeltaVersion::default(),
         )));
         let page_files = Arc::new(PageFiles::new(Photon, dir, &options).await);
+        let orphan_page_files = HashSet::default();
         ReclaimCtx {
             options,
             shutdown,
@@ -889,6 +963,7 @@ mod tests {
             version_owner,
             cleaned_files: HashSet::default(),
             next_map_file_id: 1,
+            orphan_page_files,
         }
     }
 
@@ -986,10 +1061,13 @@ mod tests {
 
         let version = ctx.version_owner.current();
         let victims = files.keys().cloned().collect::<HashSet<_>>();
-        let (new_files, map_file, _) = ctx
-            .compound_and_clean_page_files(&version, 1, &files, victims)
-            .await
-            .unwrap();
+        let (new_files, map_file, _, dealloc_page_map) =
+            ctx.compound_page_files(1, &files, victims).await.unwrap();
+        for (id, pages) in dealloc_page_map {
+            ctx.rewrite_dealloc_pages(id, &version, &pages)
+                .await
+                .unwrap();
+        }
         assert_eq!(map_file.meta().num_page_files(), 2);
         assert!(new_files.contains_key(&file_id_1));
         assert!(new_files.contains_key(&file_id_2));
