@@ -1,12 +1,11 @@
 use std::{collections::BTreeMap, marker::PhantomData, sync::Arc};
 
 use futures::Future;
-use moka::future::Cache;
 
 use super::{file_builder::*, types::FileMeta, FileId};
 use crate::{
     env::{Env, PositionalReader, PositionalReaderExt},
-    page_store::{Error, Result},
+    page_store::{ClockCache, Error, Result},
 };
 
 pub(crate) struct CommonFileReader<R: PositionalReader> {
@@ -195,17 +194,14 @@ impl<R: PositionalReader> MetaReader<R> {
     }
 }
 
-pub(super) struct ReaderCache<E: Env> {
-    cache: moka::future::Cache<FileId, Arc<PageFileReader<E::PositionalReader>>>,
+pub(super) struct FileReaderCache<E: Env> {
+    cache: Arc<ClockCache<Arc<PageFileReader<E::PositionalReader>>>>,
     _marker: PhantomData<E>,
 }
 
-impl<E: Env> ReaderCache<E> {
+impl<E: Env> FileReaderCache<E> {
     pub(super) fn new(max_size: u64) -> Self {
-        let cache = Cache::builder()
-            .initial_capacity(max_size as usize)
-            .max_capacity(max_size)
-            .build();
+        let cache = Arc::new(ClockCache::new(max_size as usize, 1, -1, false));
         Self {
             cache,
             _marker: PhantomData,
@@ -216,11 +212,28 @@ impl<E: Env> ReaderCache<E> {
         &self,
         file_id: FileId,
         init: impl Future<Output = Arc<PageFileReader<E::PositionalReader>>>,
-    ) -> Arc<PageFileReader<E::PositionalReader>> {
-        self.cache.get_with(file_id, init).await
+    ) -> Result<Arc<PageFileReader<E::PositionalReader>>> {
+        use crate::page_store::cache::Cache;
+        let key = Self::file_id_to_key(file_id);
+        if let Some(cached) = self.cache.lookup(key) {
+            return Ok(cached.value().clone());
+        }
+        let reader = init.await;
+        self.cache.insert(key, Some(reader.clone()), 1)?;
+        Ok(reader)
     }
 
     pub(super) async fn invalidate(&self, file_id: FileId) {
-        self.cache.invalidate(&file_id).await
+        use crate::page_store::cache::Cache;
+        let key = Self::file_id_to_key(file_id);
+        self.cache.erase(key);
+    }
+
+    #[inline]
+    fn file_id_to_key(file_id: FileId) -> u64 {
+        match file_id {
+            FileId::Page(id) => id as u64,
+            FileId::Map(id) => (1u64 << 32) | (id as u64),
+        }
     }
 }

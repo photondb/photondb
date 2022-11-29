@@ -21,7 +21,6 @@ thiserror = "1.0.37"
 roaring = "0.10"
 bytes = "1.2.1"
 libc = "0.2.137"
-moka = { version = "0.9", features = ["future"] }
 snap = "1.1.0"
 zstd = "0.12"
 zstd-safe = "6.0"
