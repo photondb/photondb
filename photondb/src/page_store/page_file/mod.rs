@@ -40,7 +40,7 @@ pub(crate) mod facade {
 
     use super::{
         constant::{DEFAULT_BLOCK_SIZE, MAX_OPEN_READER_FD_NUM},
-        file_reader::{self, CommonFileReader, MetaReader, ReaderCache},
+        file_reader::{self, CommonFileReader, FileReaderCache, MetaReader},
         types::PageHandle,
         *,
     };
@@ -64,7 +64,7 @@ pub(crate) mod facade {
         prepopulate_cache_on_flush: bool,
         write_checksum_type: ChecksumType,
 
-        reader_cache: file_reader::ReaderCache<E>,
+        reader_cache: file_reader::FileReaderCache<E>,
         page_cache: Arc<ClockCache<Vec<u8>>>,
     }
 
@@ -78,7 +78,7 @@ pub(crate) mod facade {
         ) -> Self {
             let base = base.into();
             let base_dir = env.open_dir(&base).await.expect("open base dir fail");
-            let reader_cache = ReaderCache::new(MAX_OPEN_READER_FD_NUM);
+            let reader_cache = FileReaderCache::new(MAX_OPEN_READER_FD_NUM);
             let page_cache = Arc::new(ClockCache::new(
                 options.cache_capacity,
                 options.cache_estimated_entry_charge,
@@ -235,8 +235,7 @@ pub(crate) mod facade {
             file_id: FileId,
             block_size: usize,
         ) -> Result<Arc<PageFileReader<E::PositionalReader>>> {
-            let r = self
-                .reader_cache
+            self.reader_cache
                 .get_with(file_id, async move {
                     let (prefix, id) = match file_id {
                         FileId::Page(id) => (PAGE_FILE_PREFIX, id),
@@ -254,8 +253,7 @@ pub(crate) mod facade {
                         file_size as usize,
                     ))
                 })
-                .await;
-            Ok(r)
+                .await
         }
 
         pub(crate) async fn open_page_file_meta_reader(
