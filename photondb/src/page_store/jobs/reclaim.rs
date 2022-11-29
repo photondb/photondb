@@ -196,7 +196,7 @@ where
     /// Reclaim page files by compounding victims into a new map file, and
     /// install new version.
     async fn reclaim_page_files(&mut self, version: &Arc<Version>, victims: HashSet<u32>) {
-        let file_id = self.next_map_file_id + 1;
+        let file_id = self.next_map_file_id;
         self.next_map_file_id += 1;
 
         let file_infos = version.page_files();
@@ -245,6 +245,7 @@ where
 
         let mut delta = DeltaVersion::from(version.as_ref());
         delta.reason = VersionUpdateReason::Compact;
+        delta.map_files.retain(|id, _| !victims.contains(id));
         delta.map_files.insert(file_id, file_info);
         // FIXME: need remove empty infos if it is not contained in virtual_info.
         delta.page_files.extend(virtual_infos.into_iter());
@@ -1027,7 +1028,7 @@ mod tests {
     }
 
     #[photonio::test]
-    async fn compact_map_files() {
+    async fn map_files_compacting() {
         let root = TempDir::new("compact_map_files").unwrap();
         let root = root.into_path();
 
@@ -1080,5 +1081,69 @@ mod tests {
         println!("base size {base_size}");
         println!("used size {used_size}");
         assert!(base_size < used_size);
+    }
+
+    #[photonio::test]
+    async fn map_files_reclaiming() {
+        let root = TempDir::new("map_files_reclaiming").unwrap();
+        let root = root.into_path();
+
+        let rewriter = PageRewriter::default();
+        let mut ctx = build_reclaim_ctx(&root, rewriter.clone()).await;
+
+        let (f1, f2, f3, f4) = (1, 2, 3, 4);
+        let (m1, m2, m3) = (1, 2, 3);
+        ctx.next_map_file_id = m3;
+        let mut pages = HashMap::new();
+        pages.insert(f1, vec![(1, pa(f1, 16)), (2, pa(f1, 32)), (3, pa(f1, 64))]);
+        pages.insert(f2, vec![(4, pa(f2, 16)), (5, pa(f2, 32)), (6, pa(f2, 64))]);
+        let (virtual_infos, m1_info) = build_map_file(&ctx.page_files, m1, pages).await;
+        let mut page_files = virtual_infos;
+
+        let mut pages = HashMap::new();
+        pages.insert(f3, vec![(7, pa(f3, 16)), (8, pa(f3, 32)), (9, pa(f3, 64))]);
+        pages.insert(f4, vec![(1, pa(f4, 16)), (2, pa(f4, 32)), (3, pa(f4, 64))]);
+        let (virtual_infos, m2_info) = build_map_file(&ctx.page_files, m2, pages).await;
+        page_files.extend(virtual_infos.into_iter());
+
+        let mut map_files = HashMap::new();
+        map_files.insert(m1, m1_info);
+        map_files.insert(m2, m2_info);
+        let victims = HashSet::from_iter(vec![m1, m2].into_iter());
+
+        let delta = DeltaVersion {
+            reason: VersionUpdateReason::Flush,
+            page_files,
+            map_files,
+            ..Default::default()
+        };
+        // No concurrent operations.
+        unsafe { ctx.version_owner.install(delta) };
+        let version = ctx.version_owner.current();
+
+        ctx.reclaim_map_files(&version, victims).await;
+
+        let version = ctx.version_owner.current();
+        let page_files = version.page_files();
+        assert!(page_files.contains_key(&f1));
+        assert!(page_files.contains_key(&f2));
+        assert!(page_files.contains_key(&f3));
+        assert!(page_files.contains_key(&f4));
+
+        let f1_info = page_files.get(&f1).unwrap();
+        assert!(f1_info.get_page_handle(pa(f1, 32)).is_some());
+        assert!(f1_info.get_page_handle(pa(f1, 64)).is_some());
+        assert!(f1_info.get_page_handle(pa(f1, 128)).is_none());
+
+        let f4_info = page_files.get(&f4).unwrap();
+        assert!(f4_info.get_page_handle(pa(f4, 0)).is_none());
+        assert!(f4_info.get_page_handle(pa(f2, 32)).is_none());
+        assert!(f4_info.get_page_handle(pa(f4, 64)).is_some());
+
+        let map_files = version.map_files();
+        // The compacted map files are not contained in version.
+        assert!(!map_files.contains_key(&m1));
+        assert!(!map_files.contains_key(&m2));
+        assert!(map_files.contains_key(&m3));
     }
 }
