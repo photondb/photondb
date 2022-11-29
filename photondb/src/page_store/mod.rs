@@ -32,7 +32,7 @@ mod manifest;
 pub(crate) use manifest::Manifest;
 
 mod page_file;
-pub(crate) use page_file::{FileInfo, MapFileInfo, PageFiles};
+pub(crate) use page_file::{ChecksumType, Compression, FileInfo, MapFileInfo, PageFiles};
 
 mod recover;
 mod strategy;
@@ -40,6 +40,7 @@ pub(crate) use strategy::{MinDeclineRateStrategyBuilder, StrategyBuilder};
 
 mod cache;
 pub(crate) use cache::{clock::ClockCache, Cache, CacheEntry};
+
 /// Options to configure a page store.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
@@ -118,6 +119,22 @@ pub struct Options {
     ///
     /// Default: false
     pub separate_hot_cold_files: bool,
+
+    /// Compression method during flush new file.
+    /// include hot rewrite.
+    ///
+    /// Default: Snappy.
+    pub compression_on_flush: Compression,
+
+    /// Compression method during compact cold file.
+    ///
+    /// Default: Zstd(Level3).
+    pub compression_on_cold_compact: Compression,
+
+    /// ChecksumType for each page.
+    ///
+    /// Default: NONE.
+    pub page_checksum_type: ChecksumType,
 }
 
 impl Default for Options {
@@ -133,12 +150,14 @@ impl Default for Options {
             cache_estimated_entry_charge: 8 << 10,
             prepopulate_cache_on_flush: false,
             separate_hot_cold_files: false,
+            compression_on_flush: Compression::SNAPPY,
+            compression_on_cold_compact: Compression::ZSTD,
+            page_checksum_type: ChecksumType::NONE,
         }
     }
 }
 
 pub(crate) struct PageStore<E: Env> {
-    #[allow(unused)]
     options: Options,
     #[allow(unused)]
     env: E,
@@ -213,6 +232,7 @@ impl<E: Env> PageStore<E> {
 
     fn spawn_flush_job(&mut self) {
         let job = FlushCtx::new(
+            self.options.clone(),
             self.shutdown.subscribe(),
             self.version_owner.clone(),
             self.page_files.clone(),

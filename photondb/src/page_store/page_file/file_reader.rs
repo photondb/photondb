@@ -113,6 +113,8 @@ impl<R: PositionalReader> MetaReader<R> {
                 reader.align_size,
                 indexes,
                 offsets,
+                footer.compression,
+                footer.checksum_type,
             ))
         })
     }

@@ -90,7 +90,7 @@ impl<E: Env> Guard<E> {
 
         let entry = self
             .page_files
-            .read_page(physical_id, addr, handle, file_info)
+            .read_page(physical_id, file_info, addr, handle)
             .await?;
 
         let mut owned_pages = self.cache_guards.lock().expect("Poisoned");

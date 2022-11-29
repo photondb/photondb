@@ -15,6 +15,12 @@ pub(crate) use map_file_builder::{MapFileBuilder, PartialFileBuilder};
 mod map_file_reader;
 pub(crate) use map_file_reader::{MapFileMetaHolder, MapFileReader};
 
+mod compression;
+pub(crate) use compression::Compression;
+
+mod checksum;
+pub(crate) use checksum::ChecksumType;
+
 pub(crate) mod constant {
     /// Default alignment requirement for the SSD.
     // TODO: query logical sector size
@@ -34,13 +40,13 @@ pub(crate) mod facade {
 
     use super::{
         constant::{DEFAULT_BLOCK_SIZE, MAX_OPEN_READER_FD_NUM},
-        file_reader::{self, MetaReader, ReaderCache},
+        file_reader::{self, CommonFileReader, MetaReader, ReaderCache},
         types::PageHandle,
         *,
     };
     use crate::{
         env::{Env, PositionalReader, SequentialWriter},
-        page_store::{Cache, CacheEntry, ClockCache, Result},
+        page_store::{Cache, CacheEntry, ClockCache, Error, Result},
         PageStoreOptions,
     };
 
@@ -56,6 +62,7 @@ pub(crate) mod facade {
 
         use_direct: bool,
         prepopulate_cache_on_flush: bool,
+        write_checksum_type: ChecksumType,
 
         reader_cache: file_reader::ReaderCache<E>,
         page_cache: Arc<ClockCache<Vec<u8>>>,
@@ -80,11 +87,13 @@ pub(crate) mod facade {
             ));
             let use_direct = options.use_direct_io;
             let prepopulate_cache_on_flush = options.prepopulate_cache_on_flush;
+            let write_checksum_type = options.page_checksum_type;
             Self {
                 env,
                 base,
                 base_dir,
                 use_direct,
+                write_checksum_type,
                 prepopulate_cache_on_flush,
                 reader_cache,
                 page_cache,
@@ -92,7 +101,11 @@ pub(crate) mod facade {
         }
 
         /// Create `FileBuilder` to write a new page file.
-        pub(crate) async fn new_page_file_builder(&self, file_id: u32) -> Result<FileBuilder<E>> {
+        pub(crate) async fn new_page_file_builder(
+            &self,
+            file_id: u32,
+            comperssion: Compression,
+        ) -> Result<FileBuilder<E>> {
             // TODO: switch to env in suitable time.
             let path = self.base.join(format!("{}_{file_id}", PAGE_FILE_PREFIX));
             let writer = self
@@ -107,11 +120,18 @@ pub(crate) mod facade {
                 writer,
                 use_direct,
                 DEFAULT_BLOCK_SIZE,
+                comperssion,
+                self.write_checksum_type,
             ))
         }
 
         /// Create `MapFileBuilder` to write a new map file.
-        pub(crate) async fn new_map_file_builder(&self, file_id: u32) -> Result<MapFileBuilder<E>> {
+        pub(crate) async fn new_map_file_builder(
+            &self,
+            file_id: u32,
+            compression: Compression,
+            checksum: ChecksumType,
+        ) -> Result<MapFileBuilder<E>> {
             // TODO: switch to env in suitable time.
             let path = self.base.join(format!("{}_{file_id}", MAP_FILE_PREFIX));
             let writer = self
@@ -126,27 +146,25 @@ pub(crate) mod facade {
                 writer,
                 use_direct,
                 DEFAULT_BLOCK_SIZE,
+                compression,
+                checksum,
             ))
         }
 
         pub(crate) async fn read_page(
             &self,
             file_id: FileId,
+            file_info: &FileInfo,
             addr: u64,
             handle: PageHandle,
-            file_info: &FileInfo,
         ) -> Result<CacheEntry<Vec<u8>, ClockCache<Vec<u8>>>> {
             if let Some(cache_entry) = self.page_cache.lookup(addr) {
                 return Ok(cache_entry);
             }
 
-            let reader = self
-                .open_page_reader(file_id, file_info.meta().block_size())
+            let buf = self
+                .read_file_page(file_id, file_info.meta(), handle)
                 .await?;
-
-            let mut buf = vec![0u8; handle.size as usize]; // TODO: aligned buffer pool
-            reader.read_exact_at(&mut buf, handle.offset as u64).await?;
-
             let charge = buf.len();
             let cache_entry = self
                 .page_cache
@@ -154,6 +172,59 @@ pub(crate) mod facade {
                 .expect("insert cache fail");
 
             Ok(cache_entry.unwrap())
+        }
+
+        pub(crate) async fn read_file_page(
+            &self,
+            file_id: FileId,
+            file_meta: Arc<FileMeta>,
+            handle: PageHandle,
+        ) -> Result<Vec<u8>> {
+            const CHECKSUM_LEN: usize = std::mem::size_of::<u32>();
+
+            let reader = self
+                .open_page_reader(file_id, file_meta.block_size())
+                .await?;
+
+            let mut buf = vec![0u8; handle.size as usize]; // TODO: aligned buffer pool
+            self.read_file_page_from_reader(reader, file_meta, handle, &mut buf)
+                .await?;
+            Ok(buf)
+        }
+
+        pub(crate) async fn read_file_page_from_reader(
+            &self,
+            reader: Arc<CommonFileReader<<E as Env>::PositionalReader>>,
+            file_meta: Arc<FileMeta>,
+            handle: PageHandle,
+            output: &mut Vec<u8>,
+        ) -> Result<()> {
+            const CHECKSUM_LEN: usize = std::mem::size_of::<u32>();
+
+            reader.read_exact_at(output, handle.offset as u64).await?;
+
+            if file_meta.checksum_type() != ChecksumType::NONE {
+                let checksum = u32::from_le_bytes(
+                    output[output.len() - CHECKSUM_LEN..output.len()]
+                        .try_into()
+                        .map_err(|_| Error::Corrupted)?,
+                );
+                output.truncate(output.len() - CHECKSUM_LEN);
+                checksum::check_checksum(file_meta.checksum_type(), output, checksum)?;
+            }
+
+            let compression = file_meta.compression();
+            if compression != Compression::NONE {
+                let (decompress_len, skip) = compression::decompress_len(compression, output)?;
+                let mut dbuf = vec![0u8; decompress_len];
+                compression::decompress_into(compression, &output[skip..], &mut dbuf)?;
+                if output.len() < dbuf.len() {
+                    output.resize(dbuf.len(), 0u8);
+                }
+                output[..dbuf.len()].copy_from_slice(&dbuf);
+                output.truncate(dbuf.len());
+            }
+            Ok(())
         }
 
         /// Open page_reader for a page_file.
@@ -331,7 +402,10 @@ pub(crate) mod facade {
             let env = crate::env::Photon;
             let base = TempDir::new("test_builder").unwrap();
             let files = PageFiles::new(env, base.path(), &test_option()).await;
-            let mut builder = files.new_page_file_builder(11233).await.unwrap();
+            let mut builder = files
+                .new_page_file_builder(11233, Compression::ZSTD)
+                .await
+                .unwrap();
             builder.add_delete_pages(&[1, 2]);
             builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
             builder.finish().await.unwrap();
@@ -341,10 +415,15 @@ pub(crate) mod facade {
         fn test_read_page() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_dread").unwrap();
-            let files = PageFiles::new(env, base.path(), &test_option()).await;
-            let file_id = 2;
+            let mut opt = test_option();
+            opt.page_checksum_type = ChecksumType::NONE;
+            let files = PageFiles::new(env, base.path(), &opt).await;
+            let file_id = FileId::Page(2);
             let info = {
-                let mut b = files.new_page_file_builder(file_id).await.unwrap();
+                let mut b = files
+                    .new_page_file_builder(2, Compression::NONE)
+                    .await
+                    .unwrap();
                 b.add_delete_pages(&[page_addr(1, 0), page_addr(1, 1)]);
                 b.add_page(1, page_addr(2, 2), &[7].repeat(8192))
                     .await
@@ -360,17 +439,11 @@ pub(crate) mod facade {
                 info
             };
 
-            let page_reader = files
-                .open_page_reader(FileId::Page(info.meta().get_file_id()), 4096)
-                .await
-                .unwrap();
-
             {
                 // read aligned 1st page.
                 let hd = info.get_page_handle(page_addr(2, 2)).unwrap();
-                let mut buf = vec![0u8; hd.size as usize];
-                page_reader
-                    .read_exact_at(&mut buf, hd.offset as u64)
+                files
+                    .read_file_page(file_id, info.meta(), hd)
                     .await
                     .unwrap();
             }
@@ -378,9 +451,8 @@ pub(crate) mod facade {
             {
                 // read unaligned(need trim end) 2nd page.
                 let hd = info.get_page_handle(page_addr(2, 3)).unwrap();
-                let mut buf = vec![0u8; hd.size as usize];
-                page_reader
-                    .read_exact_at(&mut buf, hd.offset as u64)
+                files
+                    .read_file_page(file_id, info.meta(), hd)
                     .await
                     .unwrap();
             }
@@ -388,9 +460,8 @@ pub(crate) mod facade {
             {
                 // read unaligned(need trim both start and end) 3rd page.
                 let hd = info.get_page_handle(page_addr(2, 3)).unwrap();
-                let mut buf = vec![0u8; hd.size as usize];
-                page_reader
-                    .read_exact_at(&mut buf, hd.offset as u64)
+                files
+                    .read_file_page(file_id, info.meta(), hd)
                     .await
                     .unwrap();
             }
@@ -404,7 +475,10 @@ pub(crate) mod facade {
 
             let file_id = 2;
             let ret_info = {
-                let mut b = files.new_page_file_builder(file_id).await.unwrap();
+                let mut b = files
+                    .new_page_file_builder(file_id, Compression::SNAPPY)
+                    .await
+                    .unwrap();
                 b.add_delete_pages(&[page_addr(1, 0), page_addr(1, 1)]);
                 b.add_page(1, page_addr(2, 2), &[7].repeat(8192))
                     .await
@@ -415,23 +489,20 @@ pub(crate) mod facade {
                 b.add_page(3, page_addr(2, 4), &[9].repeat(8192 / 3))
                     .await
                     .unwrap();
-                let info = b.finish().await.unwrap();
-                assert_eq!(info.effective_size(), 8192 + 8192 / 2 + 8192 / 3);
-                info
+                b.finish().await.unwrap()
             };
             {
                 let meta = {
                     let meta_reader = files.open_page_file_meta_reader(file_id).await.unwrap();
-                    assert_eq!(
-                        meta_reader.file_metadata().total_page_size(),
-                        8192 + 8192 / 2 + 8192 / 3
-                    );
+                    // assert_eq!(
+                    //     meta_reader.file_metadata().total_page_size(),
+                    //     8192 + 8192 / 2 + 8192 / 3
+                    // );
                     let page3 = page_addr(2, 4);
-                    let (page3_offset, page3_size) =
+                    let (page3_offset, _page3_size) =
                         meta_reader.file_metadata().get_page_handle(page3).unwrap();
                     let handle = ret_info.get_page_handle(page3).unwrap();
                     assert_eq!(page3_offset as u32, handle.offset);
-                    assert_eq!(page3_size, 8192 / 3);
 
                     let page_table = meta_reader.read_page_table().await.unwrap();
                     assert_eq!(page_table.len(), 3);
@@ -442,14 +513,13 @@ pub(crate) mod facade {
                 };
 
                 {
-                    let (page3_offset, page3_size) = meta.get_page_handle(page_addr(2, 4)).unwrap();
-                    let page_reader = files
-                        .open_page_reader(FileId::Page(file_id), 4096)
-                        .await
-                        .unwrap();
-                    let mut buf = vec![0u8; page3_size];
-                    page_reader
-                        .read_exact_at(&mut buf, page3_offset)
+                    let (offset, size) = meta.get_page_handle(page_addr(2, 4)).unwrap();
+                    let handle = PageHandle {
+                        offset: offset as u32,
+                        size: size as u32,
+                    };
+                    let buf = files
+                        .read_file_page(FileId::Page(file_id), meta, handle)
                         .await
                         .unwrap();
                     assert_eq!(buf.as_slice(), &[9].repeat(buf.len()));
@@ -468,7 +538,10 @@ pub(crate) mod facade {
             let page_addr3 = page_addr(file_id, 2);
 
             {
-                let mut b = files.new_page_file_builder(file_id).await.unwrap();
+                let mut b = files
+                    .new_page_file_builder(file_id, Compression::ZSTD)
+                    .await
+                    .unwrap();
                 b.add_page(1, page_addr1, &[1].repeat(10)).await.unwrap();
                 b.add_page(1, page_addr2, &[2].repeat(10)).await.unwrap();
                 b.add_page(2, page_addr3, &[3].repeat(10)).await.unwrap();
@@ -496,7 +569,10 @@ pub(crate) mod facade {
             let page_addr2 = page_addr(file_id, 1);
 
             {
-                let mut b = files.new_page_file_builder(file_id).await.unwrap();
+                let mut b = files
+                    .new_page_file_builder(file_id, Compression::ZSTD)
+                    .await
+                    .unwrap();
                 b.add_page(1, page_addr1, &[1].repeat(10)).await.unwrap();
                 b.add_page(1, page_addr2, &[2].repeat(10)).await.unwrap();
                 let file_info = b.finish().await.unwrap();
@@ -507,7 +583,10 @@ pub(crate) mod facade {
         #[photonio::test]
         async fn test_list_page_files() {
             async fn new_file(files: &PageFiles<crate::env::Photon>, file_id: u32) {
-                let mut b = files.new_page_file_builder(file_id).await.unwrap();
+                let mut b = files
+                    .new_page_file_builder(file_id, Compression::ZSTD)
+                    .await
+                    .unwrap();
                 b.finish().await.unwrap();
             }
 

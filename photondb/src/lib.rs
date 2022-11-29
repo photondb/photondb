@@ -58,6 +58,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::page_store::{ChecksumType, Compression};
 
     const OPTIONS: TableOptions = TableOptions {
         page_size: 64,
@@ -73,6 +74,9 @@ mod tests {
             cache_estimated_entry_charge: 1,
             prepopulate_cache_on_flush: true,
             separate_hot_cold_files: false,
+            compression_on_flush: Compression::SNAPPY,
+            compression_on_cold_compact: Compression::ZSTD,
+            page_checksum_type: ChecksumType::CRC32,
         },
     };
 

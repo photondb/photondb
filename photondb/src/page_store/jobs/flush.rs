@@ -13,6 +13,7 @@ use crate::{
 };
 
 pub(crate) struct FlushCtx<E: Env> {
+    options: Options,
     shutdown: Shutdown,
     version_owner: Arc<VersionOwner>,
     page_files: Arc<PageFiles<E>>,
@@ -31,12 +32,14 @@ struct FlushPageStats {
 
 impl<E: Env> FlushCtx<E> {
     pub(crate) fn new(
+        options: Options,
         shutdown: Shutdown,
         version_owner: Arc<VersionOwner>,
         page_files: Arc<PageFiles<E>>,
         manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
     ) -> Self {
         FlushCtx {
+            options,
             shutdown,
             version_owner,
             page_files,
@@ -139,7 +142,10 @@ impl<E: Env> FlushCtx<E> {
 
         self.page_files.evict_cached_pages(&dealloc_pages);
 
-        let mut builder = self.page_files.new_page_file_builder(file_id).await?;
+        let mut builder = self
+            .page_files
+            .new_page_file_builder(file_id, self.options.compression_on_flush)
+            .await?;
         for (page_addr, header, record_ref) in write_buffer.iter() {
             match record_ref {
                 RecordRef::DeallocPages(_) => {}
@@ -327,9 +333,9 @@ mod tests {
     use crate::{
         env::Photon,
         page_store::{
-            page_file::FileMeta,
+            page_file::{Compression, FileMeta},
             version::{DeltaVersion, Version, VersionOwner},
-            FileInfo, Manifest, PageFiles, WriteBuffer,
+            ChecksumType, FileInfo, Manifest, PageFiles, WriteBuffer,
         },
         util::shutdown::ShutdownNotifier,
         PageStoreOptions,
@@ -346,6 +352,7 @@ mod tests {
             ..Default::default()
         };
         FlushCtx {
+            options: opt.to_owned(),
             shutdown,
             version_owner,
             page_files: Arc::new(PageFiles::new(Photon, base, &opt).await),
@@ -400,14 +407,30 @@ mod tests {
 
     fn make_obsoleted_file(id: u32) -> FileInfo {
         let active_pages = roaring::RoaringBitmap::new();
-        let meta = FileMeta::new(id, 0, 4096, Vec::default(), BTreeMap::default());
+        let meta = FileMeta::new(
+            id,
+            0,
+            4096,
+            Vec::default(),
+            BTreeMap::default(),
+            Compression::NONE,
+            ChecksumType::CRC32,
+        );
         FileInfo::new(active_pages, 0, id, id, HashSet::default(), Arc::new(meta))
     }
 
     fn make_active_file(id: u32, page_addr: u32) -> FileInfo {
         let mut active_pages = roaring::RoaringBitmap::new();
         active_pages.insert(page_addr);
-        let meta = FileMeta::new(id, 1, 4096, Vec::default(), BTreeMap::default());
+        let meta = FileMeta::new(
+            id,
+            1,
+            4096,
+            Vec::default(),
+            BTreeMap::default(),
+            Compression::NONE,
+            ChecksumType::CRC32,
+        );
         FileInfo::new(active_pages, 1, id, id, HashSet::default(), Arc::new(meta))
     }
 
@@ -424,7 +447,15 @@ mod tests {
 
     fn make_obsoleted_file_but_refer_others(id: u32, refer: u32) -> FileInfo {
         let active_pages = roaring::RoaringBitmap::new();
-        let meta = FileMeta::new(id, 0, 4096, Vec::default(), BTreeMap::default());
+        let meta = FileMeta::new(
+            id,
+            0,
+            4096,
+            Vec::default(),
+            BTreeMap::default(),
+            Compression::NONE,
+            ChecksumType::CRC32,
+        );
         let mut refers = HashSet::default();
         refers.insert(refer);
         FileInfo::new(active_pages, 0, id, id, refers, Arc::new(meta))

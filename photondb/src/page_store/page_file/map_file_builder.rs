@@ -2,8 +2,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use super::{
-    constant::*, types::MapFileMeta, BlockHandler, BufferedWriter, CommonFileBuilder, FileInfo,
-    MapFileInfo,
+    compression::Compression, constant::*, types::MapFileMeta, BlockHandler, BufferedWriter,
+    ChecksumType, CommonFileBuilder, FileInfo, MapFileInfo,
 };
 use crate::{
     env::Env,
@@ -30,6 +30,8 @@ pub(crate) struct MapFileBuilder<'a, E: Env> {
     page_index: PageIndexBuilder,
     file_infos: HashMap<u32, FileInfo>,
     block_size: usize,
+    compression: Compression,
+    checksum: ChecksumType,
 }
 
 /// File builder for partial of map file.
@@ -66,6 +68,8 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
         file: E::SequentialWriter,
         use_direct: bool,
         block_size: usize,
+        compression: Compression,
+        checksum: ChecksumType,
     ) -> Self {
         let writer = BufferedWriter::new(file, IO_BUFFER_SIZE, use_direct, block_size, base_dir);
         Self {
@@ -74,15 +78,19 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
             page_index: PageIndexBuilder::default(),
             file_infos: HashMap::default(),
             block_size,
+            compression,
+            checksum,
         }
     }
 
     pub(crate) fn add_file(self, file_id: u32) -> PartialFileBuilder<'a, E> {
         let block_size = self.block_size;
+        let compression = self.compression;
+        let checksum_type = self.checksum;
         PartialFileBuilder {
             file_id,
             builder: self,
-            inner: CommonFileBuilder::new(file_id, block_size),
+            inner: CommonFileBuilder::new(file_id, block_size, compression, checksum_type),
         }
     }
 
@@ -306,7 +314,15 @@ mod tests {
             .open_sequential_writer(path1.to_owned())
             .await
             .expect("open file_id: {file_id}'s file fail");
-        let builder = MapFileBuilder::<Photon>::new(1, &base, file, use_direct, 4096);
+        let builder = MapFileBuilder::<Photon>::new(
+            1,
+            &base,
+            file,
+            use_direct,
+            4096,
+            Compression::ZSTD,
+            ChecksumType::CRC32,
+        );
 
         // Add page file 1.
         let mut file_builder = builder.add_file(1);
