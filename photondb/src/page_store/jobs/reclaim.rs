@@ -557,6 +557,7 @@ where
             if page.len() < page_size {
                 page.resize(page_size, 0u8);
             }
+            page.truncate(page_size);
             self.page_files
                 .read_file_page_from_reader(reader.clone(), file_info.meta(), handle, &mut page)
                 .await?;
@@ -644,6 +645,7 @@ where
                 if page.len() < page_size {
                     page.resize(page_size, 0u8);
                 }
+                page.truncate(page_size);
                 self.page_files
                     .read_file_page_from_reader(reader.clone(), info.meta(), handle, &mut page)
                     .await?;
