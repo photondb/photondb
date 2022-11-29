@@ -211,6 +211,8 @@ fn drain_obsoleted_files(
         .map(|(&id, _)| id)
         .collect::<HashSet<_>>();
     let mut obsoleted_files = reclaimed_files;
+    // Some reclaimed files has been cleaned by normal dealloc page operations.
+    obsoleted_files.retain(|id| files.contains_key(id));
     for (id, info) in &mut *files {
         if info.get_map_file_id().is_none() && info.is_obsoleted(&active_files) {
             obsoleted_files.insert(*id);
@@ -542,6 +544,13 @@ mod tests {
             let version = ctx.version_owner.current();
             let buf = version.get(buffer_3).unwrap().clone();
             ctx.flush(&buf).await.unwrap();
+        }
+
+        // file_1 must not contained in obsoleted files.
+        {
+            let version = ctx.version_owner.current();
+            let obsoleted_files = version.obsoleted_page_files();
+            assert!(!obsoleted_files.contains(&file_1));
         }
     }
 
