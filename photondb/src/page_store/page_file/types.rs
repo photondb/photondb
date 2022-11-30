@@ -73,17 +73,19 @@ impl FileInfo {
                 .all(|id| !active_files.contains(id))
     }
 
-    pub(crate) fn deactivate_page(&mut self, now: u32, page_addr: u64) {
+    pub(crate) fn deactivate_page(&mut self, now: u32, page_addr: u64) -> bool {
         let (_, index) = split_page_addr(page_addr);
         if self.active_pages.remove(index) {
             if let Some((_, page_size)) = self.meta.get_page_handle(page_addr) {
                 self.active_size -= page_size;
             }
+            if self.up1 < now {
+                self.up2 = self.up1;
+                self.up1 = now;
+            }
+            return true;
         }
-        if self.up1 < now {
-            self.up2 = self.up1;
-            self.up1 = now;
-        }
+        false
     }
 
     /// Get the [`PageHandle`] of the corresponding page. Returns `None` if no
@@ -131,6 +133,11 @@ impl FileInfo {
     }
 
     #[inline]
+    pub(crate) fn total_page_size(&self) -> usize {
+        self.meta.total_page_size()
+    }
+
+    #[inline]
     pub(crate) fn empty_pages_rate(&self) -> f64 {
         let active_pages = self.active_pages.len() as f64;
         let total_pages = self.meta.total_pages() as f64 + 0.1;
@@ -146,7 +153,7 @@ impl FileInfo {
     #[inline]
     pub(crate) fn effective_rate(&self) -> f64 {
         let active_size = self.active_size as f64;
-        let file_size = self.meta.file_size() as f64 + 0.1;
+        let file_size = self.meta.total_page_size() as f64;
         active_size / file_size
     }
 
@@ -171,6 +178,8 @@ impl FileInfo {
 /// The immutable metadata for page file.
 pub(crate) struct FileMeta {
     file_id: u32,
+    /// The offset in map files.
+    base_offset: u64,
     file_size: usize,
     block_size: usize,
 
@@ -199,6 +208,7 @@ impl FileMeta {
         Self {
             file_id,
             file_size,
+            base_offset: 0,
             belong_to: None,
             meta_indexes,
             data_offsets,
@@ -208,9 +218,11 @@ impl FileMeta {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_partial(
         file_id: u32,
         map_file_id: u32,
+        base_offset: u64,
         block_size: usize,
         meta_indexes: Vec<u64>,
         data_offsets: BTreeMap<u64, u64>,
@@ -220,6 +232,7 @@ impl FileMeta {
         FileMeta {
             file_id,
             file_size: 0,
+            base_offset,
             block_size,
             belong_to: Some(map_file_id),
             meta_indexes,
@@ -251,9 +264,9 @@ impl FileMeta {
         };
         let end_offset = match iter.next() {
             Some((_, offset)) => *offset,
-            None => self.total_page_size() as u64, /* it's the last page use
-                                                    * total-page-size as
-                                                    * end val. */
+            None => self.page_table_offset() as u64, /* it's the last page use
+                                                      * total-page-size as
+                                                      * end val. */
         };
         Some((start_offset, (end_offset - start_offset) as usize))
     }
@@ -264,12 +277,20 @@ impl FileMeta {
         self.data_offsets.len()
     }
 
-    /// Return the total page size(include inactive page).
-    ///
-    /// NOTES: Only works for page file.
+    /// Return the total page size(include inactive page), it alway large than
+    /// zero.
     #[inline]
     pub(crate) fn total_page_size(&self) -> usize {
-        (**self.meta_indexes.first().as_ref().unwrap()) as usize
+        let size = self.page_table_offset().saturating_sub(self.base_offset);
+        if size == 0 {
+            1
+        } else {
+            size as usize
+        }
+    }
+
+    fn page_table_offset(&self) -> u64 {
+        **self.meta_indexes.first().as_ref().unwrap()
     }
 
     /// Return the block_size for the file's device.

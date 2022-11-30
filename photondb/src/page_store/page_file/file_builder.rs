@@ -210,12 +210,14 @@ impl CommonFileBuilder {
     pub(crate) fn as_partial_file_meta(
         &self,
         map_file_id: u32,
+        base_offset: u64,
         data_handle: BlockHandler,
     ) -> Arc<FileMeta> {
         let (indexes, offsets) = self.index.index_block.as_meta_file_cached(data_handle);
         Arc::new(FileMeta::new_partial(
             self.file_id,
             map_file_id,
+            base_offset,
             self.block_size,
             indexes,
             offsets,

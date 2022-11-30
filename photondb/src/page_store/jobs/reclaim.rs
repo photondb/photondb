@@ -5,7 +5,7 @@ use std::{
     time::Instant,
 };
 
-use log::{info, trace};
+use log::{debug, info, trace};
 
 use crate::{
     env::Env,
@@ -247,7 +247,7 @@ where
             .await
             .unwrap();
 
-        let edit = make_compound_version_edit(file_id, &obsoleted_files);
+        let edit = make_compound_version_edit(&map_file, &obsoleted_files);
         let mut manifest = self.manifest.lock().await;
         let version = self.version_owner.current();
         manifest
@@ -287,7 +287,7 @@ where
             .unwrap();
 
         // All input are obsoleted, since it doesn't relocate pages.
-        let edit = make_compact_version_edit(file_id, &victims);
+        let edit = make_compact_version_edit(&file_info, &victims);
         let mut manifest = self.manifest.lock().await;
         let version = self.version_owner.current();
         manifest
@@ -449,9 +449,8 @@ where
         version: &Version,
         cleaned_files: &HashSet<FileId>,
     ) -> Box<dyn ReclaimPickStrategy> {
+        let now = version.now();
         let files = version.page_files();
-        // FIXME: what happen if the latest file was removed.
-        let now = files.keys().cloned().max().unwrap_or(1);
         let mut strategy = self.strategy_builder.build(now);
         for (&id, file) in files {
             if cleaned_files.contains(&FileId::Page(id)) {
@@ -548,12 +547,14 @@ where
         let mut dealloc_page_map = HashMap::default();
         let mut victims = victims.into_iter().collect::<Vec<_>>();
         victims.sort_unstable();
+        let mut up2_sum = 0;
         for &id in &victims {
             let dealloc_pages;
 
             // Compound page file into map file
             let file_builder = builder.add_file(id);
             let file_info = file_infos.get(&id).expect("Victims must exists");
+            up2_sum += file_info.up2();
             input_size += file_info.file_size();
             output_size += file_info.effective_size();
             num_active_pages += file_info.num_active_pages();
@@ -570,7 +571,12 @@ where
             }
             self.cleaned_files.insert(FileId::Page(id));
         }
-        let (virtual_infos, file_info) = builder.finish().await?;
+
+        // When we include the page in a new segment that contains re-written pages from
+        // other segments, the value for up2 for the new segment is the average up2 for
+        // all pages written to it.
+        let up2 = up2_sum / (victims.len() as u32);
+        let (virtual_infos, file_info) = builder.finish(up2).await?;
 
         let elapsed = start_at.elapsed().as_micros();
         let free_size = input_size.saturating_sub(output_size);
@@ -595,7 +601,7 @@ where
         file_info: &FileInfo,
     ) -> Result<(MapFileBuilder<'a, E>, Vec<u64>)> {
         let file_id = file_info.get_file_id();
-        info!("compound partial page file {file_id}");
+        debug!("compound partial page file {file_id}");
         let reader = self
             .page_files
             .open_page_file_meta_reader(file_id)
@@ -649,14 +655,21 @@ where
         let mut victims = victims.iter().cloned().collect::<Vec<_>>();
         victims.sort_unstable();
         let mut stats = CompactStats::default();
+        let mut up2_sum = 0;
         for &id in &victims {
             let info = map_files.get(&id).expect("Must exists");
+            up2_sum += info.up2();
             builder = self
                 .compact_map_file(builder, &mut stats, info, page_files)
                 .await?;
             self.cleaned_files.insert(FileId::Map(id));
         }
-        let (virtual_infos, file_info) = builder.finish().await?;
+
+        // When we include the page in a new segment that contains re-written pages from
+        // other segments, the value for up2 for the new segment is the average up2 for
+        // all pages written to it.
+        let up2 = up2_sum / (victims.len() as u32);
+        let (virtual_infos, file_info) = builder.finish(up2).await?;
 
         let elapsed = start_at.elapsed().as_micros();
         let CompactStats {
@@ -685,7 +698,7 @@ where
         page_files: &HashMap<u32, FileInfo>,
     ) -> Result<MapFileBuilder<'a, E>> {
         let file_id = file_info.file_id();
-        log::debug!("compact file {file_id}");
+        debug!("compact file {file_id}");
         let file_meta = self.page_files.read_map_file_meta(file_id).await?;
         let reader = self
             .page_files
@@ -788,7 +801,7 @@ impl ReclaimJobBuilder {
 impl CompactStats {
     fn collect(&mut self, info: &FileInfo) {
         self.num_active_pages += info.num_active_pages();
-        self.input_size += info.file_size();
+        self.input_size += info.total_page_size();
         self.output_size += info.effective_size();
     }
 }
@@ -834,8 +847,8 @@ fn compute_used_space(
     map_file_size + page_file_size
 }
 
-fn make_compound_version_edit(file_id: u32, obsoleted_files: &[u32]) -> VersionEdit {
-    let new_files = vec![NewFile::from(file_id)];
+fn make_compound_version_edit(file_info: &MapFileInfo, obsoleted_files: &[u32]) -> VersionEdit {
+    let new_files = vec![NewFile::from(file_info)];
     VersionEdit {
         map_stream: Some(StreamEdit {
             new_files,
@@ -848,9 +861,12 @@ fn make_compound_version_edit(file_id: u32, obsoleted_files: &[u32]) -> VersionE
     }
 }
 
-fn make_compact_version_edit(file_id: u32, obsoleted_files: &HashSet<u32>) -> VersionEdit {
+fn make_compact_version_edit(
+    file_info: &MapFileInfo,
+    obsoleted_files: &HashSet<u32>,
+) -> VersionEdit {
     let deleted_files = obsoleted_files.iter().cloned().collect::<Vec<_>>();
-    let new_files = vec![NewFile::from(file_id)];
+    let new_files = vec![NewFile::from(file_info)];
     VersionEdit {
         map_stream: Some(StreamEdit {
             new_files,
@@ -1104,7 +1120,7 @@ mod tests {
             }
             builder = file_builder.finish().await.unwrap();
         }
-        builder.finish().await.unwrap()
+        builder.finish(file_id).await.unwrap()
     }
 
     #[photonio::test]
