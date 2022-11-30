@@ -102,7 +102,8 @@ impl<E: Env> FlushCtx<E> {
         let mut manifest = self.manifest.lock().await;
         let version = self.version_owner.current();
 
-        let mut files = self.apply_dealloc_pages(&version, file_id, dealloc_pages.to_owned());
+        let (mut files, map_files) =
+            self.apply_dealloc_pages(&version, file_id, dealloc_pages.to_owned());
         let obsoleted_page_files = drain_obsoleted_files(&mut files, reclaimed_files);
         files.insert(file_id, file_info);
 
@@ -118,6 +119,7 @@ impl<E: Env> FlushCtx<E> {
         let delta = DeltaVersion {
             reason: VersionUpdateReason::Flush,
             page_files: files,
+            map_files,
             obsoleted_page_files,
             ..DeltaVersion::from(version.as_ref())
         };
@@ -169,17 +171,22 @@ impl<E: Env> FlushCtx<E> {
     fn apply_dealloc_pages(
         &self,
         version: &Version,
-        new_file_id: u32,
+        now: u32,
         dealloc_pages: Vec<u64>,
-    ) -> HashMap<u32, FileInfo> {
+    ) -> (HashMap<u32, FileInfo>, HashMap<u32, MapFileInfo>) {
         let mut files = version.page_files().clone();
+        let mut map_files = version.map_files().clone();
         for page_addr in dealloc_pages {
             let file_id = (page_addr >> 32) as u32;
             if let Some(file_info) = files.get_mut(&file_id) {
-                file_info.deactivate_page(new_file_id, page_addr);
+                file_info.deactivate_page(now, page_addr);
+                if let Some(map_file_id) = file_info.get_map_file_id() {
+                    let map_file = map_files.get_mut(&map_file_id).expect("Must exists");
+                    map_file.on_update(now);
+                }
             };
         }
-        files
+        (files, map_files)
     }
 }
 

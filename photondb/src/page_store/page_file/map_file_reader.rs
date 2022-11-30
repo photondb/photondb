@@ -24,16 +24,9 @@ pub(crate) struct MapFileMetaHolder {
     pub(crate) file_meta_map: HashMap<u32, Arc<FileMeta>>,
     /// The page tables of page files.
     pub(crate) page_tables: HashMap<u32, BTreeMap<u64, u64>>,
-    /// The offset of first byte of page files.
-    file_offsets: HashMap<u32, u64>,
 }
 
 impl MapFileMetaHolder {
-    /// Return the offset of the specified file, if exists.
-    pub(crate) fn file_offset(&self, file_id: u32) -> Option<u64> {
-        self.file_offsets.get(&file_id).cloned()
-    }
-
     /// Open a meta reader with the specified map file id.
     pub(crate) async fn read<R: PositionalReader>(
         file_id: u32,
@@ -44,15 +37,13 @@ impl MapFileMetaHolder {
         let mut file_meta_map = HashMap::default();
         let mut page_tables = HashMap::default();
         let mut offset = 0;
-        let mut file_offsets = HashMap::with_capacity(file_indexes.len());
         for page_index in &file_indexes {
-            file_offsets.insert(page_index.file_id, offset);
-            offset = page_index.meta_handle.offset + page_index.meta_handle.length;
             let index_block = Self::read_partial_file_index_block(&reader, page_index).await?;
             let (indexes, offsets) = index_block.as_meta_file_cached(page_index.data_handle);
             let file_meta = FileMeta::new_partial(
                 page_index.file_id,
                 file_id,
+                offset,
                 reader.align_size,
                 indexes,
                 offsets,
@@ -62,6 +53,7 @@ impl MapFileMetaHolder {
             let page_table = Self::read_page_table(&reader, &file_meta).await?;
             file_meta_map.insert(page_index.file_id, Arc::new(file_meta));
             page_tables.insert(page_index.file_id, page_table);
+            offset = page_index.meta_handle.offset + page_index.meta_handle.length;
         }
         let file_meta = Arc::new(MapFileMeta::new(
             file_id,
@@ -70,7 +62,6 @@ impl MapFileMetaHolder {
             file_meta_map.clone(),
         ));
         Ok(MapFileMetaHolder {
-            file_offsets,
             file_meta_map,
             file_meta,
             page_tables,

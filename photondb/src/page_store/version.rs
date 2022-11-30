@@ -259,6 +259,10 @@ impl Version {
             .clone()
     }
 
+    pub(crate) fn now(&self) -> u32 {
+        self.first_buffer_id
+    }
+
     /// Release all previous writer buffers which is invisible.
     pub(crate) fn release_previous_buffers(&self) {
         if matches!(self.reason, VersionUpdateReason::Flush) {

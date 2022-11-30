@@ -38,6 +38,7 @@ pub(crate) struct MapFileBuilder<'a, E: Env> {
 /// File builder for partial of map file.
 pub(crate) struct PartialFileBuilder<'a, E: Env> {
     file_id: u32,
+    base_offset: u64,
     builder: MapFileBuilder<'a, E>,
     inner: CommonFileBuilder,
 }
@@ -91,14 +92,19 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
         let block_size = self.block_size;
         let compression = self.compression;
         let checksum_type = self.checksum;
+        let base_offset = self.writer.next_offset();
         PartialFileBuilder {
             file_id,
+            base_offset,
             builder: self,
             inner: CommonFileBuilder::new(file_id, block_size, compression, checksum_type),
         }
     }
 
-    pub(crate) async fn finish(mut self) -> Result<(HashMap<u32, FileInfo>, MapFileInfo)> {
+    pub(crate) async fn finish(
+        mut self,
+        up2: u32,
+    ) -> Result<(HashMap<u32, FileInfo>, MapFileInfo)> {
         let file_size = self.finish_tail_blocks().await?;
         self.writer.flush_and_sync().await?;
         let page_files = self
@@ -112,7 +118,7 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
             DEFAULT_BLOCK_SIZE,
             page_files,
         ));
-        let file_info = MapFileInfo::new(self.file_id, self.file_id, file_meta);
+        let file_info = MapFileInfo::new(up2, up2, file_meta);
         Ok((self.file_infos, file_info))
     }
 
@@ -158,11 +164,11 @@ impl<'a, E: Env> PartialFileBuilder<'a, E> {
             .page_index
             .add_page_file(self.file_id, data, meta);
 
-        let file_meta = self.inner.as_partial_file_meta(self.builder.file_id, data);
+        let file_meta =
+            self.inner
+                .as_partial_file_meta(self.builder.file_id, self.base_offset, data);
         let active_pages = file_meta.pages_bitmap();
-        let active_size = file_meta
-            .total_page_size()
-            .saturating_sub(self.builder.file_offset);
+        let active_size = file_meta.total_page_size();
         self.builder.file_offset = self.builder.writer.next_offset() as usize;
         let file_info = FileInfo::new(
             active_pages,
@@ -370,6 +376,6 @@ mod tests {
         file_builder.add_page(1, 1, &[]).await.unwrap();
 
         let mut builder = file_builder.finish().await.unwrap();
-        builder.finish().await.unwrap();
+        builder.finish(1).await.unwrap();
     }
 }

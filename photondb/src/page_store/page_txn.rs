@@ -73,7 +73,7 @@ impl<E: Env> Guard<E> {
         }
 
         let Some(file_info) = self.version.page_files().get(&logic_id) else {
-            panic!("File {logic_id} is not exists");
+            panic!("File {logic_id} (addr {addr}) is not exists");
         };
         assert_eq!(file_info.get_file_id(), logic_id);
 

@@ -20,7 +20,6 @@ pub(crate) trait ReclaimPickStrategy: Send + Sync {
 
 pub(crate) struct MinDeclineRateStrategy {
     now: u32,
-    used: usize,
 
     sorted: bool,
     scores: Vec<FileScore>,
@@ -37,9 +36,10 @@ struct FileScore {
     file_id: FileId,
 }
 
+#[derive(Debug)]
 struct FileSummary {
-    file_size: usize,
     num_active_pages: usize,
+    total_page_size: usize,
     effective_size: usize,
     effective_rate: f64,
     empty_pages_rate: f64,
@@ -50,7 +50,6 @@ impl MinDeclineRateStrategy {
     fn new(now: u32) -> Self {
         MinDeclineRateStrategy {
             now,
-            used: 0,
             sorted: false,
             scores: Vec::default(),
         }
@@ -63,7 +62,6 @@ impl MinDeclineRateStrategy {
         assert!(!score.is_nan());
         assert!(!effective_rate.is_nan());
         assert!(!effective_rate.is_infinite());
-        self.used += summary.file_size;
         self.scores.push(FileScore {
             file_id,
             effective_rate,
@@ -98,6 +96,7 @@ impl ReclaimPickStrategy for MinDeclineRateStrategy {
                 a.partial_cmp(b)
                     .unwrap_or_else(|| a.file_id.cmp(&b.file_id))
             });
+            log::info!("min decline rate scores: {:?}", self.scores);
         }
 
         if self.scores.len() < 2 {
@@ -119,7 +118,7 @@ impl From<&FileInfo> for FileSummary {
     fn from(info: &FileInfo) -> Self {
         FileSummary {
             num_active_pages: info.num_active_pages(),
-            file_size: info.file_size(),
+            total_page_size: info.total_page_size(),
             effective_size: info.effective_size(),
             effective_rate: info.effective_rate(),
             empty_pages_rate: info.empty_pages_rate(),
@@ -132,11 +131,11 @@ impl From<(&HashMap<u32, FileInfo>, &MapFileInfo)> for FileSummary {
     fn from((file_infos, info): (&HashMap<u32, FileInfo>, &MapFileInfo)) -> Self {
         let meta = info.meta();
         let up2 = info.up2();
-        let file_size = meta.file_size();
         let page_files = meta.page_files();
         let mut num_active_pages = 0;
         let mut effective_size = 0;
         let mut total_pages = 0;
+        let mut total_page_size = 0;
         for page_file in page_files.keys() {
             let partial_info = file_infos
                 .get(page_file)
@@ -144,15 +143,20 @@ impl From<(&HashMap<u32, FileInfo>, &MapFileInfo)> for FileSummary {
             num_active_pages += partial_info.num_active_pages();
             effective_size += partial_info.effective_size();
             total_pages += partial_info.total_pages();
+            total_page_size += partial_info.total_page_size();
         }
-        let effective_rate = effective_size as f64 / (file_size as f64 + 0.1);
-        let empty_pages_rate = 1.0 - (num_active_pages as f64 / (total_pages as f64 + 0.1));
+        let effective_rate = effective_size as f64 / (total_page_size as f64);
+        let empty_pages_rate = if total_pages > 0 {
+            1.0 - (num_active_pages as f64 / total_pages as f64)
+        } else {
+            0.0
+        };
         FileSummary {
             num_active_pages,
             effective_size,
             effective_rate,
             empty_pages_rate,
-            file_size,
+            total_page_size,
             up2,
         }
     }
@@ -164,9 +168,9 @@ fn decline_rate(summary: &FileSummary, now: u32) -> f64 {
         return 0.0;
     }
 
-    let file_size = summary.file_size;
+    let total_page_size = summary.total_page_size;
     let effective_size = summary.effective_size;
-    let free_size = file_size.saturating_sub(effective_size);
+    let free_size = total_page_size.saturating_sub(effective_size);
     if free_size == 0 || summary.up2 == now {
         return f64::MIN;
     }
