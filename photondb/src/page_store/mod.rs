@@ -41,6 +41,9 @@ pub(crate) use strategy::{MinDeclineRateStrategyBuilder, StrategyBuilder};
 mod cache;
 pub(crate) use cache::{clock::ClockCache, Cache, CacheEntry};
 
+mod stats;
+pub use stats::StoreStats;
+
 /// Options to configure a page store.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
@@ -222,6 +225,11 @@ impl<E: Env> PageStore<E> {
     #[inline]
     pub(crate) fn guard(&self) -> Guard<E> {
         Guard::new(self.version(), self.table.clone(), self.page_files.clone())
+    }
+
+    pub(crate) fn stats(&self) -> StoreStats {
+        let page_cache = self.page_files.stats();
+        StoreStats { page_cache }
     }
 
     pub(crate) async fn close(mut self) {

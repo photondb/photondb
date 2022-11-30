@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ::photondb::{env::Photon, Stats};
+use ::photondb::{env::Photon, StoreStats, TreeStats};
 use async_trait::async_trait;
 
 mod photondb;
@@ -16,5 +16,5 @@ pub(crate) trait Store: Clone + Sync + Send + 'static {
 
     async fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>>;
 
-    fn stats(&self) -> Option<Stats>;
+    fn stats(&self) -> Option<(TreeStats, StoreStats)>;
 }

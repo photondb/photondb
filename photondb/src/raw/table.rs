@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use crate::{
     env::Env,
     page::{Key, Value},
-    page_store::PageStore,
+    page_store::{PageStore, StoreStats},
     tree::*,
     Result,
 };
@@ -85,8 +85,10 @@ impl<E: Env> Table<E> {
     }
 
     /// Returns the statistics of the table.
-    pub fn stats(&self) -> Stats {
-        self.tree.stats()
+    pub fn stats(&self) -> (Stats, StoreStats) {
+        let store_stats = self.store.stats();
+        let tree_stats = self.tree.stats();
+        (tree_stats, store_stats)
     }
 
     /// Returns the minimal LSN that the table can safely read with.

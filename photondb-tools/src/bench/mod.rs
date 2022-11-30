@@ -103,9 +103,9 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = false)]
     hist: bool,
 
-    /// Enable collect photondb table tree stats.
+    /// Enable collect photondb stats.
     #[arg(long, default_value_t = false)]
-    table_stats: bool,
+    db_stats: bool,
 }
 
 #[derive(Debug, Copy, Clone)]

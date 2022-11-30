@@ -10,6 +10,7 @@ use std::{
 use chrono::Utc;
 use futures::Future;
 use hdrhistogram::Histogram;
+use photondb::StoreStats;
 use rand::{distributions::Uniform, prelude::Distribution, rngs::SmallRng, RngCore, SeedableRng};
 
 use super::{store::Store, Args, BenchmarkType, ValueSizeDistributionType};
@@ -151,6 +152,8 @@ pub(crate) struct Stats<S: Store> {
     last_report_done_cnt: u64,
     next_report_cnt: u64,
 
+    last_store_stats: Option<StoreStats>,
+
     hist: HashMap<OpType, hdrhistogram::Histogram<u64>>,
 
     msg: String,
@@ -174,6 +177,7 @@ impl<S: Store> Stats<S> {
             last_op_finish: None,
             last_report_finish: None,
             last_report_done_cnt: 0,
+            last_store_stats: None,
             hist: HashMap::new(),
             msg: "".to_string(),
         }
@@ -304,31 +308,46 @@ impl<S: Store> Stats<S> {
         if self.config.hist {
             display_hist(&self.hist);
         }
-        if self.config.table_stats {
-            self.display_table_stats();
+        if self.config.db_stats {
+            self.display_db_stats();
         }
     }
 
-    fn display_table_stats(&self) {
+    fn display_db_stats(&self) {
         let Some(table) = &self.table else {
-		return;
-	};
-        let Some(stats) = table.stats() else {
-		return;
-	};
+		    return;
+	    };
+        let Some((tree_stats, store_stats)) = table.stats() else {
+		    return;
+	    };
 
         macro_rules! display_txn_stats {
-		($expression:expr, $name:ident) => {
-			{
-				let s = $expression;
-				println!("TableStats_{}: read: {}, write: {}, split_page: {}, reconcile_page: {}, consolidate_page: {}",
-				stringify!($name), s.read, s.write, s.split_page, s.reconcile_page, s.consolidate_page)
-			}
-		}
-	}
+		    ($expression:expr, $name:ident) => {
+			    {
+				    let s = $expression;
+				    println!("TableStats_{}: read: {}, write: {}, split_page: {}, reconcile_page: {}, consolidate_page: {}",
+				    stringify!($name), s.read, s.write, s.split_page, s.reconcile_page, s.consolidate_page)
+			    }
+		    }
+	    }
 
-        display_txn_stats!(stats.conflict, conflict);
-        display_txn_stats!(stats.success, success);
+        display_txn_stats!(tree_stats.conflict, conflict);
+        display_txn_stats!(tree_stats.success, success);
+
+        let page_cache_stats = if let Some(last_store_stats) = &self.last_store_stats {
+            store_stats.page_cache.sub(&last_store_stats.page_cache)
+        } else {
+            store_stats.page_cache
+        };
+        println!(
+            "CacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, evit: {}",
+            page_cache_stats.lookup_hit,
+            page_cache_stats.lookup_miss,
+            (page_cache_stats.lookup_hit as f64) * 100.
+                / (page_cache_stats.lookup_hit + page_cache_stats.lookup_miss) as f64,
+            page_cache_stats.insert,
+            page_cache_stats.active_evit,
+        )
     }
 }
 
