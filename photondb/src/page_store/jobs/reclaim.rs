@@ -5,7 +5,7 @@ use std::{
     time::Instant,
 };
 
-use log::{info, trace, debug};
+use log::{debug, info, trace};
 
 use crate::{
     env::Env,

@@ -218,6 +218,7 @@ impl FileMeta {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_partial(
         file_id: u32,
         map_file_id: u32,
@@ -264,8 +265,8 @@ impl FileMeta {
         let end_offset = match iter.next() {
             Some((_, offset)) => *offset,
             None => self.page_table_offset() as u64, /* it's the last page use
-                                                    * total-page-size as
-                                                    * end val. */
+                                                      * total-page-size as
+                                                      * end val. */
         };
         Some((start_offset, (end_offset - start_offset) as usize))
     }
