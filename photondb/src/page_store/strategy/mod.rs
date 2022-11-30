@@ -96,7 +96,6 @@ impl ReclaimPickStrategy for MinDeclineRateStrategy {
                 a.partial_cmp(b)
                     .unwrap_or_else(|| a.file_id.cmp(&b.file_id))
             });
-            log::info!("min decline rate scores: {:?}", self.scores);
         }
 
         if self.scores.len() < 2 {

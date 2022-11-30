@@ -179,7 +179,9 @@ impl<E: Env> FlushCtx<E> {
         for page_addr in dealloc_pages {
             let file_id = (page_addr >> 32) as u32;
             if let Some(file_info) = files.get_mut(&file_id) {
-                file_info.deactivate_page(now, page_addr);
+                if !file_info.deactivate_page(now, page_addr) {
+                    continue;
+                }
                 if let Some(map_file_id) = file_info.get_map_file_id() {
                     let map_file = map_files.get_mut(&map_file_id).expect("Must exists");
                     map_file.on_update(now);
