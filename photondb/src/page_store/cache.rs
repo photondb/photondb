@@ -1047,8 +1047,8 @@ pub(crate) mod clock {
                 lookup_hit: self.lookup_hit.get(),
                 lookup_miss: self.lookup_miss.get(),
                 insert: self.insert.get(),
-                active_evit: self.active_evit.get(),
-                passive_evit: self.passive_evit.get(),
+                active_evict: self.active_evit.get(),
+                passive_evict: self.passive_evit.get(),
             }
         }
     }

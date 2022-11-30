@@ -12,7 +12,7 @@ use crate::{
     page_store::{
         page_file::{FileId, MapFileBuilder, PartialFileBuilder},
         page_table::PageTable,
-        stats::AtomicWritebufStats,
+        stats::{AtomicJobStats, AtomicWritebufStats},
         strategy::ReclaimPickStrategy,
         version::{DeltaVersion, VersionOwner, VersionUpdateReason},
         Error, FileInfo, Guard, Manifest, MapFileInfo, NewFile, Options, PageFiles, Result,
@@ -23,7 +23,7 @@ use crate::{
 
 /// Rewrites pages to reclaim disk space.
 pub(crate) trait RewritePage<E: Env>: Send + Sync + 'static {
-    type Rewrite<'a>: Future<Output = Result<()>> + Send + 'a
+    type Rewrite<'a>: Future<Output = Result<usize>> + Send + 'a
     where
         Self: 'a;
 
@@ -51,7 +51,8 @@ where
     cleaned_files: HashSet<FileId>,
     orphan_page_files: HashSet<u32>,
 
-    writebuf_stat: Arc<AtomicWritebufStats>,
+    job_stats: Arc<AtomicJobStats>,
+    writebuf_stats: Arc<AtomicWritebufStats>,
 }
 
 #[derive(Debug)]
@@ -101,6 +102,7 @@ where
         manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
         next_map_file_id: u32,
         orphan_page_files: HashSet<u32>,
+        job_stat: Arc<AtomicJobStats>,
         writebuf_stat: Arc<AtomicWritebufStats>,
     ) -> Self {
         ReclaimCtx {
@@ -115,7 +117,8 @@ where
             next_map_file_id,
             cleaned_files: HashSet::default(),
             orphan_page_files,
-            writebuf_stat,
+            job_stats: job_stat,
+            writebuf_stats: writebuf_stat,
         }
     }
 
@@ -374,6 +377,7 @@ where
     ) -> Result<usize> {
         let mut total_rewrite_pages = 0;
         let mut rewrite_pages = HashSet::new();
+        let mut rewrite_size = 0;
         for page_addr in file.iter() {
             let page_id = page_table
                 .get(&page_addr)
@@ -388,10 +392,11 @@ where
                 version.clone(),
                 self.page_table.clone(),
                 self.page_files.clone(),
-                self.writebuf_stat.clone(),
+                self.writebuf_stats.clone(),
             );
-            self.rewriter.rewrite(page_id, guard).await?;
+            rewrite_size += self.rewriter.rewrite(page_id, guard).await?;
         }
+        self.job_stats.rewrite_bytes.add(rewrite_size as u64);
         Ok(total_rewrite_pages)
     }
 
@@ -440,7 +445,7 @@ where
                 version.clone(),
                 self.page_table.clone(),
                 self.page_files.clone(),
-                self.writebuf_stat.clone(),
+                self.writebuf_stats.clone(),
             );
             let txn = guard.begin().await;
             match txn.dealloc_pages(file_id, pages).await {
@@ -585,6 +590,7 @@ where
         let up2 = up2_sum / (victims.len() as u32);
         let (virtual_infos, file_info) = builder.finish(up2).await?;
 
+        self.job_stats.compact_write_bytes.add(output_size as u64);
         let elapsed = start_at.elapsed().as_micros();
         let free_size = input_size.saturating_sub(output_size);
         let free_ratio = free_size as f64 / input_size as f64;
@@ -684,6 +690,7 @@ where
             input_size,
             output_size,
         } = stats;
+        self.job_stats.compact_write_bytes.add(output_size as u64);
         let free_size = input_size.saturating_sub(output_size);
         let free_ratio = (free_size as f64) / (input_size as f64);
         info!(
@@ -926,13 +933,13 @@ mod tests {
     }
 
     impl RewritePage<Photon> for PageRewriter {
-        type Rewrite<'a> = impl Future<Output = Result<(), Error>> + Send + 'a
+        type Rewrite<'a> = impl Future<Output = Result<usize, Error>> + Send + 'a
         where
             Self: 'a;
 
         fn rewrite(&self, id: u64, _guard: Guard<Photon>) -> Self::Rewrite<'_> {
             self.values.lock().unwrap().push(id);
-            async { Ok(()) }
+            async { Ok(0) }
         }
     }
 
@@ -987,7 +994,8 @@ mod tests {
             cleaned_files: HashSet::default(),
             next_map_file_id: 1,
             orphan_page_files,
-            writebuf_stat: Default::default(),
+            job_stats: Arc::default(),
+            writebuf_stats: Default::default(),
         }
     }
 

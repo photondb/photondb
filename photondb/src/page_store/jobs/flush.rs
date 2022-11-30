@@ -8,13 +8,14 @@ use log::info;
 
 use crate::{
     env::Env,
-    page_store::*,
+    page_store::{stats::AtomicJobStats, *},
     util::shutdown::{with_shutdown, Shutdown},
 };
 
 pub(crate) struct FlushCtx<E: Env> {
     options: Options,
     shutdown: Shutdown,
+    job_stats: Arc<AtomicJobStats>,
     version_owner: Arc<VersionOwner>,
     page_files: Arc<PageFiles<E>>,
     manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
@@ -34,6 +35,7 @@ impl<E: Env> FlushCtx<E> {
     pub(crate) fn new(
         options: Options,
         shutdown: Shutdown,
+        job_stats: Arc<AtomicJobStats>,
         version_owner: Arc<VersionOwner>,
         page_files: Arc<PageFiles<E>>,
         manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
@@ -41,6 +43,7 @@ impl<E: Env> FlushCtx<E> {
         FlushCtx {
             options,
             shutdown,
+            job_stats,
             version_owner,
             page_files,
             manifest,
@@ -159,6 +162,7 @@ impl<E: Env> FlushCtx<E> {
                     builder
                         .add_page(header.page_id(), page_addr, content)
                         .await?;
+                    self.job_stats.flush_write_bytes.add(content.len() as u64);
                     let _ = self.page_files.populate_cache(page_addr, content);
                 }
             }
@@ -365,6 +369,7 @@ mod tests {
         FlushCtx {
             options: opt.to_owned(),
             shutdown,
+            job_stats: Arc::default(),
             version_owner,
             page_files: Arc::new(PageFiles::new(Photon, base, &opt).await),
             manifest: Arc::new(futures::lock::Mutex::new(

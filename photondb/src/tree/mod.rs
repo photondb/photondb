@@ -77,7 +77,7 @@ impl fmt::Debug for Tree {
 }
 
 impl<E: Env> RewritePage<E> for Arc<Tree> {
-    type Rewrite<'a> = impl Future<Output = Result<(), Error>> + Send + 'a
+    type Rewrite<'a> = impl Future<Output = Result<usize, Error>> + Send + 'a
         where
             Self: 'a;
 
@@ -714,17 +714,17 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     /// Rewrites the page to reclaim its space.
-    async fn rewrite_page(&self, id: u64) -> Result<()> {
+    async fn rewrite_page(&self, id: u64) -> Result<usize> {
         loop {
             match self.try_rewrite_page(id).await {
-                Ok(_) => return Ok(()),
+                Ok(size) => return Ok(size),
                 Err(Error::Again) => continue,
                 Err(err) => return Err(err),
             }
         }
     }
 
-    async fn try_rewrite_page<'g>(&'g self, id: u64) -> Result<PageView<'g>> {
+    async fn try_rewrite_page<'g>(&'g self, id: u64) -> Result<usize> {
         let view = self.page_view(id, None).await?;
         match view.page.tier() {
             PageTier::Leaf => {
@@ -739,11 +739,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
     }
 
-    async fn rewrite_page_impl<'g, F, I, K, V>(
-        &'g self,
-        mut view: PageView<'g>,
-        f: F,
-    ) -> Result<PageView<'g>>
+    async fn rewrite_page_impl<'g, F, I, K, V>(&'g self, view: PageView<'g>, f: F) -> Result<usize>
     where
         F: Fn(MergingPageIter<'g, K, V>) -> I,
         I: RewindableIterator<Item = (K, V)>,
@@ -785,8 +781,9 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         // Merge the delta pages.
         let iter = f(MergingPageIter::new(builder.build(), range_limit));
         let builder = SortedPageBuilder::new(old_page.tier(), PageKind::Data).with_iter(iter);
+        let rewrite_size = builder.size();
         let mut txn = self.guard.begin().await;
-        let (mut new_addr, mut new_page) = txn.alloc_page_with_id(view.id, builder.size()).await?;
+        let (mut new_addr, mut new_page) = txn.alloc_page_with_id(view.id, rewrite_size).await?;
         builder.build(&mut new_page);
         new_page.set_epoch(old_page.epoch());
         // Relocate the first page if it is skipped.
@@ -796,7 +793,6 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             page.set_chain_len(new_page.chain_len() + 1);
             page.set_chain_next(new_addr);
             new_addr = addr;
-            new_page = page;
             page_addrs.push(view.addr);
         }
 
@@ -806,9 +802,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             .map(|_| {
                 trace!("rewrite page {:?}", view);
                 self.tree.stats.success.rewrite_page.inc();
-                view.addr = new_addr;
-                view.page = new_page.into();
-                view
+                rewrite_size
             })
             .map_err(|_| {
                 self.tree.stats.conflict.rewrite_page.inc();
