@@ -44,10 +44,10 @@ mod error;
 pub use error::{Error, Result};
 
 mod tree;
-pub use tree::{Options as TableOptions, PageIter, ReadOptions, Stats, WriteOptions};
+pub use tree::{Options as TableOptions, PageIter, ReadOptions, Stats as TreeStats, WriteOptions};
 
 mod page_store;
-pub use page_store::Options as PageStoreOptions;
+pub use page_store::{Options as PageStoreOptions, StoreStats};
 
 mod page;
 mod util;
