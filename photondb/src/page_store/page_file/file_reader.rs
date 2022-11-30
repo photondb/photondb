@@ -5,7 +5,7 @@ use futures::Future;
 use super::{file_builder::*, types::FileMeta, FileId};
 use crate::{
     env::{Env, PositionalReader, PositionalReaderExt},
-    page_store::{ClockCache, Error, Result},
+    page_store::{cache::Cache, stats::CacheStats, ClockCache, Error, Result},
 };
 
 pub(crate) struct CommonFileReader<R: PositionalReader> {
@@ -213,7 +213,6 @@ impl<E: Env> FileReaderCache<E> {
         file_id: FileId,
         init: impl Future<Output = Arc<PageFileReader<E::PositionalReader>>>,
     ) -> Result<Arc<PageFileReader<E::PositionalReader>>> {
-        use crate::page_store::cache::Cache;
         let key = Self::file_id_to_key(file_id);
         if let Some(cached) = self.cache.lookup(key) {
             return Ok(cached.value().clone());
@@ -223,10 +222,13 @@ impl<E: Env> FileReaderCache<E> {
         Ok(reader)
     }
 
-    pub(super) async fn invalidate(&self, file_id: FileId) {
-        use crate::page_store::cache::Cache;
+    pub(super) fn invalidate(&self, file_id: FileId) {
         let key = Self::file_id_to_key(file_id);
         self.cache.erase(key);
+    }
+
+    pub(super) fn stats(&self) -> CacheStats {
+        self.cache.stats()
     }
 
     #[inline]

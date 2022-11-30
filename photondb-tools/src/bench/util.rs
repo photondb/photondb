@@ -10,10 +10,11 @@ use std::{
 use chrono::Utc;
 use futures::Future;
 use hdrhistogram::Histogram;
-use photondb::StoreStats;
 use rand::{distributions::Uniform, prelude::Distribution, rngs::SmallRng, RngCore, SeedableRng};
 
-use super::{store::Store, Args, BenchmarkType, ValueSizeDistributionType};
+use super::{
+    store::Store, workloads::WorkloadContext, Args, BenchmarkType, ValueSizeDistributionType,
+};
 
 pub(super) enum GenMode {
     Random,
@@ -152,8 +153,6 @@ pub(crate) struct Stats<S: Store> {
     last_report_done_cnt: u64,
     next_report_cnt: u64,
 
-    last_store_stats: Option<StoreStats>,
-
     hist: HashMap<OpType, hdrhistogram::Histogram<u64>>,
 
     msg: String,
@@ -177,7 +176,6 @@ impl<S: Store> Stats<S> {
             last_op_finish: None,
             last_report_finish: None,
             last_report_done_cnt: 0,
-            last_store_stats: None,
             hist: HashMap::new(),
             msg: "".to_string(),
         }
@@ -289,7 +287,7 @@ impl<S: Store> Stats<S> {
         }
     }
 
-    pub(super) fn report(&self, bench: BenchmarkType) {
+    pub(super) fn report(&mut self, ctx: &mut WorkloadContext, bench: BenchmarkType) {
         if self.finish.is_none() {
             return;
         }
@@ -309,45 +307,25 @@ impl<S: Store> Stats<S> {
             display_hist(&self.hist);
         }
         if self.config.db_stats {
-            self.display_db_stats();
+            self.display_db_stats(ctx);
         }
     }
 
-    fn display_db_stats(&self) {
+    fn display_db_stats(&mut self, ctx: &mut WorkloadContext) {
         let Some(table) = &self.table else {
 		    return;
 	    };
-        let Some((tree_stats, store_stats)) = table.stats() else {
+        let Some((cur_tree_stats, cur_store_stats)) = table.stats() else {
 		    return;
 	    };
 
-        macro_rules! display_txn_stats {
-		    ($expression:expr, $name:ident) => {
-			    {
-				    let s = $expression;
-				    println!("TableStats_{}: read: {}, write: {}, split_page: {}, reconcile_page: {}, consolidate_page: {}",
-				    stringify!($name), s.read, s.write, s.split_page, s.reconcile_page, s.consolidate_page)
-			    }
-		    }
-	    }
+        let store_status = cur_store_stats.sub(&ctx.last_store_stats);
+        ctx.last_store_stats = store_status;
 
-        display_txn_stats!(tree_stats.conflict, conflict);
-        display_txn_stats!(tree_stats.success, success);
+        let tree_stats = cur_tree_stats.sub(&ctx.last_tree_stats);
+        ctx.last_tree_stats = tree_stats.clone();
 
-        let page_cache_stats = if let Some(last_store_stats) = &self.last_store_stats {
-            store_stats.page_cache.sub(&last_store_stats.page_cache)
-        } else {
-            store_stats.page_cache
-        };
-        println!(
-            "CacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, evit: {}",
-            page_cache_stats.lookup_hit,
-            page_cache_stats.lookup_miss,
-            (page_cache_stats.lookup_hit as f64) * 100.
-                / (page_cache_stats.lookup_hit + page_cache_stats.lookup_miss) as f64,
-            page_cache_stats.insert,
-            page_cache_stats.active_evit,
-        )
+        print!("{}{}", tree_stats, store_status);
     }
 }
 

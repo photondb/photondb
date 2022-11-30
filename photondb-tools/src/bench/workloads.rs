@@ -5,17 +5,27 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use photondb::env::{Env, Photon};
+use photondb::{
+    env::{Env, Photon},
+    StoreStats, TreeStats,
+};
 use regex::Regex;
 
 use super::{util::*, *};
 use crate::bench::{Args, BenchOperation, BenchmarkType, Result};
 
 pub(super) struct Workloads<S: Store> {
+    ctx: WorkloadContext,
     config: Arc<Args>,
     env: Photon,
     table: Option<S>,
     bench_ops: Vec<BenchOperation>,
+}
+
+#[derive(Default)]
+pub(super) struct WorkloadContext {
+    pub(super) last_store_stats: StoreStats,
+    pub(super) last_tree_stats: TreeStats,
 }
 
 impl<S: Store> Workloads<S> {
@@ -24,6 +34,7 @@ impl<S: Store> Workloads<S> {
         let table = Some(S::open_table(config.clone(), &env).await);
         let bench_ops = Self::parse_bench_ops(&config.benchmarks);
         Self {
+            ctx: Default::default(),
             config,
             env,
             table,
@@ -113,8 +124,8 @@ impl<S: Store> Workloads<S> {
             println!("Running benchmark for {} times", op.repeat_count);
         }
         for _ in 0..op.repeat_count {
-            let stats = self.exec_op(op, true).await;
-            stats.report(op.benchmark_type);
+            let mut stats = self.exec_op(op, true).await;
+            stats.report(&mut self.ctx, op.benchmark_type);
         }
         Ok(())
     }

@@ -4,6 +4,7 @@ use std::{
 };
 
 use super::{
+    stats::AtomicWritebufStats,
     version::Version,
     write_buffer::{RecordHeader, ReleaseState},
     CacheEntry, ClockCache, Error, PageFiles, PageTable, Result, WriteBuffer, NAN_ID,
@@ -24,6 +25,7 @@ where
     page_table: PageTable,
     page_files: Arc<PageFiles<E>>,
     cache_guards: Mutex<Vec<CacheEntryGuard>>,
+    writebuf_stats: Arc<AtomicWritebufStats>,
 }
 
 impl<E: Env> Guard<E> {
@@ -31,12 +33,14 @@ impl<E: Env> Guard<E> {
         version: Arc<Version>,
         page_table: PageTable,
         page_files: Arc<PageFiles<E>>,
+        writebuf_stats: Arc<AtomicWritebufStats>,
     ) -> Self {
         Guard {
             version,
             page_table,
             page_files,
             cache_guards: Mutex::default(),
+            writebuf_stats,
         }
     }
 
@@ -69,8 +73,10 @@ impl<E: Env> Guard<E> {
         let logic_id = (addr >> 32) as u32;
         if let Some(buf) = self.version.get(logic_id) {
             // Safety: all mutable references are released.
+            self.writebuf_stats.read_in_buf.inc();
             return Ok(unsafe { buf.page(addr) });
         }
+        self.writebuf_stats.read_in_file.inc();
 
         let Some(file_info) = self.version.page_files().get(&logic_id) else {
             panic!("File {logic_id} (addr {addr}) is not exists");
@@ -379,7 +385,7 @@ mod tests {
         let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);
         let version = new_version(512);
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), page_table, files);
+        let guard = Guard::new(version.clone(), page_table, files, Default::default());
         let mut page_txn = guard.begin().await;
         let (addr, _) = page_txn.alloc_page(123).await.unwrap();
         let id = page_txn.insert_page(addr);
@@ -397,7 +403,7 @@ mod tests {
 
         let version = new_version(1 << 10);
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), page_table, files);
+        let guard = Guard::new(version.clone(), page_table, files, Default::default());
 
         // insert old page.
         let mut page_txn = guard.begin().await;
@@ -422,7 +428,7 @@ mod tests {
 
         let version = new_version(512);
         let page_table = PageTable::default();
-        let guard = Guard::new(version, page_table, files);
+        let guard = Guard::new(version, page_table, files, Default::default());
         let page_txn = guard.begin().await;
         assert!(matches!(page_txn.update_page(1, 3, 2), Err(None)));
     }
@@ -435,7 +441,7 @@ mod tests {
 
         let version = new_version(1 << 10);
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), page_table, files);
+        let guard = Guard::new(version.clone(), page_table, files, Default::default());
         let mut page_txn = guard.begin().await;
         let (addr, _) = page_txn.alloc_page(123).await.unwrap();
         let id = page_txn.insert_page(addr);
@@ -466,7 +472,7 @@ mod tests {
 
         let version = new_version(512);
         let page_table = PageTable::default();
-        let guard = Guard::new(version, page_table, files);
+        let guard = Guard::new(version, page_table, files, Default::default());
         let mut page_txn = guard.begin().await;
         page_txn.seal_write_buffer().await;
     }
@@ -479,7 +485,7 @@ mod tests {
 
         let version = new_version(512);
         let page_table = PageTable::default();
-        let guard = Guard::new(version, page_table, files);
+        let guard = Guard::new(version, page_table, files, Default::default());
         let mut page_txn_1 = guard.begin().await;
         let mut page_txn_2 = guard.begin().await;
         page_txn_1.seal_write_buffer().await;
@@ -495,7 +501,12 @@ mod tests {
 
         let version = new_version(512);
         let page_table = PageTable::default();
-        let guard = Guard::new(version.clone(), page_table.clone(), files);
+        let guard = Guard::new(
+            version.clone(),
+            page_table.clone(),
+            files,
+            Default::default(),
+        );
         let mut page_txn = guard.begin().await;
         let (addr, _) = page_txn.alloc_page(123).await.unwrap();
         let id = page_txn.insert_page(addr);
