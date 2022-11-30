@@ -44,6 +44,8 @@ pub(crate) use cache::{clock::ClockCache, Cache, CacheEntry};
 mod stats;
 pub use stats::StoreStats;
 
+use self::stats::AtomicWritebufStats;
+
 /// Options to configure a page store.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
@@ -168,8 +170,9 @@ pub(crate) struct PageStore<E: Env> {
 
     version_owner: Arc<VersionOwner>,
     page_files: Arc<PageFiles<E>>,
-    #[allow(unused)]
     manifest: Arc<Mutex<Manifest<E>>>,
+
+    writebuf_stats: Arc<AtomicWritebufStats>,
 
     jobs: Vec<E::JoinHandle<()>>,
     shutdown: ShutdownNotifier,
@@ -202,6 +205,7 @@ impl<E: Env> PageStore<E> {
         let manifest = Arc::new(futures::lock::Mutex::new(manifest));
         let page_files = Arc::new(page_files);
         let shutdown = ShutdownNotifier::new();
+        let writebuf_stats = Arc::new(AtomicWritebufStats::default());
 
         let mut store = PageStore {
             options,
@@ -210,6 +214,7 @@ impl<E: Env> PageStore<E> {
             version_owner,
             page_files,
             manifest,
+            writebuf_stats,
             jobs: Vec::new(),
             shutdown,
         };
@@ -224,12 +229,22 @@ impl<E: Env> PageStore<E> {
 
     #[inline]
     pub(crate) fn guard(&self) -> Guard<E> {
-        Guard::new(self.version(), self.table.clone(), self.page_files.clone())
+        Guard::new(
+            self.version(),
+            self.table.clone(),
+            self.page_files.clone(),
+            self.writebuf_stats.clone(),
+        )
     }
 
     pub(crate) fn stats(&self) -> StoreStats {
-        let page_cache = self.page_files.stats();
-        StoreStats { page_cache }
+        let (page_cache, file_reader_cache) = self.page_files.stats();
+        let writebuf = self.writebuf_stats.snapshot();
+        StoreStats {
+            page_cache,
+            file_reader_cache,
+            writebuf,
+        }
     }
 
     pub(crate) async fn close(mut self) {
@@ -283,6 +298,7 @@ impl<E: Env> PageStore<E> {
             self.manifest.clone(),
             next_map_file_id,
             orphan_page_files,
+            self.writebuf_stats.clone(),
         );
         let handle = self.env.spawn_background(job.run(self.version()));
         self.jobs.push(handle);

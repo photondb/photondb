@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::util::atomic::Counter;
 
 /// Statistics of a table.
@@ -7,6 +9,25 @@ pub struct Stats {
     pub success: TxnStats,
     /// Statistics of conflicted transactions.
     pub conflict: TxnStats,
+}
+
+impl Stats {
+    /// Sub other stats to produce an new stats.
+    pub fn sub(&self, o: &Stats) -> Stats {
+        Self {
+            success: self.success.sub(&o.success),
+            conflict: self.conflict.sub(&o.conflict),
+        }
+    }
+}
+
+impl Display for Stats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "TableStats_success: read: {}, write: {}, split_page: {}, reconcile_page: {}, consolidate_page: {}",
+            self.success.read, self.success.write, self.success.split_page, self.success.reconcile_page, self.success.consolidate_page)?;
+        writeln!(f, "TableStats_conflict: read: {}, write: {}, split_page: {}, reconcile_page: {}, consolidate_page: {}",
+            self.conflict.read, self.conflict.write, self.conflict.split_page, self.conflict.reconcile_page, self.conflict.consolidate_page)
+    }
 }
 
 #[derive(Default)]
@@ -54,6 +75,19 @@ impl AtomicTxnStats {
             reconcile_page: self.reconcile_page.get(),
             consolidate_page: self.consolidate_page.get(),
             rewrite_page: self.rewrite_page.get(),
+        }
+    }
+}
+
+impl TxnStats {
+    pub(super) fn sub(&self, o: &TxnStats) -> TxnStats {
+        TxnStats {
+            read: self.read.wrapping_sub(o.read),
+            write: self.write.wrapping_sub(o.write),
+            split_page: self.split_page.wrapping_sub(o.split_page),
+            reconcile_page: self.reconcile_page.wrapping_sub(o.reconcile_page),
+            consolidate_page: self.consolidate_page.wrapping_sub(o.consolidate_page),
+            rewrite_page: self.rewrite_page.wrapping_sub(o.rewrite_page),
         }
     }
 }

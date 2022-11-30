@@ -46,10 +46,7 @@ pub(crate) mod facade {
     };
     use crate::{
         env::{Env, PositionalReader, SequentialWriter},
-        page_store::{
-            stats::{AtomicCacheStats, CacheStats},
-            Cache, CacheEntry, ClockCache, Error, Result,
-        },
+        page_store::{stats::CacheStats, Cache, CacheEntry, ClockCache, Error, Result},
         PageStoreOptions,
     };
 
@@ -69,8 +66,6 @@ pub(crate) mod facade {
 
         reader_cache: file_reader::FileReaderCache<E>,
         page_cache: Arc<ClockCache<Vec<u8>>>,
-
-        cache_stats: AtomicCacheStats,
     }
 
     impl<E: Env> PageFiles<E> {
@@ -102,7 +97,6 @@ pub(crate) mod facade {
                 prepopulate_cache_on_flush,
                 reader_cache,
                 page_cache,
-                cache_stats: AtomicCacheStats::default(),
             }
         }
 
@@ -165,10 +159,8 @@ pub(crate) mod facade {
             handle: PageHandle,
         ) -> Result<CacheEntry<Vec<u8>, ClockCache<Vec<u8>>>> {
             if let Some(cache_entry) = self.page_cache.lookup(addr) {
-                self.cache_stats.lookup_hit.inc();
                 return Ok(cache_entry);
             }
-            self.cache_stats.lookup_miss.inc();
 
             let buf = self
                 .read_file_page(file_id, file_info.meta(), handle)
@@ -178,7 +170,6 @@ pub(crate) mod facade {
                 .page_cache
                 .insert(addr, Some(buf), charge)
                 .expect("insert cache fail");
-            self.cache_stats.insert.inc();
 
             Ok(cache_entry.unwrap())
         }
@@ -318,7 +309,7 @@ pub(crate) mod facade {
             for file_id in files {
                 // FIXME: handle error.
                 self.remove_page_file(file_id).await?;
-                self.reader_cache.invalidate(FileId::Page(file_id)).await;
+                self.reader_cache.invalidate(FileId::Page(file_id));
             }
             Ok(())
         }
@@ -327,7 +318,7 @@ pub(crate) mod facade {
             for file_id in files {
                 // FIXME: handle error.
                 self.remove_map_file(file_id).await?;
-                self.reader_cache.invalidate(FileId::Map(file_id)).await;
+                self.reader_cache.invalidate(FileId::Map(file_id));
             }
             Ok(())
         }
@@ -359,14 +350,12 @@ pub(crate) mod facade {
                 .page_cache
                 .insert(page_addr, Some(val), page_content.len())?;
             drop(guard);
-            self.cache_stats.insert.inc();
             Ok(())
         }
 
         pub(crate) fn evict_cached_pages(&self, page_addrs: &[u64]) {
             for page_addr in page_addrs {
                 self.page_cache.erase(*page_addr);
-                self.cache_stats.active_evit.inc();
             }
         }
 
@@ -399,8 +388,10 @@ pub(crate) mod facade {
             Ok(files)
         }
 
-        pub(crate) fn stats(&self) -> CacheStats {
-            self.cache_stats.snapshot()
+        pub(crate) fn stats(&self) -> (CacheStats, CacheStats) {
+            let page_cache = self.page_cache.stats();
+            let table_cache = self.reader_cache.stats();
+            (page_cache, table_cache)
         }
     }
 

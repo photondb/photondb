@@ -3,6 +3,7 @@ use ::std::sync::{
     Arc,
 };
 
+use super::stats::CacheStats;
 use crate::page_store::{Error, Result};
 
 pub(crate) trait Cache<T: Clone>: Sized {
@@ -18,6 +19,8 @@ pub(crate) trait Cache<T: Clone>: Sized {
     fn release(&self, h: *mut Handle<T>) -> bool;
 
     fn erase(self: &Arc<Self>, key: u64);
+
+    fn stats(self: &Arc<Self>) -> CacheStats;
 }
 
 pub(crate) struct CacheEntry<T, C>
@@ -155,6 +158,7 @@ pub(crate) mod clock {
     };
 
     use super::*;
+    use crate::{page_store::stats::CacheStats, util::atomic::Counter};
 
     const LOAD_FACTOR: f64 = 0.7;
     const STRICT_LOAD_FACTOR: f64 = 0.84;
@@ -213,6 +217,8 @@ pub(crate) mod clock {
         usage: CachePadded<AtomicUsize>,
         detached_usage: CachePadded<AtomicUsize>,
         clock_pointer: CachePadded<AtomicU64>,
+
+        stats: AtomicCacheStats,
     }
 
     impl<T: Clone> ClockCacheHandleTable<T> {
@@ -244,6 +250,7 @@ pub(crate) mod clock {
                 usage,
                 detached_usage: Default::default(),
                 clock_pointer: Default::default(),
+                stats: Default::default(),
             }
         }
 
@@ -270,11 +277,14 @@ pub(crate) mod clock {
                 |_h| {},
             );
             let Some(slot) = slot else {
+                self.stats.lookup_miss.inc();
                 return null_mut();
             };
             let Some(h) = self.handles.get(slot) else {
+                self.stats.lookup_miss.inc();
                 return null_mut();
             };
+            self.stats.lookup_hit.inc();
             h.mut_ptr()
         }
 
@@ -401,6 +411,7 @@ pub(crate) mod clock {
                 if !use_detached_insert {
                     // Successfully inserted
                     let h = self.handles.get(slot.unwrap()).unwrap();
+                    self.stats.insert.inc();
                     return Ok(h.mut_ptr());
                 }
 
@@ -414,6 +425,7 @@ pub(crate) mod clock {
             assert!(use_detached_insert);
             let h = self.detached_insert(&proto);
 
+            self.stats.insert.inc();
             Ok(h)
         }
 
@@ -439,6 +451,7 @@ pub(crate) mod clock {
             }
             let evicted_charge = if need_evict_charge > 0 {
                 let (evicted_charge, evicted_count) = self.evit(need_evict_charge);
+                self.stats.passive_evit.add(evicted_count as u64);
                 if need_evict_for_occupancy && evicted_count == 0 {
                     assert!(evicted_charge == 0);
                     return false;
@@ -500,6 +513,7 @@ pub(crate) mod clock {
             }
             if request_evict_charge > 0 {
                 let (evicted_charge, evicted_count) = self.evit(request_evict_charge);
+                self.stats.passive_evit.add(evicted_count as u64);
                 self.occupancy
                     .fetch_sub(evicted_count as u32, Ordering::Release);
                 if evicted_charge > need_evict_charge {
@@ -646,6 +660,7 @@ pub(crate) mod clock {
                 |hp| hp.as_ref().displacements.load(Ordering::Relaxed) == 0,
                 |_hp| {},
             );
+            self.stats.active_evit.inc();
         }
 
         #[inline]
@@ -935,7 +950,11 @@ pub(crate) mod clock {
         }
 
         fn erase(&self, key: u64, hash: u32) {
-            self.table.erase(key, hash)
+            self.table.erase(key, hash);
+        }
+
+        fn shard_stats(&self) -> CacheStats {
+            self.table.stats.snapshot()
         }
     }
 
@@ -989,6 +1008,14 @@ pub(crate) mod clock {
             let shard = &self.shards[idx as usize];
             shard.erase(key, hash)
         }
+
+        fn stats(self: &Arc<Self>) -> CacheStats {
+            let mut summary = CacheStats::default();
+            for s in &self.shards {
+                summary = summary.add(&s.shard_stats());
+            }
+            summary
+        }
     }
 
     impl<T: Clone> ClockCache<T> {
@@ -1002,6 +1029,27 @@ pub(crate) mod clock {
             // Fibonacci hash https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/
             const FIBONNACI_MAGIC_NUMBER_64BIT: u64 = 11400714819323198485;
             (key.wrapping_mul(FIBONNACI_MAGIC_NUMBER_64BIT) >> 32) as u32 // TODO: cmp with hash for seprated file_id, offset and other algorithm(siphash, fnv, xxhash?).
+        }
+    }
+
+    #[derive(Default)]
+    struct AtomicCacheStats {
+        lookup_hit: CachePadded<Counter>,
+        lookup_miss: CachePadded<Counter>,
+        insert: CachePadded<Counter>,
+        active_evit: CachePadded<Counter>,
+        passive_evit: CachePadded<Counter>,
+    }
+
+    impl AtomicCacheStats {
+        pub(super) fn snapshot(&self) -> CacheStats {
+            CacheStats {
+                lookup_hit: self.lookup_hit.get(),
+                lookup_miss: self.lookup_miss.get(),
+                insert: self.insert.get(),
+                active_evit: self.active_evit.get(),
+                passive_evit: self.passive_evit.get(),
+            }
         }
     }
 

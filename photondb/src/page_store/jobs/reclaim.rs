@@ -12,6 +12,7 @@ use crate::{
     page_store::{
         page_file::{FileId, MapFileBuilder, PartialFileBuilder},
         page_table::PageTable,
+        stats::AtomicWritebufStats,
         strategy::ReclaimPickStrategy,
         version::{DeltaVersion, VersionOwner, VersionUpdateReason},
         Error, FileInfo, Guard, Manifest, MapFileInfo, NewFile, Options, PageFiles, Result,
@@ -49,6 +50,8 @@ where
     next_map_file_id: u32,
     cleaned_files: HashSet<FileId>,
     orphan_page_files: HashSet<u32>,
+
+    writebuf_stat: Arc<AtomicWritebufStats>,
 }
 
 #[derive(Debug)]
@@ -98,6 +101,7 @@ where
         manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
         next_map_file_id: u32,
         orphan_page_files: HashSet<u32>,
+        writebuf_stat: Arc<AtomicWritebufStats>,
     ) -> Self {
         ReclaimCtx {
             options,
@@ -111,6 +115,7 @@ where
             next_map_file_id,
             cleaned_files: HashSet::default(),
             orphan_page_files,
+            writebuf_stat,
         }
     }
 
@@ -383,6 +388,7 @@ where
                 version.clone(),
                 self.page_table.clone(),
                 self.page_files.clone(),
+                self.writebuf_stat.clone(),
             );
             self.rewriter.rewrite(page_id, guard).await?;
         }
@@ -434,6 +440,7 @@ where
                 version.clone(),
                 self.page_table.clone(),
                 self.page_files.clone(),
+                self.writebuf_stat.clone(),
             );
             let txn = guard.begin().await;
             match txn.dealloc_pages(file_id, pages).await {
@@ -964,6 +971,7 @@ mod tests {
             cleaned_files: HashSet::default(),
             next_map_file_id: 1,
             orphan_page_files,
+            writebuf_stat: Default::default(),
         }
     }
 
