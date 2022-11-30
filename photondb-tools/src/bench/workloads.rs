@@ -210,7 +210,13 @@ impl<S: Store> Workloads<S> {
         } else {
             cfg.num
         };
-        let mut key_gen = KeyGenerator::new(mode, ctx.config.key_size, ctx.config.num, ctx.seed);
+        let mut key_gen = KeyGenerator::new(
+            mode,
+            ctx.config.key_size,
+            ctx.config.num,
+            ctx.seed,
+            ctx.config.key_rand_dist,
+        );
         let mut value_gen = ValueGenerator::new(
             ctx.config.value_size_distribution_type,
             ctx.config.value_size,
@@ -245,6 +251,7 @@ impl<S: Store> Workloads<S> {
             ctx.config.key_size,
             ctx.config.num,
             ctx.seed,
+            ctx.config.key_rand_dist,
         );
 
         let mut reads = 0;
@@ -287,6 +294,7 @@ impl<S: Store> Workloads<S> {
             ctx.config.key_size,
             ctx.config.num,
             ctx.seed,
+            ctx.config.key_rand_dist,
         );
         let mut val_gen = ValueGenerator::new(
             ctx.config.value_size_distribution_type,
@@ -329,6 +337,7 @@ impl<S: Store> Workloads<S> {
             ctx.config.key_size,
             ctx.config.num,
             ctx.seed,
+            ctx.config.key_rand_dist,
         );
         let mut val_gen = ValueGenerator::new(
             ctx.config.value_size_distribution_type,
