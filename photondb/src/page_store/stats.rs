@@ -19,10 +19,10 @@ pub struct CacheStats {
 impl CacheStats {
     pub fn sub(&self, o: &CacheStats) -> CacheStats {
         CacheStats {
-            lookup_hit: self.lookup_hit - o.lookup_hit,
-            lookup_miss: self.lookup_miss - o.lookup_hit,
-            insert: self.insert - o.insert,
-            active_evit: self.active_evit - o.active_evit,
+            lookup_hit: self.lookup_hit.wrapping_sub(o.lookup_hit),
+            lookup_miss: self.lookup_miss.wrapping_sub(o.lookup_hit),
+            insert: self.insert.wrapping_sub(o.insert),
+            active_evit: self.active_evit.wrapping_sub(o.active_evit),
         }
     }
 }
