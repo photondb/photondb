@@ -59,18 +59,7 @@ impl Display for StoreStats {
             self.page_cache.active_evict,
             self.page_cache.passive_evict,
         )?;
-
-        let write_amp = if self.jobs.flush_write_bytes == 0 {
-            0.0
-        } else {
-            let write_bytes = self.jobs.rewrite_bytes + self.jobs.compact_write_bytes;
-            (write_bytes as f64) / (self.jobs.flush_write_bytes as f64)
-        };
-        writeln!(
-            f,
-            "JobStats: flush_write_bytes: {}, rewrite_bytes: {}, compact_write_bytes: {}, write_amp: {:.2}",
-            self.jobs.flush_write_bytes, self.jobs.rewrite_bytes, self.jobs.compact_write_bytes, write_amp
-        )
+        self.jobs.fmt(f)
     }
 }
 
@@ -142,15 +131,21 @@ pub struct JobStats {
     pub flush_write_bytes: u64,
     /// The total rewrite bytes.
     pub rewrite_bytes: u64,
+    /// The total rewrite input bytes.
+    pub rewrite_input_bytes: u64,
     /// The total bytes write during compaction.
     pub compact_write_bytes: u64,
+    /// The total bytes input during compaction.
+    pub compact_input_bytes: u64,
 }
 
 #[derive(Default, Debug)]
 pub(crate) struct AtomicJobStats {
     pub(super) flush_write_bytes: Counter,
     pub(super) rewrite_bytes: Counter,
+    pub(super) rewrite_input_bytes: Counter,
     pub(super) compact_write_bytes: Counter,
+    pub(super) compact_input_bytes: Counter,
 }
 
 impl JobStats {
@@ -158,8 +153,37 @@ impl JobStats {
         JobStats {
             flush_write_bytes: self.flush_write_bytes.wrapping_sub(o.flush_write_bytes),
             rewrite_bytes: self.rewrite_bytes.wrapping_sub(o.rewrite_bytes),
-            compact_write_bytes: self.compact_write_bytes.wrapping_add(o.compact_write_bytes),
+            rewrite_input_bytes: self.rewrite_input_bytes.wrapping_sub(o.rewrite_input_bytes),
+            compact_write_bytes: self.compact_write_bytes.wrapping_sub(o.compact_write_bytes),
+            compact_input_bytes: self.compact_input_bytes.wrapping_sub(o.compact_input_bytes),
         }
+    }
+}
+
+impl Display for JobStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let input_bytes = self.rewrite_input_bytes + self.compact_input_bytes;
+        let write_bytes = self.rewrite_bytes + self.compact_write_bytes;
+        let write_amp = if input_bytes == 0 {
+            0.0
+        } else {
+            (write_bytes as f64) / (input_bytes as f64)
+        };
+        writeln!(
+            f,
+            "JobStats: flush_write_bytes: {}, \
+            rewrite_input_bytes: {}, \
+            rewrite_bytes: {}, \
+            compact_input_bytes: {}, \
+            compact_write_bytes: {}, \
+            write_amp: {:.2}",
+            self.flush_write_bytes,
+            self.rewrite_input_bytes,
+            self.rewrite_bytes,
+            self.compact_input_bytes,
+            self.compact_write_bytes,
+            write_amp
+        )
     }
 }
 
@@ -168,7 +192,9 @@ impl AtomicJobStats {
         JobStats {
             flush_write_bytes: self.flush_write_bytes.get(),
             rewrite_bytes: self.rewrite_bytes.get(),
+            rewrite_input_bytes: self.rewrite_input_bytes.get(),
             compact_write_bytes: self.compact_write_bytes.get(),
+            compact_input_bytes: self.compact_input_bytes.get(),
         }
     }
 }

@@ -57,7 +57,7 @@ pub(crate) struct Args {
     #[arg(short, long, default_value_t = -1)]
     reads: i64,
 
-    /// Number of key read+write paire op should be taken.
+    /// Number of key read+write pairs op should be taken.
     #[arg(long, default_value_t = -1)]
     read_writes: i64,
 
