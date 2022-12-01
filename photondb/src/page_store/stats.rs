@@ -39,7 +39,7 @@ impl Display for StoreStats {
         )?;
         writeln!(
             f,
-            "PageCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evict: {}, passive_evict: {}, recommand: {:?}",
+            "PageCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evict: {}, passive_evict: {}, recommendation: {:?}",
             self.page_cache.lookup_hit,
             self.page_cache.lookup_miss,
             (self.page_cache.lookup_hit as f64) * 100.
@@ -51,7 +51,7 @@ impl Display for StoreStats {
         )?;
         writeln!(
             f,
-            "FileReaderCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evict: {}, passive_evict: {}, recommand: {:?}",
+            "FileReaderCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evict: {}, passive_evict: {}, recommendation: {:?}",
             self.file_reader_cache.lookup_hit,
             self.file_reader_cache.lookup_miss,
             (self.file_reader_cache.lookup_hit as f64) * 100.
