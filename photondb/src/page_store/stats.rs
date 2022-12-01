@@ -11,6 +11,8 @@ pub struct StoreStats {
     pub file_reader_cache: CacheStats,
     /// Statistics of writebuf.
     pub writebuf: WritebufStats,
+    /// Statistics of jobs.
+    pub jobs: JobStats,
 }
 
 impl StoreStats {
@@ -20,6 +22,7 @@ impl StoreStats {
             page_cache: self.page_cache.sub(&o.page_cache),
             file_reader_cache: self.file_reader_cache.sub(&o.file_reader_cache),
             writebuf: self.writebuf.sub(&o.writebuf),
+            jobs: self.jobs.sub(&o.jobs),
         }
     }
 }
@@ -36,25 +39,37 @@ impl Display for StoreStats {
         )?;
         writeln!(
             f,
-            "FileReaderCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evit: {}, passive_evit: {}",
+            "FileReaderCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evict: {}, passive_evict: {}",
             self.file_reader_cache.lookup_hit,
             self.file_reader_cache.lookup_miss,
             (self.file_reader_cache.lookup_hit as f64) * 100.
                 / (self.file_reader_cache.lookup_hit + self.file_reader_cache.lookup_miss) as f64,
             self.file_reader_cache.insert,
-            self.file_reader_cache.active_evit,
-            self.file_reader_cache.passive_evit,
+            self.file_reader_cache.active_evict,
+            self.file_reader_cache.passive_evict,
         )?;
         writeln!(
             f,
-            "PageCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evit: {}, passive_evit: {}",
+            "PageCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evict: {}, passive_evict: {}",
             self.page_cache.lookup_hit,
             self.page_cache.lookup_miss,
             (self.page_cache.lookup_hit as f64) * 100.
                 / (self.page_cache.lookup_hit + self.page_cache.lookup_miss) as f64,
             self.page_cache.insert,
-            self.page_cache.active_evit,
-            self.page_cache.passive_evit,
+            self.page_cache.active_evict,
+            self.page_cache.passive_evict,
+        )?;
+
+        let write_amp = if self.jobs.flush_write_bytes == 0 {
+            0.0
+        } else {
+            let write_bytes = self.jobs.rewrite_bytes + self.jobs.compact_write_bytes;
+            (write_bytes as f64) / (self.jobs.flush_write_bytes as f64)
+        };
+        writeln!(
+            f,
+            "JobStats: flush_write_bytes: {}, rewrite_bytes: {}, compact_write_bytes: {}, write_amp: {:.2}",
+            self.jobs.flush_write_bytes, self.jobs.rewrite_bytes, self.jobs.compact_write_bytes, write_amp
         )
     }
 }
@@ -65,8 +80,8 @@ pub struct CacheStats {
     pub lookup_hit: u64,
     pub lookup_miss: u64,
     pub insert: u64,
-    pub active_evit: u64,
-    pub passive_evit: u64,
+    pub active_evict: u64,
+    pub passive_evict: u64,
 }
 
 impl CacheStats {
@@ -75,8 +90,8 @@ impl CacheStats {
             lookup_hit: self.lookup_hit.wrapping_sub(o.lookup_hit),
             lookup_miss: self.lookup_miss.wrapping_sub(o.lookup_miss),
             insert: self.insert.wrapping_sub(o.insert),
-            active_evit: self.active_evit.wrapping_sub(o.active_evit),
-            passive_evit: self.passive_evit.wrapping_sub(o.passive_evit),
+            active_evict: self.active_evict.wrapping_sub(o.active_evict),
+            passive_evict: self.passive_evict.wrapping_sub(o.passive_evict),
         }
     }
 
@@ -85,8 +100,8 @@ impl CacheStats {
             lookup_hit: self.lookup_hit.wrapping_add(o.lookup_hit),
             lookup_miss: self.lookup_miss.wrapping_add(o.lookup_miss),
             insert: self.insert.wrapping_add(o.insert),
-            active_evit: self.active_evit.wrapping_add(o.active_evit),
-            passive_evit: self.passive_evit.wrapping_add(o.passive_evit),
+            active_evict: self.active_evict.wrapping_add(o.active_evict),
+            passive_evict: self.passive_evict.wrapping_add(o.passive_evict),
         }
     }
 }
@@ -117,6 +132,43 @@ impl AtomicWritebufStats {
         WritebufStats {
             read_in_buf: self.read_in_buf.get(),
             read_in_file: self.read_in_file.get(),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default)]
+pub struct JobStats {
+    /// The total write bytes during flush.
+    pub flush_write_bytes: u64,
+    /// The total rewrite bytes.
+    pub rewrite_bytes: u64,
+    /// The total bytes write during compaction.
+    pub compact_write_bytes: u64,
+}
+
+#[derive(Default, Debug)]
+pub(crate) struct AtomicJobStats {
+    pub(super) flush_write_bytes: Counter,
+    pub(super) rewrite_bytes: Counter,
+    pub(super) compact_write_bytes: Counter,
+}
+
+impl JobStats {
+    pub fn sub(&self, o: &Self) -> Self {
+        JobStats {
+            flush_write_bytes: self.flush_write_bytes.wrapping_sub(o.flush_write_bytes),
+            rewrite_bytes: self.rewrite_bytes.wrapping_sub(o.rewrite_bytes),
+            compact_write_bytes: self.compact_write_bytes.wrapping_add(o.compact_write_bytes),
+        }
+    }
+}
+
+impl AtomicJobStats {
+    pub(crate) fn snapshot(&self) -> JobStats {
+        JobStats {
+            flush_write_bytes: self.flush_write_bytes.get(),
+            rewrite_bytes: self.rewrite_bytes.get(),
+            compact_write_bytes: self.compact_write_bytes.get(),
         }
     }
 }
