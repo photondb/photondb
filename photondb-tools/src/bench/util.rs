@@ -10,7 +10,9 @@ use std::{
 use chrono::Utc;
 use futures::Future;
 use hdrhistogram::Histogram;
-use rand::{distributions::Uniform, prelude::Distribution, rngs::SmallRng, RngCore, SeedableRng};
+use rand::{
+    distributions::Uniform, prelude::Distribution, rngs::SmallRng, Rng, RngCore, SeedableRng,
+};
 
 use super::{
     store::Store, workloads::WorkloadContext, Args, BenchmarkType, RandomDistType,
@@ -230,8 +232,7 @@ impl ZipfDist {
 
 impl RandDist for ZipfDist {
     fn next(&mut self) -> u64 {
-        let u = self.rng.next_u64() as f64;
-
+        let u: f64 = self.rng.gen();
         let uz = u * self.zeta_n;
 
         if uz < 1.0 {
