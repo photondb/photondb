@@ -396,6 +396,9 @@ where
             );
             rewrite_size += self.rewriter.rewrite(page_id, guard).await?;
         }
+        self.job_stats
+            .rewrite_input_bytes
+            .add(file.total_page_size() as u64);
         self.job_stats.rewrite_bytes.add(rewrite_size as u64);
         Ok(total_rewrite_pages)
     }
@@ -590,6 +593,7 @@ where
         let up2 = up2_sum / (victims.len() as u32);
         let (virtual_infos, file_info) = builder.finish(up2).await?;
 
+        self.job_stats.compact_input_bytes.add(input_size as u64);
         self.job_stats.compact_write_bytes.add(output_size as u64);
         let elapsed = start_at.elapsed().as_micros();
         let free_size = input_size.saturating_sub(output_size);
@@ -690,6 +694,7 @@ where
             input_size,
             output_size,
         } = stats;
+        self.job_stats.compact_input_bytes.add(input_size as u64);
         self.job_stats.compact_write_bytes.add(output_size as u64);
         let free_size = input_size.saturating_sub(output_size);
         let free_ratio = (free_size as f64) / (input_size as f64);
