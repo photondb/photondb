@@ -26,6 +26,7 @@ pub(super) struct Workloads<S: Store> {
 pub(super) struct WorkloadContext {
     pub(super) last_store_stats: StoreStats,
     pub(super) last_tree_stats: TreeStats,
+    total_task_offset: u64,
 }
 
 impl<S: Store> Workloads<S> {
@@ -137,6 +138,8 @@ impl<S: Store> Workloads<S> {
         let mut handles = Vec::with_capacity(thread_num as usize);
         let mut ctxs = Vec::with_capacity(thread_num as usize);
         for tid in 0..thread_num as u32 {
+            let seed_offset = self.ctx.total_task_offset;
+            self.ctx.total_task_offset += 1;
             let task_ctx = TaskCtx {
                 config: self.config.to_owned(),
                 table: self.table.as_ref().unwrap().clone(),
@@ -147,7 +150,7 @@ impl<S: Store> Workloads<S> {
                 ))),
                 _barrier: barrier.clone(),
                 op: op.to_owned(),
-                seed: self.config.seed_base + (tid as u64),
+                seed: self.config.seed_base + seed_offset,
             };
             ctxs.push(task_ctx.to_owned());
 
