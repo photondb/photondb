@@ -10,9 +10,7 @@ use std::{
 use chrono::Utc;
 use futures::Future;
 use hdrhistogram::Histogram;
-use rand::{
-    distributions::Uniform, prelude::Distribution, rngs::SmallRng, Rng, RngCore, SeedableRng,
-};
+use rand::{distributions::Uniform, prelude::Distribution, rngs::SmallRng, Rng, SeedableRng};
 
 use super::{
     store::Store, workloads::WorkloadContext, Args, BenchmarkType, RandomDistType,
@@ -553,6 +551,65 @@ impl Iterator for Until {
             Some(())
         } else {
             None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dist() {
+        let seed = 1669865897452316;
+        let rng = SmallRng::seed_from_u64(seed);
+        let mut d = ZipfDist::new(rng, 100, 0.99);
+        let mut s = Vec::with_capacity(10000);
+        for _ in 0..10000 {
+            s.push(d.next())
+        }
+        println!("zipf:");
+        dump(&mut s);
+
+        let rng = SmallRng::seed_from_u64(seed);
+        let mut d2 = UniformDist::new(rng, 100);
+        s.clear();
+        for _ in 0..10000 {
+            s.push(d2.next())
+        }
+        println!("uniform:");
+        dump(&mut s);
+    }
+
+    fn dump(s: &mut [u64]) {
+        if s.is_empty() {
+            return;
+        }
+
+        s.sort();
+        let max = s.last().unwrap();
+        let mut step = max / 20;
+        if step == 0 {
+            step = 1;
+        }
+
+        let mut idx = 0;
+        for i in (0..=*max).step_by(step as usize) {
+            let mut cnt = 0;
+            while idx < s.len() {
+                if s[idx] >= i + step {
+                    break;
+                }
+                idx += 1;
+                cnt += 1;
+            }
+            print!("[{i:3}-{:3})]", i + step);
+            for j in 0..cnt {
+                if j % 50 == 0 {
+                    print!(".")
+                }
+            }
+            println!()
         }
     }
 }
