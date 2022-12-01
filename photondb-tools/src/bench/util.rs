@@ -10,10 +10,11 @@ use std::{
 use chrono::Utc;
 use futures::Future;
 use hdrhistogram::Histogram;
-use rand::{distributions::Uniform, prelude::Distribution, rngs::SmallRng, RngCore, SeedableRng};
+use rand::{distributions::Uniform, prelude::Distribution, rngs::SmallRng, Rng, SeedableRng};
 
 use super::{
-    store::Store, workloads::WorkloadContext, Args, BenchmarkType, ValueSizeDistributionType,
+    store::Store, workloads::WorkloadContext, Args, BenchmarkType, RandomDistType,
+    ValueSizeDistributionType,
 };
 
 pub(super) enum GenMode {
@@ -29,17 +30,26 @@ pub(super) struct KeyGenerator {
     state: Option<KeyGeneratorState>,
 }
 
-pub enum KeyGeneratorState {
-    Random { rng: SmallRng },
+pub(super) enum KeyGeneratorState {
+    Random { rand_dist: Box<dyn RandDist + Send> },
     Sequence { last: u64 },
 }
 
 impl KeyGenerator {
-    pub(super) fn new(mode: GenMode, key_size: u64, key_nums: u64, seed: u64) -> Self {
+    pub(super) fn new(
+        mode: GenMode,
+        key_size: u64,
+        key_nums: u64,
+        seed: u64,
+        key_dist: RandomDistType,
+    ) -> Self {
+        let rng = SmallRng::seed_from_u64(seed);
+        let rand_dist: Box<dyn RandDist + Send> = match key_dist {
+            RandomDistType::Uniform => Box::new(UniformDist::new(rng, key_nums)),
+            RandomDistType::Zipf => Box::new(ZipfDist::new(rng, key_nums, 0.99)),
+        };
         let state = Some(match mode {
-            GenMode::Random => KeyGeneratorState::Random {
-                rng: SmallRng::seed_from_u64(seed),
-            },
+            GenMode::Random => KeyGeneratorState::Random { rand_dist },
             GenMode::Sequence => KeyGeneratorState::Sequence { last: 0 },
         });
         let key_per_prefix = 0;
@@ -55,7 +65,7 @@ impl KeyGenerator {
 
     pub(super) fn generate_key(&mut self, buf: &mut [u8]) {
         let rand_num = match self.state.as_mut().unwrap() {
-            KeyGeneratorState::Random { rng } => rng.next_u64() % self.key_nums,
+            KeyGeneratorState::Random { rand_dist } => rand_dist.next(),
             KeyGeneratorState::Sequence { last } => {
                 *last = last.saturating_add(1);
                 *last
@@ -129,6 +139,108 @@ impl ValueGenerator {
         }
         self.pos += require_len;
         &self.data[self.pos - require_len..self.pos]
+    }
+}
+
+pub(super) trait RandDist {
+    fn next(&mut self) -> u64;
+}
+
+struct UniformDist {
+    rng: SmallRng,
+    u: Uniform<u64>,
+}
+
+impl UniformDist {
+    fn new(rng: SmallRng, key_nums: u64) -> Self {
+        let u = Uniform::new(0, key_nums);
+        Self { rng, u }
+    }
+}
+
+impl RandDist for UniformDist {
+    fn next(&mut self) -> u64 {
+        self.u.sample(&mut self.rng)
+    }
+}
+
+// Ref https://github.com/brianfrankcooper/YCSB/blob/cd1589ce6f5abf96e17aa8ab80c78a4348fdf29a/core/src/main/java/site/ycsb/generator/ScrambledZipfianGenerator.java#L33
+const DEFAULT_MAX: u64 = 10000000000;
+const DEFAULT_THETA: f64 = 0.99;
+const DEFAULT_ZETA_N: f64 = 26.46902820178302;
+
+struct ZipfDist {
+    rng: SmallRng,
+
+    #[allow(dead_code)]
+    theta: f64,
+    min: u64,
+
+    alpha: f64,
+    #[allow(dead_code)]
+    zeta2: f64,
+    half_pow_theta: f64,
+
+    max: u64,
+    eta: f64,
+    zeta_n: f64,
+}
+
+impl ZipfDist {
+    fn new(rng: SmallRng, key_nums: u64, theta: f64) -> Self {
+        let min = 0;
+        let max = key_nums;
+        let zeta2 = Self::compute_zeta_from_scratch(2, theta);
+        let half_pow_theta = 1. + 0.5f64.powf(theta);
+        let zeta_n = Self::compute_zeta_from_scratch(max + 1 - min, theta);
+        let alpha = 1. / (1. - theta);
+        let eta = (1. - (2. / ((max + 1 - min) as f64)).powf(1. - theta)) / (1. - zeta2 / zeta_n);
+        Self {
+            rng,
+            min: 0,
+            max,
+            theta,
+            alpha,
+            zeta2,
+            half_pow_theta,
+            eta,
+            zeta_n,
+        }
+    }
+
+    // recomputes zeta(max, theta), assuming that sum = zeta(old_max, theta).
+    // returns zeta(max, theta), computed incrementally.
+    fn compute_zeta_from_inc(old_max: u64, max: u64, theta: f64, mut sum: f64) -> f64 {
+        assert!(max > old_max);
+        for i in (old_max + 1)..=max {
+            sum += 1.0 / (i as f64).powf(theta);
+        }
+        sum
+    }
+
+    // computes the value
+    // zeta(n, theta) = (1/1)^theta + (1/2)^theta + (1/3)^theta + ... + (1/n)^theta
+    fn compute_zeta_from_scratch(n: u64, theta: f64) -> f64 {
+        if n == DEFAULT_MAX && theta == DEFAULT_THETA {
+            return DEFAULT_ZETA_N;
+        }
+        Self::compute_zeta_from_inc(0, n, theta, 0.0)
+    }
+}
+
+impl RandDist for ZipfDist {
+    fn next(&mut self) -> u64 {
+        let u: f64 = self.rng.gen();
+        let uz = u * self.zeta_n;
+
+        if uz < 1.0 {
+            self.min
+        } else if uz < self.half_pow_theta {
+            self.min + 1
+        } else {
+            let spread = (self.max + 1 - self.min) as f64;
+            self.min + ((spread * ((self.eta * u - self.eta + 1.).powf(self.alpha))) as u64)
+        }
     }
 }
 
@@ -439,6 +551,65 @@ impl Iterator for Until {
             Some(())
         } else {
             None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dist() {
+        let seed = 1669865897452316;
+        let rng = SmallRng::seed_from_u64(seed);
+        let mut d = ZipfDist::new(rng, 100, 0.99);
+        let mut s = Vec::with_capacity(10000);
+        for _ in 0..10000 {
+            s.push(d.next())
+        }
+        println!("zipf:");
+        dump(&mut s);
+
+        let rng = SmallRng::seed_from_u64(seed);
+        let mut d2 = UniformDist::new(rng, 100);
+        s.clear();
+        for _ in 0..10000 {
+            s.push(d2.next())
+        }
+        println!("uniform:");
+        dump(&mut s);
+    }
+
+    fn dump(s: &mut [u64]) {
+        if s.is_empty() {
+            return;
+        }
+
+        s.sort();
+        let max = s.last().unwrap();
+        let mut step = max / 20;
+        if step == 0 {
+            step = 1;
+        }
+
+        let mut idx = 0;
+        for i in (0..=*max).step_by(step as usize) {
+            let mut cnt = 0;
+            while idx < s.len() {
+                if s[idx] >= i + step {
+                    break;
+                }
+                idx += 1;
+                cnt += 1;
+            }
+            print!("[{i:3}-{:3})]", i + step);
+            for j in 0..cnt {
+                if j % 50 == 0 {
+                    print!(".")
+                }
+            }
+            println!()
         }
     }
 }

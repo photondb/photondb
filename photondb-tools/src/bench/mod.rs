@@ -106,6 +106,11 @@ pub(crate) struct Args {
     /// Enable collect photondb stats.
     #[arg(long, default_value_t = false)]
     db_stats: bool,
+
+    /// Distrubution of generate key.
+    /// When do random workload (i.e. readrandom, writerandom..)
+    #[arg(long, default_value_t = RandomDistType::Uniform)]
+    key_rand_dist: RandomDistType,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -148,6 +153,21 @@ impl fmt::Display for StoreType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             StoreType::Photon => "photon",
+        })
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum RandomDistType {
+    Uniform,
+    Zipf,
+}
+
+impl fmt::Display for RandomDistType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            RandomDistType::Uniform => "uniform",
+            RandomDistType::Zipf => "zipf",
         })
     }
 }
