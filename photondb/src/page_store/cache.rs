@@ -878,8 +878,8 @@ pub(crate) mod clock {
                     if num_shards == 0 {
                         break;
                     }
+                    num_shard_bits += 1;
                     if num_shard_bits >= 6 {
-                        num_shard_bits += 1;
                         // No more than 6.
                         break;
                     }
@@ -898,6 +898,74 @@ pub(crate) mod clock {
                 ))
             }
             Self { shards, shard_mask }
+        }
+
+        fn est_vale_size_advice(&self) -> Option<String> {
+            let shard_cnt = self.shards.len();
+            let mut predicted_load_factors = Vec::with_capacity(shard_cnt);
+            let mut min_recommendation = usize::MAX;
+            for shard in &self.shards {
+                shard.shard_advice(&mut predicted_load_factors, &mut min_recommendation);
+            }
+            if predicted_load_factors.is_empty() {
+                return None;
+            }
+            predicted_load_factors.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let avg_load_factor = predicted_load_factors.iter().sum::<f64>() / (shard_cnt as f64);
+
+            const LOW_SPEC_LOAD_FACTOR: f64 = LOAD_FACTOR / 2.;
+            const MID_SPEC_LOAD_FACTOR: f64 = LOAD_FACTOR / 1.414;
+            if avg_load_factor > LOAD_FACTOR {
+                // Out of spec => Consider reporting load factor too high
+                // Estimate effective overall capacity loss due to enforcing
+                // occupancy limit
+                let mut lost_portion = 0.0;
+                let mut over_count = 0;
+                for lf in predicted_load_factors {
+                    if lf > STRICT_LOAD_FACTOR {
+                        over_count += 1;
+                        lost_portion += (lf - STRICT_LOAD_FACTOR) / lf / (shard_cnt as f64);
+                    }
+                }
+                let mut level = "info";
+                let mut report = true;
+                if lost_portion > 0.2 {
+                    level = "error";
+                } else if lost_portion > 0.1 {
+                    level = "warn";
+                } else if lost_portion > 0.01 {
+                    level = "info";
+                } else {
+                    report = false;
+                }
+                if report {
+                    return Some(
+                        format!("{level}: cache unable to use estimated {}% capacity because of full occupancy in {}/{} cache shards (estimated_entry_charge too high). Recommend estimated_entry_charge={}",
+                                lost_portion * 100.0, over_count, shard_cnt, min_recommendation,
+                        )
+                    );
+                }
+            } else if avg_load_factor < LOW_SPEC_LOAD_FACTOR {
+                // Out of spec => Consider reporting load factor too low
+                // But cautiously because low is not as big of a problem.
+
+                // Only report if highest occupancy shard is also below
+                // spec and only if average is substantially out of spec
+                if *predicted_load_factors.last().unwrap() < LOW_SPEC_LOAD_FACTOR
+                    && avg_load_factor < LOW_SPEC_LOAD_FACTOR / 1.414
+                {
+                    let mut level = "info";
+                    if avg_load_factor < (LOW_SPEC_LOAD_FACTOR / 2.) {
+                        level = "warn";
+                    }
+                    return Some(
+                    format!("{level} cache table has low occupancy at full capacity. Higher estimated_entry_charge (about {}) would likely improve. Recommend estimated_entry_charge={}",
+                            MID_SPEC_LOAD_FACTOR / avg_load_factor, min_recommendation,
+                    )
+                  );
+                }
+            }
+            None
         }
     }
 
@@ -955,6 +1023,35 @@ pub(crate) mod clock {
 
         fn shard_stats(&self) -> CacheStats {
             self.table.stats.snapshot()
+        }
+
+        fn shard_advice(
+            &self,
+            predicted_load_factors: &mut Vec<f64>,
+            min_recommendation: &mut usize,
+        ) {
+            let usage = self.table.usage.load(Ordering::Relaxed)
+                - self.table.detached_usage.load(Ordering::Relaxed);
+            let capacity = self.capacity;
+            let usage_ratio = 1. * (usage as f64) / (capacity as f64);
+
+            let occupancy = self.table.occupancy.load(Ordering::Relaxed);
+            let occ_limit = self.table.occupancy_limit;
+            let occ_ratio = 1.0 * (occupancy as f64) / (occ_limit as f64);
+            if usage == 0 || occupancy == 0 || (usage_ratio < 0.8 && occ_ratio < 0.95) {
+                // Skip as described above
+                return;
+            }
+
+            // If filled to capacity, what would the occupancy ratio be?
+            let ratio = occ_ratio / usage_ratio;
+            // Given max load factor, what that load factor be?
+            let lf = ratio * STRICT_LOAD_FACTOR;
+            predicted_load_factors.push(lf);
+
+            // Update min_recommendation also
+            let recommendation = usage / (occupancy as usize);
+            *min_recommendation = (*min_recommendation).min(recommendation);
         }
     }
 
@@ -1014,6 +1111,9 @@ pub(crate) mod clock {
             for s in &self.shards {
                 summary = summary.add(&s.shard_stats());
             }
+            if let Some(r) = self.est_vale_size_advice() {
+                summary.recommendation.push(r);
+            }
             summary
         }
     }
@@ -1049,6 +1149,7 @@ pub(crate) mod clock {
                 insert: self.insert.get(),
                 active_evict: self.active_evit.get(),
                 passive_evict: self.passive_evit.get(),
+                recommendation: vec![],
             }
         }
     }

@@ -72,6 +72,7 @@ mod tests {
             file_base_size: 1 << 20,
             cache_capacity: 2 << 10,
             cache_estimated_entry_charge: 1,
+            cache_file_reader_capacity: 1000,
             prepopulate_cache_on_flush: true,
             separate_hot_cold_files: false,
             compression_on_flush: Compression::SNAPPY,

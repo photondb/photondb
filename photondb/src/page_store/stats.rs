@@ -3,7 +3,7 @@ use std::fmt::Display;
 use crate::util::atomic::Counter;
 
 /// Statistics of page store.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct StoreStats {
     /// Statistics of page cache.
     pub page_cache: CacheStats,
@@ -39,18 +39,7 @@ impl Display for StoreStats {
         )?;
         writeln!(
             f,
-            "FileReaderCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evict: {}, passive_evict: {}",
-            self.file_reader_cache.lookup_hit,
-            self.file_reader_cache.lookup_miss,
-            (self.file_reader_cache.lookup_hit as f64) * 100.
-                / (self.file_reader_cache.lookup_hit + self.file_reader_cache.lookup_miss) as f64,
-            self.file_reader_cache.insert,
-            self.file_reader_cache.active_evict,
-            self.file_reader_cache.passive_evict,
-        )?;
-        writeln!(
-            f,
-            "PageCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evict: {}, passive_evict: {}",
+            "PageCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evict: {}, passive_evict: {}, recommand: {:?}",
             self.page_cache.lookup_hit,
             self.page_cache.lookup_miss,
             (self.page_cache.lookup_hit as f64) * 100.
@@ -58,19 +47,33 @@ impl Display for StoreStats {
             self.page_cache.insert,
             self.page_cache.active_evict,
             self.page_cache.passive_evict,
+            self.page_cache.recommendation,
+        )?;
+        writeln!(
+            f,
+            "FileReaderCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evict: {}, passive_evict: {}, recommand: {:?}",
+            self.file_reader_cache.lookup_hit,
+            self.file_reader_cache.lookup_miss,
+            (self.file_reader_cache.lookup_hit as f64) * 100.
+                / (self.file_reader_cache.lookup_hit + self.file_reader_cache.lookup_miss) as f64,
+            self.file_reader_cache.insert,
+            self.file_reader_cache.active_evict,
+            self.file_reader_cache.passive_evict,
+            self.file_reader_cache.recommendation,
         )?;
         self.jobs.fmt(f)
     }
 }
 
 /// Statistics of cache.
-#[derive(Default, Clone, Debug, Copy)]
+#[derive(Default, Clone, Debug)]
 pub struct CacheStats {
     pub lookup_hit: u64,
     pub lookup_miss: u64,
     pub insert: u64,
     pub active_evict: u64,
     pub passive_evict: u64,
+    pub recommendation: Vec<String>,
 }
 
 impl CacheStats {
@@ -81,6 +84,7 @@ impl CacheStats {
             insert: self.insert.wrapping_sub(o.insert),
             active_evict: self.active_evict.wrapping_sub(o.active_evict),
             passive_evict: self.passive_evict.wrapping_sub(o.passive_evict),
+            recommendation: self.recommendation.to_owned(),
         }
     }
 
@@ -91,6 +95,7 @@ impl CacheStats {
             insert: self.insert.wrapping_add(o.insert),
             active_evict: self.active_evict.wrapping_add(o.active_evict),
             passive_evict: self.passive_evict.wrapping_add(o.passive_evict),
+            recommendation: [self.recommendation.to_owned(), o.recommendation.to_owned()].concat(),
         }
     }
 }
