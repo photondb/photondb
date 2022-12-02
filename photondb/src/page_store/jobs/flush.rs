@@ -151,24 +151,31 @@ impl<E: Env> FlushCtx<E> {
             .page_files
             .new_page_file_builder(file_id, self.options.compression_on_flush)
             .await?;
+        let mut write_bytes = 0;
+        let mut discard_bytes = 0;
         for (page_addr, header, record_ref) in write_buffer.iter() {
             match record_ref {
                 RecordRef::DeallocPages(_) => {}
                 RecordRef::Page(page) => {
                     if header.is_tombstone() || skip_pages.contains(&page_addr) {
+                        discard_bytes += header.page_size();
                         continue;
                     }
                     let content = page.data();
                     builder
                         .add_page(header.page_id(), page_addr, content)
                         .await?;
-                    self.job_stats.flush_write_bytes.add(content.len() as u64);
+                    write_bytes += content.len();
                     let _ = self.page_files.populate_cache(page_addr, content);
                 }
             }
         }
         builder.add_delete_pages(&dealloc_pages);
         let file_info = builder.finish().await?;
+
+        self.job_stats.flush_write_bytes.add(write_bytes as u64);
+        self.job_stats.flush_discard_bytes.add(discard_bytes as u64);
+
         Ok((dealloc_pages, file_info, reclaimed_files))
     }
 

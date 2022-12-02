@@ -1,7 +1,7 @@
 //! Raw PhotonDB APIs that can can run with different environments.
 
 mod table;
-pub use table::{Guard, Pages, Table};
+pub use table::{Guard, Pages, Table, TableStats};
 
 #[cfg(test)]
 mod tree_test {

@@ -5,6 +5,7 @@
 
 use std::{ops::Deref, path::Path};
 
+pub use crate::raw::TableStats;
 use crate::{env::Photon, raw, Result, TableOptions};
 
 /// A reference to a latch-free, log-structured table that stores sorted

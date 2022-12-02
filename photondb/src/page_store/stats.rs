@@ -134,6 +134,8 @@ impl AtomicWritebufStats {
 pub struct JobStats {
     /// The total write bytes during flush.
     pub flush_write_bytes: u64,
+    /// The total discard bytes during flush.
+    pub flush_discard_bytes: u64,
     /// The total rewrite bytes.
     pub rewrite_bytes: u64,
     /// The total rewrite input bytes.
@@ -147,6 +149,7 @@ pub struct JobStats {
 #[derive(Default, Debug)]
 pub(crate) struct AtomicJobStats {
     pub(super) flush_write_bytes: Counter,
+    pub(super) flush_discard_bytes: Counter,
     pub(super) rewrite_bytes: Counter,
     pub(super) rewrite_input_bytes: Counter,
     pub(super) compact_write_bytes: Counter,
@@ -157,6 +160,7 @@ impl JobStats {
     pub fn sub(&self, o: &Self) -> Self {
         JobStats {
             flush_write_bytes: self.flush_write_bytes.wrapping_sub(o.flush_write_bytes),
+            flush_discard_bytes: self.flush_discard_bytes.wrapping_sub(o.flush_discard_bytes),
             rewrite_bytes: self.rewrite_bytes.wrapping_sub(o.rewrite_bytes),
             rewrite_input_bytes: self.rewrite_input_bytes.wrapping_sub(o.rewrite_input_bytes),
             compact_write_bytes: self.compact_write_bytes.wrapping_sub(o.compact_write_bytes),
@@ -177,12 +181,14 @@ impl Display for JobStats {
         writeln!(
             f,
             "JobStats: flush_write_bytes: {}, \
+            flush_discard_bytes: {}, \
             rewrite_input_bytes: {}, \
             rewrite_bytes: {}, \
             compact_input_bytes: {}, \
             compact_write_bytes: {}, \
             write_amp: {:.2}",
             self.flush_write_bytes,
+            self.flush_discard_bytes,
             self.rewrite_input_bytes,
             self.rewrite_bytes,
             self.compact_input_bytes,
@@ -196,6 +202,7 @@ impl AtomicJobStats {
     pub(crate) fn snapshot(&self) -> JobStats {
         JobStats {
             flush_write_bytes: self.flush_write_bytes.get(),
+            flush_discard_bytes: self.flush_discard_bytes.get(),
             rewrite_bytes: self.rewrite_bytes.get(),
             rewrite_input_bytes: self.rewrite_input_bytes.get(),
             compact_write_bytes: self.compact_write_bytes.get(),
