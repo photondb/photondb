@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use photondb::{env::Env, StoreStats, TreeStats};
+use photondb::{env::Env, TableStats};
 use regex::Regex;
 
 use super::{util::*, *};
@@ -22,8 +22,7 @@ pub(super) struct Workloads<S: Store<E>, E: Env> {
 
 #[derive(Default)]
 pub(super) struct WorkloadContext {
-    pub(super) last_store_stats: StoreStats,
-    pub(super) last_tree_stats: TreeStats,
+    pub(super) last_table_stats: TableStats,
     total_task_offset: u64,
 }
 

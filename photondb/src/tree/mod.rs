@@ -17,7 +17,7 @@ use page::*;
 
 mod stats;
 use stats::AtomicStats;
-pub use stats::Stats;
+pub use stats::TreeStats;
 
 mod options;
 pub use options::{Options, ReadOptions, WriteOptions};
@@ -41,7 +41,7 @@ impl Tree {
         TreeTxn::new(self, guard)
     }
 
-    pub(crate) fn stats(&self) -> Stats {
+    pub(crate) fn stats(&self) -> TreeStats {
         self.stats.snapshot()
     }
 
@@ -127,10 +127,12 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
     /// Writes the key-value pair to the tree.
     pub(crate) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
+        let bytes = key.raw.len() + value.len();
         loop {
             match self.try_write(key, value).await {
                 Ok(_) => {
                     self.tree.stats.success.write.inc();
+                    self.tree.stats.success.write_bytes.add(bytes as u64);
                     return Ok(());
                 }
                 Err(Error::Again) => {

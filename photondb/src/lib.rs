@@ -38,13 +38,13 @@ pub mod raw;
 pub mod std;
 
 pub mod photon;
-pub use photon::Table;
+pub use photon::{Table, TableStats};
 
 mod error;
 pub use error::{Error, Result};
 
 mod tree;
-pub use tree::{Options as TableOptions, PageIter, ReadOptions, Stats as TreeStats, WriteOptions};
+pub use tree::{Options as TableOptions, PageIter, ReadOptions, TreeStats, WriteOptions};
 
 mod page_store;
 pub use page_store::{Options as PageStoreOptions, StoreStats};

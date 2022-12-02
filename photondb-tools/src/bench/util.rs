@@ -431,17 +431,13 @@ impl<S: Store<E>, E: Env> Stats<S, E> {
         let Some(table) = &self.table else {
 		    return;
 	    };
-        let Some((cur_tree_stats, cur_store_stats)) = table.stats() else {
+        let Some(table_stats) = table.stats() else {
 		    return;
 	    };
 
-        let store_status = cur_store_stats.sub(&ctx.last_store_stats);
-        ctx.last_store_stats = store_status.clone();
-
-        let tree_stats = cur_tree_stats.sub(&ctx.last_tree_stats);
-        ctx.last_tree_stats = tree_stats.clone();
-
-        print!("{}{}", tree_stats, store_status);
+        let table_status = table_stats.sub(&ctx.last_table_stats);
+        ctx.last_table_stats = table_stats;
+        println!("{}", table_status);
     }
 }
 

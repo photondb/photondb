@@ -85,10 +85,11 @@ impl<E: Env> Table<E> {
     }
 
     /// Returns the statistics of the table.
-    pub fn stats(&self) -> (Stats, StoreStats) {
-        let store_stats = self.store.stats();
-        let tree_stats = self.tree.stats();
-        (tree_stats, store_stats)
+    pub fn stats(&self) -> TableStats {
+        TableStats {
+            tree: self.tree.stats(),
+            store: self.store.stats(),
+        }
     }
 
     /// Returns the minimal LSN that the table can safely read with.
@@ -158,5 +159,46 @@ impl<'a, 't: 'a, E: Env> Pages<'a, 't, E> {
     /// Returns the next page in the table.
     pub async fn next(&mut self) -> Result<Option<PageIter<'_>>> {
         Ok(self.iter.next_page().await?)
+    }
+}
+
+/// Statstistic of a table.
+#[derive(Clone, Default)]
+pub struct TableStats {
+    /// The stats of tree.
+    pub tree: TreeStats,
+    /// The stats of store.
+    pub store: StoreStats,
+}
+
+impl TableStats {
+    /// Sub other stats to produce an new stats.
+    pub fn sub(&self, o: &Self) -> Self {
+        TableStats {
+            tree: self.tree.sub(&o.tree),
+            store: self.store.sub(&o.store),
+        }
+    }
+}
+
+impl std::fmt::Display for TableStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.tree.fmt(f)?;
+        self.store.fmt(f)?;
+
+        let user_write_bytes = self.tree.success.write_bytes;
+        let background_write_bytes =
+            self.store.jobs.flush_write_bytes + self.store.jobs.compact_write_bytes;
+        let write_amp = if background_write_bytes < user_write_bytes {
+            0.0
+        } else {
+            ((background_write_bytes as f64) / (user_write_bytes as f64)) - 1.0
+        };
+        writeln!(
+            f,
+            "TableStats: user_write_bytes: {user_write_bytes} \
+                background_write_bytes: {background_write_bytes} \
+                write_amp: {write_amp:.2}"
+        )
     }
 }

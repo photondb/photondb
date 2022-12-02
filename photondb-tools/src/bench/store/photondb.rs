@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use photondb::{env::Env, raw::Table, StoreStats, TableOptions, TreeStats};
+use photondb::{env::Env, raw::Table, TableOptions, TableStats};
 
 use super::Store;
 use crate::bench::{Args, Result};
@@ -38,7 +38,7 @@ where
         Ok(r)
     }
 
-    fn stats(&self) -> Option<(TreeStats, StoreStats)> {
+    fn stats(&self) -> Option<TableStats> {
         Some(self.table.stats())
     }
 }

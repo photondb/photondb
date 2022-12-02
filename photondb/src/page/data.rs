@@ -50,6 +50,16 @@ pub(crate) enum Value<'a> {
     Delete,
 }
 
+impl<'a> Value<'a> {
+    /// Returns the length of value.
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Value::Put(v) => v.len(),
+            Value::Delete => 0,
+        }
+    }
+}
+
 /// An index to a child page.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Index {
