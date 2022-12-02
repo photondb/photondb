@@ -432,7 +432,7 @@ impl<S: Store> Stats<S> {
 	    };
 
         let store_status = cur_store_stats.sub(&ctx.last_store_stats);
-        ctx.last_store_stats = store_status;
+        ctx.last_store_stats = store_status.clone();
 
         let tree_stats = cur_tree_stats.sub(&ctx.last_tree_stats);
         ctx.last_tree_stats = tree_stats.clone();

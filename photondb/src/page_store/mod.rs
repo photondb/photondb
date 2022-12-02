@@ -113,6 +113,11 @@ pub struct Options {
     ///   by not utilizing the full capacity.
     pub cache_estimated_entry_charge: usize,
 
+    /// The capacity of file_reader cache.
+    ///
+    /// Default: 5000 file_readers.
+    pub cache_file_reader_capacity: u64,
+
     /// Insert warm pages into PageCache during flush if true.
     ///
     /// Default: false
@@ -153,6 +158,7 @@ impl Default for Options {
             file_base_size: 8 << 20,
             cache_capacity: 8 << 20,
             cache_estimated_entry_charge: 8 << 10,
+            cache_file_reader_capacity: 5000,
             prepopulate_cache_on_flush: false,
             separate_hot_cold_files: true,
             compression_on_flush: Compression::SNAPPY,

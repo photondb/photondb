@@ -16,6 +16,9 @@ impl Store for PhotondbStore {
     async fn open_table(config: Arc<Args>, env: &Photon) -> Self {
         let mut options = TableOptions::default();
         options.page_store.write_buffer_capacity = 128 << 20;
+        options.page_store.prepopulate_cache_on_flush = false;
+        options.page_store.cache_capacity = 128 << 20;
+        options.page_store.cache_estimated_entry_charge = 2511;
         let table = Table::open(env.to_owned(), &config.db, options)
             .await
             .expect("open table fail");

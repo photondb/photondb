@@ -29,8 +29,6 @@ pub(crate) mod constant {
 
     pub(crate) const IO_BUFFER_SIZE: usize = 4096 * 4;
 
-    pub(crate) const MAX_OPEN_READER_FD_NUM: u64 = 1000;
-
     pub(crate) const PAGE_FILE_MAGIC: u64 = 142857;
     pub(crate) const MAP_FILE_MAGIC: u64 = 0x179394;
 }
@@ -39,7 +37,7 @@ pub(crate) mod facade {
     use std::{path::PathBuf, sync::Arc};
 
     use super::{
-        constant::{DEFAULT_BLOCK_SIZE, MAX_OPEN_READER_FD_NUM},
+        constant::DEFAULT_BLOCK_SIZE,
         file_reader::{self, CommonFileReader, FileReaderCache, MetaReader},
         types::PageHandle,
         *,
@@ -78,7 +76,7 @@ pub(crate) mod facade {
         ) -> Self {
             let base = base.into();
             let base_dir = env.open_dir(&base).await.expect("open base dir fail");
-            let reader_cache = FileReaderCache::new(MAX_OPEN_READER_FD_NUM);
+            let reader_cache = FileReaderCache::new(options.cache_file_reader_capacity);
             let page_cache = Arc::new(ClockCache::new(
                 options.cache_capacity,
                 options.cache_estimated_entry_charge,
