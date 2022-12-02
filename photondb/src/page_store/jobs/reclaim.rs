@@ -59,7 +59,6 @@ where
 struct ReclaimJobBuilder {
     enable: bool,
     target_file_base: usize,
-    hot_threshold: u32,
 
     compound_files: HashSet<u32>,
     compound_size: usize,
@@ -215,7 +214,6 @@ where
         let mut builder = ReclaimJobBuilder::new(
             self.options.separate_hot_cold_files,
             self.options.file_base_size,
-            version,
         );
         while let Some((file, active_size)) = strategy.apply() {
             if let Some(job) = builder.add(file, active_size) {
@@ -752,16 +750,10 @@ where
 }
 
 impl ReclaimJobBuilder {
-    fn new(enable: bool, target_file_base: usize, version: &Version) -> ReclaimJobBuilder {
-        let max_id = version.min_write_buffer().file_id();
-        let min_id = version.page_files().keys().cloned().min().unwrap_or(max_id);
-        let hot_threshold = min_id + (max_id.saturating_sub(min_id) as f64 * 0.618) as u32;
-        let hot_threshold = std::cmp::min(hot_threshold, max_id.saturating_sub(16));
-
+    fn new(enable: bool, target_file_base: usize) -> ReclaimJobBuilder {
         ReclaimJobBuilder {
             enable,
             target_file_base,
-            hot_threshold,
 
             compact_files: HashSet::default(),
             compact_size: 0,
@@ -779,8 +771,8 @@ impl ReclaimJobBuilder {
 
         match file {
             FileId::Page(file_id) => {
-                // Rewrite small page files (16KB <=) or hot pages directly.
-                if active_size < 16 << 10 || self.is_top_k(file_id) {
+                // Rewrite small page files (16KB <=) directly.
+                if active_size < 16 << 10 {
                     return Some(ReclaimJob::Rewrite(file_id));
                 }
 
@@ -794,12 +786,6 @@ impl ReclaimJobBuilder {
                 }
             }
             FileId::Map(file_id) => {
-                // We don't support compact map file now.
-                if false {
-                    return None;
-                }
-
-                // TODO: rewrite small map file directly.
                 self.compact_size += active_size;
                 self.compact_files.insert(file_id);
                 if self.compact_size >= self.target_file_base {
@@ -809,11 +795,6 @@ impl ReclaimJobBuilder {
             }
         }
         None
-    }
-
-    #[inline]
-    fn is_top_k(&self, file_id: u32) -> bool {
-        self.hot_threshold <= file_id
     }
 }
 
