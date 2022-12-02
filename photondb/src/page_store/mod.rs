@@ -160,7 +160,7 @@ impl Default for Options {
             cache_estimated_entry_charge: 8 << 10,
             cache_file_reader_capacity: 5000,
             prepopulate_cache_on_flush: false,
-            separate_hot_cold_files: false,
+            separate_hot_cold_files: true,
             compression_on_flush: Compression::SNAPPY,
             compression_on_cold_compact: Compression::ZSTD,
             page_checksum_type: ChecksumType::NONE,
