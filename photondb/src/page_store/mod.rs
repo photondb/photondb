@@ -82,7 +82,7 @@ pub struct Options {
     /// Default: u64::MAX
     pub space_used_high: u64,
 
-    /// TODO:
+    /// Target file size for compaction.
     ///
     /// Default: 64MB
     pub file_base_size: usize,
@@ -150,17 +150,17 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            write_buffer_capacity: 16 << 20,
+            write_buffer_capacity: 128 << 20,
             max_write_buffers: 8,
             use_direct_io: false,
             max_space_amplification_percent: 100,
             space_used_high: u64::MAX,
-            file_base_size: 8 << 20,
+            file_base_size: 64 << 20,
             cache_capacity: 8 << 20,
             cache_estimated_entry_charge: 8 << 10,
             cache_file_reader_capacity: 5000,
             prepopulate_cache_on_flush: false,
-            separate_hot_cold_files: true,
+            separate_hot_cold_files: false,
             compression_on_flush: Compression::SNAPPY,
             compression_on_cold_compact: Compression::ZSTD,
             page_checksum_type: ChecksumType::NONE,
