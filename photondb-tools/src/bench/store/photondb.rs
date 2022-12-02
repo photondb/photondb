@@ -1,19 +1,22 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use photondb::{env::Photon, raw::Table, TableOptions, TableStats};
+use photondb::{env::Env, raw::Table, TableOptions, TableStats};
 
 use super::Store;
 use crate::bench::{Args, Result};
 
 #[derive(Clone)]
-pub(crate) struct PhotondbStore {
-    table: Table<Photon>,
+pub(crate) struct PhotondbStore<E: Env + Sync + Send + 'static> {
+    table: Table<E>,
 }
 
 #[async_trait]
-impl Store for PhotondbStore {
-    async fn open_table(config: Arc<Args>, env: &Photon) -> Self {
+impl<E: Env + Sync + Send + 'static> Store<E> for PhotondbStore<E>
+where
+    <E as photondb::env::Env>::JoinHandle<()>: Sync,
+{
+    async fn open_table(config: Arc<Args>, env: &E) -> Self {
         let mut options = TableOptions::default();
         options.page_store.write_buffer_capacity = 128 << 20;
         options.page_store.prepopulate_cache_on_flush = false;

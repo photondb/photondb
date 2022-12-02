@@ -1,23 +1,21 @@
 use std::{
     cell::RefCell,
+    marker::PhantomData,
     rc::Rc,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use photondb::{
-    env::{Env, Photon},
-    TableStats,
-};
+use photondb::{env::Env, TableStats};
 use regex::Regex;
 
 use super::{util::*, *};
 use crate::bench::{Args, BenchOperation, BenchmarkType, Result};
 
-pub(super) struct Workloads<S: Store> {
+pub(super) struct Workloads<S: Store<E>, E: Env> {
     ctx: WorkloadContext,
     config: Arc<Args>,
-    env: Photon,
+    env: E,
     table: Option<S>,
     bench_ops: Vec<BenchOperation>,
 }
@@ -28,8 +26,8 @@ pub(super) struct WorkloadContext {
     total_task_offset: u64,
 }
 
-impl<S: Store> Workloads<S> {
-    pub(super) async fn prepare(config: Args, env: Photon) -> Self {
+impl<S: Store<E>, E: Env> Workloads<S, E> {
+    pub(super) async fn prepare(config: Args, env: E) -> Self {
         let config = Self::process_config(config);
         let table = Some(S::open_table(config.clone(), &env).await);
         let bench_ops = Self::parse_bench_ops(&config.benchmarks);
@@ -130,7 +128,7 @@ impl<S: Store> Workloads<S> {
         Ok(())
     }
 
-    async fn exec_op(&mut self, op: &BenchOperation, _warmup: bool) -> Stats<S> {
+    async fn exec_op(&mut self, op: &BenchOperation, _warmup: bool) -> Stats<S, E> {
         let thread_num = self.config.threads;
         assert!(thread_num > 0);
         let barrier = Barrier::new(thread_num);
@@ -150,6 +148,7 @@ impl<S: Store> Workloads<S> {
                 _barrier: barrier.clone(),
                 op: op.to_owned(),
                 seed: self.config.seed_base + seed_offset,
+                _mark: PhantomData,
             };
             ctxs.push(task_ctx.to_owned());
 
@@ -200,8 +199,8 @@ impl<S: Store> Workloads<S> {
     }
 }
 
-impl<S: Store> Workloads<S> {
-    async fn do_write(ctx: &mut TaskCtx<S>, mode: GenMode) {
+impl<S: Store<E>, E: Env> Workloads<S, E> {
+    async fn do_write(ctx: &mut TaskCtx<S, E>, mode: GenMode) {
         let table = ctx.table.clone();
         let cfg = ctx.config.to_owned();
         let op_cnt = if cfg.writes >= 0 {
@@ -236,7 +235,7 @@ impl<S: Store> Workloads<S> {
         }
     }
 
-    async fn do_read_random(ctx: &mut TaskCtx<S>) {
+    async fn do_read_random(ctx: &mut TaskCtx<S, E>) {
         let table = ctx.table.clone();
         let cfg = ctx.config.to_owned();
         let op_cnt = if cfg.reads >= 0 {
@@ -276,7 +275,7 @@ impl<S: Store> Workloads<S> {
         ctx.stats.borrow_mut().add_msg(&msg);
     }
 
-    async fn do_update_random(ctx: &mut TaskCtx<S>) {
+    async fn do_update_random(ctx: &mut TaskCtx<S, E>) {
         let table = ctx.table.clone();
         let cfg = ctx.config.to_owned();
         let op_cnt = if cfg.read_writes >= 0 {
@@ -326,7 +325,7 @@ impl<S: Store> Workloads<S> {
         ctx.stats.borrow_mut().add_msg(&msg);
     }
 
-    async fn do_read_random_write_random(ctx: &mut TaskCtx<S>) {
+    async fn do_read_random_write_random(ctx: &mut TaskCtx<S, E>) {
         let table = ctx.table.clone();
         let cfg = ctx.config.to_owned();
         let op_cnt = cfg.num;
@@ -402,15 +401,16 @@ impl<S: Store> Workloads<S> {
 }
 
 #[derive(Clone)]
-pub(crate) struct TaskCtx<S: Store> {
-    stats: Rc<RefCell<Stats<S>>>,
+pub(crate) struct TaskCtx<S: Store<E>, E: Env> {
+    stats: Rc<RefCell<Stats<S, E>>>,
     _barrier: Barrier,
     op: BenchOperation,
     table: S,
     config: Arc<Args>,
     seed: u64,
+    _mark: PhantomData<E>,
 }
 
-unsafe impl<S: Store> Sync for TaskCtx<S> {}
+unsafe impl<S: Store<E>, E: Env> Sync for TaskCtx<S, E> {}
 
-unsafe impl<S: Store> Send for TaskCtx<S> {}
+unsafe impl<S: Store<E>, E: Env> Send for TaskCtx<S, E> {}

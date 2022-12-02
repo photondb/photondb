@@ -2,6 +2,7 @@ use std::{
     cell::Ref,
     collections::{hash_map, HashMap},
     io::Write,
+    marker::PhantomData,
     sync::{Arc, Mutex},
     task::{Poll, Waker},
     time::{self, Duration, Instant},
@@ -10,6 +11,7 @@ use std::{
 use chrono::Utc;
 use futures::Future;
 use hdrhistogram::Histogram;
+use photondb::env::Env;
 use rand::{distributions::Uniform, prelude::Distribution, rngs::SmallRng, Rng, SeedableRng};
 
 use super::{
@@ -245,7 +247,7 @@ impl RandDist for ZipfDist {
 }
 
 #[derive(Clone)]
-pub(crate) struct Stats<S: Store> {
+pub(crate) struct Stats<S: Store<E>, E: Env> {
     tid: u32,
 
     table: Option<S>,
@@ -268,9 +270,10 @@ pub(crate) struct Stats<S: Store> {
     hist: HashMap<OpType, hdrhistogram::Histogram<u64>>,
 
     msg: String,
+    _mark: PhantomData<E>,
 }
 
-impl<S: Store> Stats<S> {
+impl<S: Store<E>, E: Env> Stats<S, E> {
     pub(super) fn start(tid: u32, config: Arc<Args>, table: Option<S>) -> Self {
         let next_report_cnt = config.stats_interval;
         Self {
@@ -290,6 +293,7 @@ impl<S: Store> Stats<S> {
             last_report_done_cnt: 0,
             hist: HashMap::new(),
             msg: "".to_string(),
+            _mark: PhantomData,
         }
     }
 
@@ -371,7 +375,7 @@ impl<S: Store> Stats<S> {
         self.total_sec = elapsed.as_secs();
     }
 
-    pub(super) fn merge(&mut self, o: Ref<Stats<S>>) {
+    pub(super) fn merge(&mut self, o: Ref<Stats<S, E>>) {
         self.done_cnt += o.done_cnt;
         self.bytes += o.bytes;
         self.total_sec += o.total_sec;
