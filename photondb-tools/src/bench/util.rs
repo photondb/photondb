@@ -432,7 +432,7 @@ impl<S: Store> Stats<S> {
 	    };
 
         let table_status = table_stats.sub(&ctx.last_table_stats);
-        ctx.last_table_stats = table_stats.clone();
+        ctx.last_table_stats = table_stats;
         println!("{}", table_status);
     }
 }
