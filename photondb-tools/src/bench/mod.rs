@@ -5,7 +5,7 @@ use clap::{Parser, ValueEnum};
 
 mod error;
 pub(crate) use error::Result;
-use photondb::env::Photon;
+use photondb::env::{Env, Std};
 
 use self::{store::*, workloads::Workloads};
 
@@ -189,12 +189,12 @@ impl fmt::Display for ValueSizeDistributionType {
 
 pub(crate) async fn run(config: Args) -> Result<()> {
     match config.store_type {
-        StoreType::Photon => run_store::<PhotondbStore>(config).await,
+        StoreType::Photon => run_store::<PhotondbStore<Std>, Std>(config, Std).await,
     }
 }
 
-async fn run_store<E: Store>(config: Args) -> Result<()> {
-    let (config, env) = (config.to_owned(), Photon);
-    let mut bench = Workloads::<E>::prepare(config, env).await;
+async fn run_store<S: Store<E>, E: Env>(config: Args, env: E) -> Result<()> {
+    let (config, env) = (config.to_owned(), env);
+    let mut bench = Workloads::<S, E>::prepare(config, env).await;
     bench.execute().await
 }
