@@ -308,15 +308,16 @@ impl<'a, E: Env> PageTxn<'a, E> {
                 self.hold_write_guard = true;
                 Ok(val)
             }
-            Err(e) => {
-                assert!(matches!(e, Error::Again));
+            Err(Error::TooLargeSize) => Err(Error::TooLargeSize),
+            Err(Error::Again) => {
                 self.guard
                     .version
                     .buffer_set
                     .switch_buffer(self.buffer_id)
                     .await;
-                Err(e)
+                Err(Error::Again)
             }
+            _ => unreachable!(),
         }
     }
 
