@@ -129,18 +129,6 @@ params_w="$const_params "
 params_bulkload="$const_params "
 
 params_fillseq="$params_w "
-
-#
-# Tune values for level and universal compaction.
-# For universal compaction, these level0_* options mean total sorted of runs in
-# LSM. In level-based compaction, it means number of L0 files.
-#
-params_level_compact="$const_params \
-                --max_write_buffer_number=4"
-
-params_univ_compact="$const_params \
-                --max_write_buffer_number=4"
-
 tsv_header="ops_sec\tmb_sec\tw_amp\tusec_op\tp50\tp99\tp99.9\tp99.99\tstall%\tNstall\tu_cpu\ts_cpu\trss\ttest\tversion\tjob_id\tgithash"
 
 function get_cmd() {
