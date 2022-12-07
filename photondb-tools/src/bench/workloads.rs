@@ -64,6 +64,9 @@ impl<S: Store<E>, E: Env> Workloads<S, E> {
                 config.seed_base
             )
         }
+        if config.stats_interval_sec > 0 {
+            config.stats_interval = 1000
+        }
         Arc::new(config)
     }
 

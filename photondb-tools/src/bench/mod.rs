@@ -82,8 +82,8 @@ pub(crate) struct Args {
     /// If true, do not destroy the existing database.  If you set this flag and
     /// also specify a benchmark that wants a fresh database, that benchmark
     /// will fail. default: false,
-    #[arg(long, default_value_t = false)]
-    use_existing_db: bool,
+    #[arg(long, default_value_t = 0)]
+    use_existing_db: u8,
 
     /// Stats are reported every N operations when this is greater than 0.
     #[arg(long, default_value_t = 0)]
@@ -111,6 +111,22 @@ pub(crate) struct Args {
     /// When do random workload (i.e. readrandom, writerandom..)
     #[arg(long, default_value_t = RandomDistType::Uniform)]
     key_rand_dist: RandomDistType,
+
+    /// Size for tree page size in bytes.
+    #[arg(long, default_value_t = 8192)]
+    page_size: u64,
+
+    /// Size for read page cache.
+    #[arg(long, default_value_t = 134217728)]
+    cache_size: u64,
+
+    /// Size for write buffer.
+    #[arg(long, default_value_t = 134217728)]
+    write_buffer_size: u64,
+
+    /// Does verify checksum.
+    #[arg(long, default_value_t = 1)]
+    verify_checksum: u8,
 }
 
 #[derive(Debug, Copy, Clone)]
