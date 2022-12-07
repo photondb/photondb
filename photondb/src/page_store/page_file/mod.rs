@@ -19,7 +19,7 @@ mod compression;
 pub(crate) use compression::Compression;
 
 mod checksum;
-pub(crate) use checksum::ChecksumType;
+pub use checksum::ChecksumType;
 
 pub(crate) mod constant {
     /// Default alignment requirement for the SSD.

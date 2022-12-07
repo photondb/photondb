@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use photondb::{env::Env, raw::Table, TableOptions, TableStats};
+use photondb::{env::Env, raw::Table, ChecksumType, TableOptions, TableStats};
 
 use super::Store;
 use crate::bench::{Args, Result};
@@ -17,11 +17,19 @@ where
     <E as photondb::env::Env>::JoinHandle<()>: Sync,
 {
     async fn open_table(config: Arc<Args>, env: &E) -> Self {
+        if config.use_existing_db != 1 && config.db.exists() {
+            std::fs::remove_dir_all(&config.db).unwrap();
+        }
         let mut options = TableOptions::default();
-        options.page_store.write_buffer_capacity = 128 << 20;
-        options.page_store.prepopulate_cache_on_flush = false;
-        options.page_store.cache_capacity = 128 << 20;
         options.page_store.cache_estimated_entry_charge = 2511;
+        options.page_store.cache_capacity = config.cache_size as usize;
+        options.page_store.write_buffer_capacity = config.write_buffer_size as u32;
+        options.page_size = config.page_size as usize;
+        options.page_store.page_checksum_type = if config.verify_checksum == 1 {
+            ChecksumType::CRC32
+        } else {
+            ChecksumType::NONE
+        };
         let table = Table::open(env.to_owned(), &config.db, options)
             .await
             .expect("open table fail");

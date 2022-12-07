@@ -324,7 +324,7 @@ impl<S: Store<E>, E: Env> Stats<S, E> {
                     || report_elapsed.as_secs() >= self.config.stats_interval_sec
                 {
                     let start_elapsed = now.duration_since(self.start);
-                    println!(
+                    eprintln!(
                         "{} ... thread: {}, ({}, {}) ops and ({}, {}) ops/sec in ({}, {})",
                         Utc::now().to_rfc3339(),
                         self.tid,
@@ -354,9 +354,9 @@ impl<S: Store<E>, E: Env> Stats<S, E> {
                 } else {
                     100000
                 };
-                print!("... finished {:30} ops\r", self.done_cnt);
+                eprint!("... finished {:30} ops\r", self.done_cnt);
             }
-            std::io::stdout().flush().unwrap();
+            std::io::stderr().flush().unwrap();
         }
     }
 
@@ -409,11 +409,12 @@ impl<S: Store<E>, E: Env> Stats<S, E> {
         }
         let elapsed = self.finish.as_ref().unwrap().duration_since(self.start);
         let bytes_rate = ((self.bytes / 1024 / 1024) as f64) / elapsed.as_secs_f64();
+        let bench_str = format!("{:12?}", bench).to_lowercase();
         println!(
-            "{:12?} : {:11.3} ms/op {} ops/sec, {} sec, {} ops; {} MiB/s {}",
-            bench,
+            "{:12} : {:11.1} micros/op {} ops/sec, {:.1} seconds, {} operations; {:.1} MB/s {}",
+            bench_str,
             (self.total_sec * 1000000) as f64 / (self.done_cnt as f64),
-            (self.done_cnt as f64) / (elapsed.as_secs_f64()),
+            ((self.done_cnt as f64) / (elapsed.as_secs_f64())) as u64,
             elapsed.as_secs_f64(),
             self.done_cnt,
             bytes_rate,

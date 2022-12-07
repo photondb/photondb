@@ -47,7 +47,7 @@ mod tree;
 pub use tree::{Options as TableOptions, PageIter, ReadOptions, TreeStats, WriteOptions};
 
 mod page_store;
-pub use page_store::{Options as PageStoreOptions, StoreStats};
+pub use page_store::{ChecksumType, Options as PageStoreOptions, StoreStats};
 
 mod page;
 mod util;

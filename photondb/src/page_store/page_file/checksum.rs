@@ -3,9 +3,13 @@ use bitflags::bitflags;
 use crate::page_store::{Error, Result};
 
 bitflags! {
+/// Checksum Type.
 pub struct ChecksumType: u8 {
+    /// Without checksum.
     const NONE = 0;
+    /// Checksum with CRC32.
     const CRC32 = 1;
+    /// Checksum with XXHASH.
     #[allow(dead_code)]
     const XXHASH = 2;
 }

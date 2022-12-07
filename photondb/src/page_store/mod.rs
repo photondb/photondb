@@ -32,7 +32,7 @@ mod manifest;
 pub(crate) use manifest::Manifest;
 
 mod page_file;
-pub(crate) use page_file::{ChecksumType, Compression, FileInfo, MapFileInfo, PageFiles};
+pub(crate) use page_file::{Compression, FileInfo, MapFileInfo, PageFiles};
 
 mod recover;
 mod strategy;
@@ -42,6 +42,7 @@ mod cache;
 pub(crate) use cache::{clock::ClockCache, Cache, CacheEntry};
 
 mod stats;
+pub use page_file::ChecksumType;
 pub use stats::StoreStats;
 
 use self::stats::{AtomicJobStats, AtomicWritebufStats};
