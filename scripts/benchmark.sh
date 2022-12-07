@@ -37,6 +37,7 @@ function display_usage() {
   echo -e "\tDURATION\t\t\tNumber of seconds for which the test runs"
   echo -e "\tWRITES\t\t\t\tNumber of writes for which the test runs"
   echo -e "\tWRITE_BUFFER_SIZE_MB\t\tThe size of the write buffer in MB (default: 128)"
+  echo -e "\tSPACE_USED_HIGH\t\t\tThe space watermark which the DB needed to reclaim, in bytes (default: 100G)"
   echo -e "\tUSE_O_DIRECT\t\t\tUse O_DIRECT for user reads and compaction"
   echo -e "\tSTATS_INTERVAL_SECONDS\t\tValue for stats_interval_seconds"
   echo -e "\tREPORT_INTERVAL_SECONDS\t\tValue for report_interval_seconds"
@@ -82,6 +83,7 @@ key_size=${KEY_SIZE:-20}
 value_size=${VALUE_SIZE:-400}
 page_size=${PAGE_SIZE:-8192}
 write_buffer_mb=${WRITE_BUFFER_SIZE_MB:-128}
+space_used_high=${SPACE_USED_HIGH:-107374182400}
 stats_interval_seconds=${STATS_INTERVAL_SECONDS:-60}
 report_interval_seconds=${REPORT_INTERVAL_SECONDS:-1}
 
@@ -101,6 +103,7 @@ const_params_base="
   --cache-size=$cache_size \
   \
   --write-buffer-size=$(( $write_buffer_mb * M)) \
+  --space-used-high=$space_used_high \
   \
   --verify-checksum=1 \
   \
@@ -109,10 +112,6 @@ const_params_base="
   --db-stats \
   \
   $bench_args"
-
-#   --stats_per_interval=1 \
-#   --report_interval_seconds=$report_interval_seconds \
-#   --statistics=0 \
 
 const_params="$const_params_base "
 
