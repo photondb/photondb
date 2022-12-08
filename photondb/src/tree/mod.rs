@@ -585,9 +585,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
         // Try to consolidate the parent page if it is too long.
         if self.should_consolidate_page(parent.page) {
-            let _ = self
-                .consolidate_and_restructure_page(parent.to_owned())
-                .await;
+            let _ = self.consolidate_and_restructure_page(parent).await;
         }
         Ok(())
     }
@@ -868,6 +866,7 @@ impl<'a, 't: 'a, E: Env> TreeIter<'a, 't, E> {
                 let view = self.txn.page_view(index.id, None).await?;
                 if view.page.epoch() == index.epoch {
                     let iter = self.txn.iter_page(&view).await?;
+                    self.inner_next = inner_next;
                     return Ok(Some(PageIter::new(iter, self.options.max_lsn)));
                 } else {
                     // The page epoch has changed, we need to restart from this.

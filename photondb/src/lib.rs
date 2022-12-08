@@ -61,8 +61,8 @@ mod tests {
     use crate::page_store::{ChecksumType, Compression};
 
     const OPTIONS: TableOptions = TableOptions {
-        page_size: 64,
-        page_chain_length: 2,
+        page_size: 128,
+        page_chain_length: 4,
         page_store: PageStoreOptions {
             write_buffer_capacity: 1 << 20,
             max_write_buffers: 8,
