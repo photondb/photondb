@@ -120,6 +120,10 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = 134217728)]
     cache_size: u64,
 
+    /// The space watermark which the DB needed to reclaim
+    #[clap(long, default_value_t = 10 << 30)]
+    space_used_high: u64,
+
     /// Size for write buffer.
     #[arg(long, default_value_t = 134217728)]
     write_buffer_size: u64,

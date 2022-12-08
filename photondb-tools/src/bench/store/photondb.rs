@@ -24,6 +24,7 @@ where
         options.page_store.cache_estimated_entry_charge = 2511;
         options.page_store.cache_capacity = config.cache_size as usize;
         options.page_store.write_buffer_capacity = config.write_buffer_size as u32;
+        options.page_store.space_used_high = config.space_used_high;
         options.page_size = config.page_size as usize;
         options.page_store.page_checksum_type = if config.verify_checksum == 1 {
             ChecksumType::CRC32
