@@ -411,17 +411,9 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             return Err(Error::InvalidArgument);
         }
         match view.page.tier() {
-            PageTier::Leaf => self.split_page_leaf(view).await,
-            PageTier::Inner => self.split_page_inner(view).await,
+            PageTier::Leaf => self.split_page_impl::<Key, Value>(view).await,
+            PageTier::Inner => self.split_page_impl::<&[u8], Index>(view).await,
         }
-    }
-
-    async fn split_page_inner(&self, view: PageView<'_>) -> Result<()> {
-        self.split_page_impl::<&[u8], Index>(view).await
-    }
-
-    async fn split_page_leaf(&self, view: PageView<'_>) -> Result<()> {
-        self.split_page_impl::<Key, Value>(view).await
     }
 
     async fn split_page_impl<K, V>(&self, mut view: PageView<'_>) -> Result<()>
