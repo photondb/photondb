@@ -145,13 +145,11 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     async fn try_write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
-        let (mut view, parent) = self.find_leaf(key.raw).await?;
+        let (mut view, _) = self.find_leaf(key.raw).await?;
 
         // Try to split the page before every write to avoid starving the split
         // operation due to contentions.
-        if self.should_split_page(view.page)
-            && self.split_page(view.clone(), parent.clone()).await.is_ok()
-        {
+        if self.should_split_page(view.page) && self.split_page(view.clone()).await.is_ok() {
             return Err(Error::Again);
         }
 
@@ -195,7 +193,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
         // Try to consolidate the page if it is too long.
         if self.should_consolidate_page(view.page) {
-            let _ = self.consolidate_and_restructure_page(view, parent).await;
+            let _ = self.consolidate_and_restructure_page(view).await;
         }
         Ok(())
     }
@@ -407,22 +405,26 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     // Splits the page into two halves.
-    async fn split_page(&self, view: PageView<'_>, parent: Option<PageView<'_>>) -> Result<()> {
+    async fn split_page(&self, view: PageView<'_>) -> Result<()> {
         // We can only split base data pages.
         if !view.page.kind().is_data() || view.page.chain_next() != 0 {
             return Err(Error::InvalidArgument);
         }
         match view.page.tier() {
-            PageTier::Leaf => self.split_page_impl::<Key, Value>(view, parent).await,
-            PageTier::Inner => self.split_page_impl::<&[u8], Index>(view, parent).await,
+            PageTier::Leaf => self.split_page_leaf(view).await,
+            PageTier::Inner => self.split_page_inner(view).await,
         }
     }
 
-    async fn split_page_impl<K, V>(
-        &self,
-        mut view: PageView<'_>,
-        parent: Option<PageView<'_>>,
-    ) -> Result<()>
+    async fn split_page_inner(&self, view: PageView<'_>) -> Result<()> {
+        self.split_page_impl::<&[u8], Index>(view).await
+    }
+
+    async fn split_page_leaf(&self, view: PageView<'_>) -> Result<()> {
+        self.split_page_impl::<Key, Value>(view).await
+    }
+
+    async fn split_page_impl<K, V>(&self, mut view: PageView<'_>) -> Result<()>
     where
         K: SortedPageKey,
         V: SortedPageValue,
@@ -467,8 +469,6 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                 Error::Again
             })?;
 
-        // Try to reconcile the page after a split.
-        let _ = self.reconcile_page(view, parent).await;
         Ok(())
     }
 
@@ -593,7 +593,9 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
         // Try to consolidate the parent page if it is too long.
         if self.should_consolidate_page(parent.page) {
-            let _ = self.consolidate_page(parent).await;
+            let _ = self
+                .consolidate_and_restructure_page(parent.to_owned())
+                .await;
         }
         Ok(())
     }
@@ -702,15 +704,11 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     /// Consolidates and restructures a page.
-    async fn consolidate_and_restructure_page<'g>(
-        &'g self,
-        mut view: PageView<'g>,
-        parent: Option<PageView<'g>>,
-    ) -> Result<()> {
+    async fn consolidate_and_restructure_page<'g>(&'g self, mut view: PageView<'g>) -> Result<()> {
         view = self.consolidate_page(view).await?;
         // Try to split the page if it is too large.
         if self.should_split_page(view.page) {
-            let _ = self.split_page(view, parent).await;
+            let _ = self.split_page(view).await;
         }
         Ok(())
     }
