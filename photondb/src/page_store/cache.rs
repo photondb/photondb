@@ -944,7 +944,7 @@ pub(crate) mod clock {
                 }
                 if report {
                     return Some(
-                        format!("{level}: cache unable to use estimated {}% capacity because of full occupancy in {}/{} cache shards (estimated_entry_charge too high). Recommend estimated_entry_charge={}",
+                        format!("{level}: cache unable to use estimated {}% capacity because of full occupancy in {}/{} cache shards. Recommend estimated_entry_charge={}",
                                 lost_portion * 100.0, over_count, shard_cnt, min_recommendation,
                         )
                     );
