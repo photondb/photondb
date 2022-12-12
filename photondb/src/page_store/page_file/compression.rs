@@ -3,9 +3,13 @@ use bitflags::bitflags;
 use crate::page_store::{Error, Result};
 
 bitflags! {
+    /// Compression method.
     pub struct Compression: u8 {
+        /// Not compression.
         const NONE = 1;
+        /// Compression with Snappy.
         const SNAPPY = 2;
+        /// Compression with ZSTD.
         const ZSTD = 4;
     }
 }

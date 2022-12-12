@@ -32,7 +32,7 @@ mod manifest;
 pub(crate) use manifest::Manifest;
 
 mod page_file;
-pub(crate) use page_file::{Compression, FileInfo, MapFileInfo, PageFiles};
+pub(crate) use page_file::{FileInfo, MapFileInfo, PageFiles};
 
 mod recover;
 mod strategy;
@@ -42,7 +42,7 @@ mod cache;
 pub(crate) use cache::{clock::ClockCache, Cache, CacheEntry};
 
 mod stats;
-pub use page_file::ChecksumType;
+pub use page_file::{ChecksumType, Compression};
 pub use stats::StoreStats;
 
 use self::stats::{AtomicJobStats, AtomicWritebufStats};
@@ -119,6 +119,11 @@ pub struct Options {
     /// Default: 5000 file_readers.
     pub cache_file_reader_capacity: u64,
 
+    /// Whelther report error when no enough memory for page cache.
+    ///
+    /// Default: false
+    pub cache_strict_capacity_limit: bool,
+
     /// Insert warm pages into PageCache during flush if true.
     ///
     /// Default: false
@@ -167,6 +172,7 @@ impl Default for Options {
             cache_capacity: 8 << 20,
             cache_estimated_entry_charge: 8 << 10,
             cache_file_reader_capacity: 5000,
+            cache_strict_capacity_limit: false,
             prepopulate_cache_on_flush: false,
             separate_hot_cold_files: true,
             compression_on_flush: Compression::SNAPPY,

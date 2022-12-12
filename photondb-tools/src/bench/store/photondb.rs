@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use photondb::{env::Env, raw::Table, ChecksumType, TableOptions, TableStats};
+use photondb::{env::Env, raw::Table, ChecksumType, Compression, TableOptions, TableStats};
 
 use super::Store;
 use crate::bench::{Args, Result};
@@ -21,6 +21,7 @@ where
             std::fs::remove_dir_all(&config.db).unwrap();
         }
         let mut options = TableOptions::default();
+        options.page_store.cache_strict_capacity_limit = true;
         options.page_store.cache_estimated_entry_charge = 4840;
         options.page_store.cache_capacity = config.cache_size as usize;
         options.page_store.write_buffer_capacity = config.write_buffer_size as u32;
@@ -31,6 +32,13 @@ where
         } else {
             ChecksumType::NONE
         };
+        if !config.enable_compression {
+            options.page_store.compression_on_cold_compact = Compression::NONE;
+            options.page_store.compression_on_flush = Compression::NONE;
+        } else {
+            options.page_store.compression_on_cold_compact = Compression::SNAPPY;
+            options.page_store.compression_on_flush = Compression::ZSTD;
+        }
         let table = Table::open(env.to_owned(), &config.db, options)
             .await
             .expect("open table fail");

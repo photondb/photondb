@@ -131,6 +131,14 @@ pub(crate) struct Args {
     /// Does verify checksum.
     #[arg(long, default_value_t = 1)]
     verify_checksum: u8,
+
+    /// Enable compressioin or not.
+    #[arg(long, default_value_t = false)]
+    enable_compression: bool,
+
+    /// Does report error when no enough memory.
+    #[arg(long, default_value_t = false)]
+    cache_strict_capacity_limit: bool,
 }
 
 #[derive(Debug, Copy, Clone)]
