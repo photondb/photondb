@@ -1227,7 +1227,7 @@ mod tests {
     #[test]
     fn test_base_cache_op() {
         use super::clock::*;
-        let c = Arc::new(ClockCache::new(258, 1, -1, false, false));
+        let c = Arc::new(ClockCache::new(2, 1, -1, false, false));
 
         let t1 = {
             let c = c.clone();
