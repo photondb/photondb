@@ -13,6 +13,8 @@ pub struct StoreStats {
     pub writebuf: WritebufStats,
     /// Statistics of jobs.
     pub jobs: JobStats,
+    /// Statistics of buffer set.
+    pub buffer_set: BufferSetStats,
 }
 
 impl StoreStats {
@@ -23,6 +25,7 @@ impl StoreStats {
             file_reader_cache: self.file_reader_cache.sub(&o.file_reader_cache),
             writebuf: self.writebuf.sub(&o.writebuf),
             jobs: self.jobs.sub(&o.jobs),
+            buffer_set: self.buffer_set.sub(&o.buffer_set),
         }
     }
 }
@@ -31,7 +34,7 @@ impl Display for StoreStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,
-            "WritebufStats: read_in_buf: {}, read_in_files: {}, read_hit_rate: {}%",
+            "WritebufStats: read_in_buf: {}, read_in_files: {}, read_hit_rate: {:.2}%",
             self.writebuf.read_in_buf,
             self.writebuf.read_in_file,
             (self.writebuf.read_in_buf as f64) * 100.
@@ -39,7 +42,7 @@ impl Display for StoreStats {
         )?;
         writeln!(
             f,
-            "PageCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {}%, insert: {}, active_evict: {}, passive_evict: {}, recommendation: {:?}",
+            "PageCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {:.2}%, insert: {}, active_evict: {}, passive_evict: {}, recommendation: {:?}",
             self.page_cache.lookup_hit,
             self.page_cache.lookup_miss,
             (self.page_cache.lookup_hit as f64) * 100.
@@ -207,6 +210,49 @@ impl AtomicJobStats {
             rewrite_input_bytes: self.rewrite_input_bytes.get(),
             compact_write_bytes: self.compact_write_bytes.get(),
             compact_input_bytes: self.compact_input_bytes.get(),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default)]
+pub struct BufferSetStats {
+    /// The total number of stalling writes.
+    pub stall_writes: u64,
+    /// The total interval of stalling writes.
+    pub stall_intervals_ms: u64,
+}
+
+impl BufferSetStats {
+    pub(crate) fn sub(&self, o: &Self) -> Self {
+        BufferSetStats {
+            stall_writes: self.stall_writes.wrapping_sub(o.stall_writes),
+            stall_intervals_ms: self.stall_intervals_ms.wrapping_sub(o.stall_intervals_ms),
+        }
+    }
+}
+
+impl Display for BufferSetStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "BufferSet: stall_writes: {}
+                    stall_intervals_ms: {}",
+            self.stall_writes, self.stall_intervals_ms,
+        )
+    }
+}
+
+#[derive(Default, Debug)]
+pub(crate) struct AtomicBufferSetStats {
+    pub(crate) stall_writes: Counter,
+    pub(crate) stall_intervals_ms: Counter,
+}
+
+impl AtomicBufferSetStats {
+    pub(crate) fn snapshot(&self) -> BufferSetStats {
+        BufferSetStats {
+            stall_writes: self.stall_writes.get(),
+            stall_intervals_ms: self.stall_intervals_ms.get(),
         }
     }
 }

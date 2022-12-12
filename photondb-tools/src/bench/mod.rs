@@ -107,7 +107,7 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = false)]
     db_stats: bool,
 
-    /// Distrubution of generate key.
+    /// Distribution of generate key.
     /// When do random workload (i.e. readrandom, writerandom..)
     #[arg(long, default_value_t = RandomDistType::Uniform)]
     key_rand_dist: RandomDistType,

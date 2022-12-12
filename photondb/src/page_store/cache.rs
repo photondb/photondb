@@ -291,7 +291,7 @@ pub(crate) mod clock {
         }
 
         fn insert(&self, proto: Handle<T>, capacity: usize) -> Result<*mut Handle<T>> {
-            // Add occupany ahead, revert if not real occupy.
+            // Add occupancy ahead, revert if not real occupy.
             let old_occupancy = self.occupancy.fetch_add(1, Ordering::Acquire);
             // Whether we over-committed and need an eviction to make up for it
             let need_evict_for_occupancy = old_occupancy > self.occupancy_limit;
@@ -452,8 +452,8 @@ pub(crate) mod clock {
                 need_evict_charge = 1;
             }
             let evicted_charge = if need_evict_charge > 0 {
-                let (evicted_charge, evicted_count) = self.evit(need_evict_charge);
-                self.stats.passive_evit.add(evicted_count as u64);
+                let (evicted_charge, evicted_count) = self.evict(need_evict_charge);
+                self.stats.passive_evict.add(evicted_count as u64);
                 if need_evict_for_occupancy && evicted_count == 0 {
                     assert!(evicted_charge == 0);
                     return false;
@@ -514,8 +514,8 @@ pub(crate) mod clock {
                 request_evict_charge = 1;
             }
             if request_evict_charge > 0 {
-                let (evicted_charge, evicted_count) = self.evit(request_evict_charge);
-                self.stats.passive_evit.add(evicted_count as u64);
+                let (evicted_charge, evicted_count) = self.evict(request_evict_charge);
+                self.stats.passive_evict.add(evicted_count as u64);
                 self.occupancy
                     .fetch_sub(evicted_count as u32, Ordering::Release);
                 if evicted_charge > need_evict_charge {
@@ -662,14 +662,14 @@ pub(crate) mod clock {
                 |hp| hp.as_ref().displacements.load(Ordering::Relaxed) == 0,
                 |_hp| {},
             );
-            self.stats.active_evit.inc();
+            self.stats.active_evict.inc();
         }
 
         #[inline]
-        fn reclaim_entry_usage(&self, totol_charge: usize) {
+        fn reclaim_entry_usage(&self, total_charge: usize) {
             let old_occupancy = self.occupancy.fetch_sub(1, Ordering::Release);
             assert!(old_occupancy > 0);
-            let old_usage = self.usage.fetch_sub(totol_charge, Ordering::Relaxed);
+            let old_usage = self.usage.fetch_sub(total_charge, Ordering::Relaxed);
             assert!(old_usage > 0);
         }
 
@@ -721,7 +721,7 @@ pub(crate) mod clock {
             (None, probe)
         }
 
-        fn evit(
+        fn evict(
             &self,
             requested_charge: usize,
         ) -> (
@@ -1141,8 +1141,8 @@ pub(crate) mod clock {
         #[inline]
         fn hash_key(key: u64) -> u32 {
             // Fibonacci hash https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/
-            const FIBONNACI_MAGIC_NUMBER_64BIT: u64 = 11400714819323198485;
-            (key.wrapping_mul(FIBONNACI_MAGIC_NUMBER_64BIT) >> 32) as u32 // TODO: cmp with hash for seprated file_id, offset and other algorithm(siphash, fnv, xxhash?).
+            const FIBONACCI_MAGIC_NUMBER_64BIT: u64 = 11400714819323198485;
+            (key.wrapping_mul(FIBONACCI_MAGIC_NUMBER_64BIT) >> 32) as u32 // TODO: cmp with hash for seprated file_id, offset and other algorithm(siphash, fnv, xxhash?).
         }
     }
 
@@ -1151,8 +1151,8 @@ pub(crate) mod clock {
         lookup_hit: CachePadded<Counter>,
         lookup_miss: CachePadded<Counter>,
         insert: CachePadded<Counter>,
-        active_evit: CachePadded<Counter>,
-        passive_evit: CachePadded<Counter>,
+        active_evict: CachePadded<Counter>,
+        passive_evict: CachePadded<Counter>,
     }
 
     impl AtomicCacheStats {
@@ -1161,8 +1161,8 @@ pub(crate) mod clock {
                 lookup_hit: self.lookup_hit.get(),
                 lookup_miss: self.lookup_miss.get(),
                 insert: self.insert.get(),
-                active_evict: self.active_evit.get(),
-                passive_evict: self.passive_evit.get(),
+                active_evict: self.active_evict.get(),
+                passive_evict: self.passive_evict.get(),
                 recommendation: vec![],
             }
         }
