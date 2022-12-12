@@ -82,6 +82,7 @@ pub(crate) mod facade {
                 options.cache_estimated_entry_charge,
                 -1,
                 false,
+                false,
             ));
             let use_direct = options.use_direct_io;
             let prepopulate_cache_on_flush = options.prepopulate_cache_on_flush;

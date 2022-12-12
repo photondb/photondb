@@ -21,7 +21,7 @@ where
             std::fs::remove_dir_all(&config.db).unwrap();
         }
         let mut options = TableOptions::default();
-        options.page_store.cache_estimated_entry_charge = 2511;
+        options.page_store.cache_estimated_entry_charge = 4840;
         options.page_store.cache_capacity = config.cache_size as usize;
         options.page_store.write_buffer_capacity = config.write_buffer_size as u32;
         options.page_store.space_used_high = config.space_used_high;
