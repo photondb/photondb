@@ -1,12 +1,19 @@
-use std::sync::{
-    atomic::{AtomicPtr, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicPtr, Ordering},
+        Arc,
+    },
+    time::Instant,
 };
 
 use crossbeam_epoch::Guard;
 use log::{debug, info};
 
-use super::{write_buffer::ReleaseState, WriteBuffer};
+use super::{
+    stats::{AtomicBufferSetStats, BufferSetStats},
+    write_buffer::ReleaseState,
+    WriteBuffer,
+};
 use crate::util::notify::Notify;
 
 pub(crate) struct BufferSet {
@@ -17,6 +24,8 @@ pub(crate) struct BufferSet {
 
     flush_notify: Notify,
     write_buffer_permits: buffer_permits::WriteBufferPermits,
+
+    stats: AtomicBufferSetStats,
 }
 
 pub(crate) struct BufferSetVersion {
@@ -63,7 +72,13 @@ impl BufferSet {
             current: AtomicPtr::new(raw),
             flush_notify: Notify::new(),
             write_buffer_permits,
+            stats: AtomicBufferSetStats::default(),
         }
+    }
+
+    #[inline]
+    pub(crate) fn stats(&self) -> BufferSetStats {
+        self.stats.snapshot()
     }
 
     /// Obtains a reference of current [`BufferSetVersion`].
@@ -304,7 +319,12 @@ impl BufferSet {
                 "Stalling writes because we have {} sealed write buffers (wait for flush)",
                 self.max_sealed_buffers
             );
+            let start_at = Instant::now();
             self.write_buffer_permits.acquire().await;
+            self.stats.stall_writes.inc();
+            self.stats
+                .stall_intervals_ms
+                .add(start_at.elapsed().as_millis() as u64);
         }
 
         let write_buffer = WriteBuffer::with_capacity(file_id + 1, self.buffer_capacity);

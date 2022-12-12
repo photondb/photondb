@@ -251,11 +251,13 @@ impl<E: Env> PageStore<E> {
         let (page_cache, file_reader_cache) = self.page_files.stats();
         let writebuf = self.writebuf_stats.snapshot();
         let jobs = self.job_stats.snapshot();
+        let buffer_set = self.version().buffer_set.stats();
         StoreStats {
             page_cache,
             file_reader_cache,
             writebuf,
             jobs,
+            buffer_set,
         }
     }
 
