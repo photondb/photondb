@@ -236,10 +236,15 @@ impl Version {
         &self.page_files
     }
 
-    #[allow(unused)]
     #[inline]
     pub(crate) fn map_files(&self) -> &HashMap<u32, MapFileInfo> {
         &self.map_files
+    }
+
+    #[inline]
+    pub(crate) fn buffers_range(&self) -> std::ops::Range<u32> {
+        let current = self.buffer_set.current();
+        self.first_buffer_id..current.next_buffer_id()
     }
 
     #[inline]

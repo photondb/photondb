@@ -47,7 +47,20 @@ where
         Ok(r)
     }
 
+    async fn close(self) -> Result<(), Self> {
+        self.table
+            .close()
+            .await
+            .map_err(|table| PhotondbStore { table })
+    }
+
     fn stats(&self) -> Option<TableStats> {
         Some(self.table.stats())
+    }
+}
+
+impl<E: Env + Sync + Send + 'static> std::fmt::Debug for PhotondbStore<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PhotonDbStore").finish()
     }
 }

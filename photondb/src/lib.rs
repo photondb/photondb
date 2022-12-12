@@ -78,6 +78,7 @@ mod tests {
             compression_on_flush: Compression::SNAPPY,
             compression_on_cold_compact: Compression::ZSTD,
             page_checksum_type: ChecksumType::CRC32,
+            avoid_flush_during_shutdown: false,
         },
     };
 
@@ -154,5 +155,25 @@ mod tests {
             task.await.unwrap();
         }
         table.close().await.unwrap();
+    }
+
+    #[photonio::test]
+    async fn graceful_shutdown() {
+        let path = tempdir().unwrap();
+        let opts = TableOptions {
+            page_store: PageStoreOptions {
+                avoid_flush_during_shutdown: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let table = Table::open(&path, opts.clone()).await.unwrap();
+        let i = random();
+        must_put(&table, i, i).await;
+        must_get(&table, i, i, Some(i)).await;
+        table.close().await.unwrap();
+
+        let table = Table::open(&path, opts).await.unwrap();
+        must_get(&table, i, i, Some(i)).await;
     }
 }
