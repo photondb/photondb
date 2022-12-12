@@ -222,7 +222,7 @@ pub(crate) mod clock {
     }
 
     impl<T: Clone> ClockCacheHandleTable<T> {
-        fn new(length_bits: u64, strict_capacity_limit: bool) -> Self {
+        fn new(length_bits: u64, strict_capacity_limit: bool, charge_metadata: bool) -> Self {
             let length_bits_mask = ((1 << length_bits) - 1) as u32;
             let occupancy_limit = ((1 << length_bits) as f64 * STRICT_LOAD_FACTOR) as u32;
             let mut handles = Vec::with_capacity(1 << length_bits);
@@ -237,9 +237,11 @@ pub(crate) mod clock {
                 64,
                 "expecting handle size / alignment with common cache line size"
             );
-            let usage = CachePadded::new(AtomicUsize::new(
-                handles.len() * mem::size_of::<Handle<T>>(),
-            ));
+            let usage = CachePadded::new(AtomicUsize::new(if charge_metadata {
+                handles.len() * mem::size_of::<Handle<T>>()
+            } else {
+                0
+            }));
             Self {
                 length_bits,
                 length_bits_mask,
@@ -865,6 +867,7 @@ pub(crate) mod clock {
             est_value_size: usize,
             num_shard_bits: i32,
             strict_capacity_limit: bool,
+            charge_metadata: bool,
         ) -> Self {
             assert!(num_shard_bits < 20);
             let num_shard_bits = if num_shard_bits >= 0 {
@@ -895,6 +898,7 @@ pub(crate) mod clock {
                     per_shard_cap,
                     est_value_size,
                     strict_capacity_limit,
+                    charge_metadata,
                 ))
             }
             Self { shards, shard_mask }
@@ -970,22 +974,32 @@ pub(crate) mod clock {
     }
 
     impl<T: Clone> ClockCacheShard<T> {
-        fn new(capacity: usize, est_value_size: usize, strict_capacity_limit: bool) -> Self {
-            let hash_bits = Self::hash_bits(capacity, est_value_size);
-            let data = ClockCacheHandleTable::new(hash_bits, strict_capacity_limit);
+        fn new(
+            capacity: usize,
+            est_value_size: usize,
+            strict_capacity_limit: bool,
+            charge_metadata: bool,
+        ) -> Self {
+            let hash_bits = Self::hash_bits(capacity, est_value_size, charge_metadata);
+            let data =
+                ClockCacheHandleTable::new(hash_bits, strict_capacity_limit, charge_metadata);
             Self {
                 table: data,
                 capacity,
             }
         }
 
-        fn hash_bits(capacity: usize, est_value_size: usize) -> u64 {
+        fn hash_bits(capacity: usize, est_value_size: usize, charge_metadata: bool) -> u64 {
             let mut average_slot_charge = est_value_size as f64 * LOAD_FACTOR;
-            average_slot_charge += mem::size_of::<Handle<T>>() as f64;
+            if charge_metadata {
+                average_slot_charge += mem::size_of::<Handle<T>>() as f64;
+            }
             let num_slots = (capacity as f64 / average_slot_charge + 0.999999) as u64;
             let mut hash_bits = ((num_slots << 1) as f64 - 1.).log2().floor().min(32.) as u64;
-            while hash_bits > 0 && mem::size_of::<Handle<T>>() << hash_bits > capacity {
-                hash_bits -= 1;
+            if charge_metadata {
+                while hash_bits > 0 && (mem::size_of::<Handle<T>>() << hash_bits) > capacity {
+                    hash_bits -= 1;
+                }
             }
             hash_bits
         }
@@ -1213,7 +1227,7 @@ mod tests {
     #[test]
     fn test_base_cache_op() {
         use super::clock::*;
-        let c = Arc::new(ClockCache::new(258, 1, -1, false));
+        let c = Arc::new(ClockCache::new(258, 1, -1, false, false));
 
         let t1 = {
             let c = c.clone();
