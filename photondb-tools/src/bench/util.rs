@@ -310,7 +310,8 @@ impl<S: Store<E>, E: Env> Stats<S, E> {
             self.hist
                 .entry(typ)
                 .or_insert_with(|| {
-                    hdrhistogram::Histogram::new_with_bounds(1, 60 * 60 * 1000, 2).unwrap()
+                    hdrhistogram::Histogram::new_with_bounds(1, 60_000_000, 3).unwrap()
+                    // 1 micro - 60s
                 })
                 .record(t)
                 .expect("duration should be in range");
@@ -410,10 +411,11 @@ impl<S: Store<E>, E: Env> Stats<S, E> {
         let elapsed = self.finish.as_ref().unwrap().duration_since(self.start);
         let bytes_rate = ((self.bytes / 1024 / 1024) as f64) / elapsed.as_secs_f64();
         let bench_str = format!("{:12?}", bench).to_lowercase();
+        let avg = (self.total_sec * 1000000) as f64 / (self.done_cnt as f64);
         println!(
             "{:12} : {:11.1} micros/op {} ops/sec, {:.1} seconds, {} operations; {:.1} MB/s {}",
             bench_str,
-            (self.total_sec * 1000000) as f64 / (self.done_cnt as f64),
+            avg,
             ((self.done_cnt as f64) / (elapsed.as_secs_f64())) as u64,
             elapsed.as_secs_f64(),
             self.done_cnt,
@@ -421,7 +423,7 @@ impl<S: Store<E>, E: Env> Stats<S, E> {
             self.msg,
         );
         if self.config.hist {
-            display_hist(&self.hist);
+            display_hist(&self.hist, avg);
         }
         if self.config.db_stats {
             self.display_db_stats(ctx);
@@ -442,16 +444,19 @@ impl<S: Store<E>, E: Env> Stats<S, E> {
     }
 }
 
-fn display_hist(hists: &HashMap<OpType, Histogram<u64>>) {
+fn display_hist(hists: &HashMap<OpType, Histogram<u64>>, avg: f64) {
     for (op, hist) in hists {
         println!(
-            "Percentiles_{:12?} : P50: {} ms, P75: {} ms, P99: {} ms, P99.9: {} ms, P99.99: {} ms",
+            "Percentiles_{:12?} : P50: {} ms, P75: {} ms, P99: {} ms, P99.9: {} ms, P99.99: {} ms, Min: {} ms, Max: {} ms, AVG: {} ms",
             op,
             hist.value_at_quantile(0.50),
             hist.value_at_quantile(0.75),
             hist.value_at_quantile(0.99),
             hist.value_at_quantile(0.999),
             hist.value_at_quantile(0.9999),
+            hist.min(),
+            hist.max(),
+            avg,
         )
     }
 }

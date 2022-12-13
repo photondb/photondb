@@ -64,6 +64,7 @@ impl Display for StoreStats {
             self.file_reader_cache.passive_evict,
             self.file_reader_cache.recommendation,
         )?;
+        self.buffer_set.fmt(f)?;
         self.jobs.fmt(f)
     }
 }
@@ -235,8 +236,7 @@ impl Display for BufferSetStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,
-            "BufferSet: stall_writes: {}
-                    stall_intervals_ms: {}",
+            "BufferSet: stall_writes: {} stall_intervals_ms: {}",
             self.stall_writes, self.stall_intervals_ms,
         )
     }

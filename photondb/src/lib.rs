@@ -47,7 +47,7 @@ mod tree;
 pub use tree::{Options as TableOptions, PageIter, ReadOptions, TreeStats, WriteOptions};
 
 mod page_store;
-pub use page_store::{ChecksumType, Options as PageStoreOptions, StoreStats};
+pub use page_store::{ChecksumType, Compression, Options as PageStoreOptions, StoreStats};
 
 mod page;
 mod util;
@@ -73,6 +73,7 @@ mod tests {
             cache_capacity: 2 << 10,
             cache_estimated_entry_charge: 1,
             cache_file_reader_capacity: 1000,
+            cache_strict_capacity_limit: false,
             prepopulate_cache_on_flush: true,
             separate_hot_cold_files: false,
             compression_on_flush: Compression::SNAPPY,

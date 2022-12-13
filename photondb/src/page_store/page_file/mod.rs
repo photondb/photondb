@@ -16,7 +16,7 @@ mod map_file_reader;
 pub(crate) use map_file_reader::{MapFileMetaHolder, MapFileReader};
 
 mod compression;
-pub(crate) use compression::Compression;
+pub use compression::Compression;
 
 mod checksum;
 pub use checksum::ChecksumType;
@@ -81,7 +81,7 @@ pub(crate) mod facade {
                 options.cache_capacity,
                 options.cache_estimated_entry_charge,
                 -1,
-                false,
+                options.cache_strict_capacity_limit,
                 false,
             ));
             let use_direct = options.use_direct_io;

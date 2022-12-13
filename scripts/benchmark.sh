@@ -128,7 +128,7 @@ params_w="$const_params "
 params_bulkload="$const_params "
 
 params_fillseq="$params_w "
-tsv_header="ops_sec\tmb_sec\tw_amp\tusec_op\tp50\tp99\tp99.9\tp99.99\tstall%\tNstall\tu_cpu\ts_cpu\trss\ttest\tversion\tjob_id\tgithash"
+tsv_header="ops_sec\tmb_sec\tw_amp\tusec_op\tp50\tp99\tp99.9\tp99.99\tmin\tmax\tavg\tTstall\tNstall\tu_cpu\ts_cpu\trss\ttest\tversion\tjob_id\tgithash"
 
 function get_cmd() {
   output=$1
@@ -234,9 +234,9 @@ function summarize_result {
   version="0.0.0"
   git_hash="n/a"
 
-  # TODO!!!: add those log...
-  stall_pct=$( grep "^Cumulative stall" $test_out| tail -1  | awk '{  print $5 }' )
-  nstall=$( grep ^Stalls\(count\):  $test_out | tail -1 | awk '{ print $2 + $6 + $10 + $14 + $18 + $20 }' )
+
+  nstall_writes=$( grep "^BufferSet" $test_out| tail -1  | awk '{  print $3 }' )
+  stall_interval_ms=$( grep "^BufferSet" $test_out| tail -1  | awk '{  print $5 }' )
 
   if ! grep ^"$bench_name" "$test_out" > /dev/null 2>&1 ; then
     echo -e "failed $bench_name $test_out\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t$test_name\t$version\t$job_id\t$git_hash"
@@ -255,6 +255,9 @@ function summarize_result {
   p99=$( grep "^Percentiles" $test_out | tail -1 | awk '{ printf "%.0f", $10 }' )
   p999=$( grep "^Percentiles" $test_out | tail -1 | awk '{ printf "%.0f", $13 }' )
   p9999=$( grep "^Percentiles" $test_out | tail -1 | awk '{ printf "%.0f", $16 }' )
+  min=$( grep "^Percentiles" $test_out | tail -1 | awk '{ printf "%.0f", $19 }' )
+  max=$( grep "^Percentiles" $test_out | tail -1 | awk '{ printf "%.0f", $22 }' )
+  avg=$( grep "^Percentiles" $test_out | tail -1 | awk '{ printf "%.0f", $25 }' )
 
   # Use the last line because there might be extra lines when the db_bench process exits with an error
   time_out="$test_out".time
@@ -272,9 +275,9 @@ function summarize_result {
     echo -e "# mb_sec - ops_sec * size-of-operation-in-MB" >> "$report"
     echo -e "# w_amp - Write-amplification as (bytes written by compaction / bytes written by memtable flush)" >> "$report"
     echo -e "# usec_op - Microseconds per operation" >> "$report"
-    echo -e "# p50, p99, p99.9, p99.99 - 50th, 99th, 99.9th, 99.99th percentile response time in usecs" >> "$report"
-    echo -e "# stall% - Percentage of time writes are stalled" >> "$report"
-    echo -e "# Nstall - Number of stalls" >> "$report"
+    echo -e "# p50, p99, p99.9, p99.99, max, min, avg - 50th, 99th, 99.9th, 99.99th percentile and max min avg response time in usecs" >> "$report"
+    echo -e "# Tstall - stall interval" >> "$report"
+    echo -e "# Nstall - Number of write stalls" >> "$report"
     echo -e "# u_cpu - #seconds/1000 of user CPU" >> "$report"
     echo -e "# s_cpu - #seconds/1000 of system CPU" >> "$report"
     echo -e "# rss - max RSS in GB for db_bench process" >> "$report"
@@ -285,7 +288,7 @@ function summarize_result {
     echo -e $tsv_header >> "$report"
   fi
 
-  echo -e "$ops_sec\t$mb_sec\t$wamp\t$usecs_op\t$p50\t$p99\t$p999\t$p9999\t$stall_pct\t$nstall\t$u_cpu\t$s_cpu\t$rss\t$test_name\t$version\t$job_id\t$git_hash" \
+  echo -e "$ops_sec\t$mb_sec\t$wamp\t$usecs_op\t$p50\t$p99\t$p999\t$p9999\t$min\t$max\t$avg\t$stall_interval_ms\t$nstall_writes\t$u_cpu\t$s_cpu\t$rss\t$test_name\t$version\t$job_id\t$git_hash" \
     >> "$report"
 }
 
