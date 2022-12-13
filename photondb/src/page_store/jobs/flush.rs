@@ -125,6 +125,9 @@ impl<E: Env> FlushCtx<E> {
 
         self.save_and_install_version(file_id, file_info, dealloc_pages, reclaimed_files, wait)
             .await?;
+
+        write_buffer.on_flushed();
+
         Ok(())
     }
 

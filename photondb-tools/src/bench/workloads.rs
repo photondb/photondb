@@ -42,7 +42,9 @@ impl<S: Store<E>, E: Env> Workloads<S, E> {
 
     pub(super) async fn execute(&mut self) -> Result<()> {
         for bench_op in std::mem::take(&mut self.bench_ops) {
-            self.warmup(&bench_op).await?;
+            if !bench_op.benchmark_type.is_background_job() {
+                self.warmup(&bench_op).await?;
+            }
             self.do_test(&bench_op).await?;
         }
         self.cleanup().await;
@@ -132,6 +134,10 @@ impl<S: Store<E>, E: Env> Workloads<S, E> {
     }
 
     async fn exec_op(&mut self, op: &BenchOperation, _warmup: bool) -> Stats<S, E> {
+        if op.benchmark_type.is_background_job() {
+            return self.exec_bg_op(op).await;
+        }
+
         let thread_num = self.config.threads;
         assert!(thread_num > 0);
         let barrier = Barrier::new(thread_num);
@@ -193,6 +199,17 @@ impl<S: Store<E>, E: Env> Workloads<S, E> {
         }
 
         op_stats
+    }
+
+    async fn exec_bg_op(&mut self, op: &BenchOperation) -> Stats<S, E> {
+        let stats = Stats::start(0, self.config.to_owned(), self.table.to_owned());
+        match op.benchmark_type {
+            BenchmarkType::Flush => {
+                self.table.as_ref().unwrap().flush().await;
+            }
+            _ => unreachable!(),
+        }
+        stats
     }
 
     async fn cleanup(&mut self) {

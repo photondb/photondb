@@ -12,7 +12,7 @@ use log::{debug, info};
 use super::{
     stats::{AtomicBufferSetStats, BufferSetStats},
     write_buffer::ReleaseState,
-    WriteBuffer,
+    FlushOptions, Result, WriteBuffer,
 };
 use crate::util::notify::Notify;
 
@@ -186,7 +186,9 @@ impl BufferSet {
     /// NOTE: This function is only called by flush job.
     pub(crate) async fn release_permit_and_wait(&self, file_id: u32) {
         self.write_buffer_permits.release();
-        self.write_buffer_permits.wait().await;
+        self.write_buffer_permits
+            .wait(buffer_permits::WaitKind::NoWaiter)
+            .await;
 
         // Make sure that the successor buffer is installed, because `Version` requires
         // that the correspnding write buffer of `min_buffer_id` must exists.
@@ -296,11 +298,26 @@ impl BufferSet {
                 }
             }
 
-            if self.write_buffer_permits.wait().await {
+            if self
+                .write_buffer_permits
+                .wait(buffer_permits::WaitKind::NoWaiter)
+                .await
+            {
                 // Maybe the new `WriteBuffer` is not installed yet.
                 photonio::task::yield_now().await;
             }
         }
+    }
+
+    /// Like `switch_buffer` but no write stalling will occurs.
+    pub(crate) async fn switch_buffer_without_stalling(&self, file_id: u32) {
+        // Since a buffer can only be sealed once, if a buffer is sealed and has
+        // available permits before sealing, then the switch buffer will not trigger
+        // write stalling.
+        self.write_buffer_permits
+            .wait(buffer_permits::WaitKind::HasPermits)
+            .await;
+        self.switch_buffer(file_id).await;
     }
 
     /// Seal the corresponding write buffer and switch active buffer to new one.
@@ -339,6 +356,29 @@ impl BufferSet {
             .expect("The write buffer should exists");
 
         write_buffer.seal().ok()
+    }
+
+    /// Seal the current write buffer and switch to new one, so the sealed
+    /// buffer will be flushed by flusher.
+    pub(crate) async fn flush_active_buffer(&self, opts: &FlushOptions) {
+        let buffer = {
+            let current = self.current();
+            if current.current_buffer.is_empty() {
+                return;
+            }
+            current.current_buffer.clone()
+        };
+
+        let file_id = buffer.file_id();
+        if opts.allow_write_stall {
+            self.switch_buffer(file_id).await;
+        } else {
+            self.switch_buffer_without_stalling(file_id).await;
+        }
+
+        if opts.wait {
+            buffer.wait_flushed().await;
+        }
     }
 }
 
@@ -416,6 +456,10 @@ mod buffer_permits {
 
     /// A permit for maxmum sealed buffers.
     pub(crate) struct WriteBufferPermits {
+        // cases
+        // - 0: has waiter
+        // - 1: no waiter but no available permits
+        // - 2 or larger: has permits
         permits: AtomicUsize,
         notify: Notify,
     }
@@ -423,6 +467,13 @@ mod buffer_permits {
     enum AcquireKind {
         None,
         AddWaiter,
+    }
+
+    pub(crate) enum WaitKind {
+        /// Wait if there no available permits.
+        HasPermits,
+        /// Wait if exists a waiter.
+        NoWaiter,
     }
 
     impl WriteBufferPermits {
@@ -435,13 +486,16 @@ mod buffer_permits {
             }
         }
 
-        /// Not acquire a permit, but wait if there no available permits and
-        /// exists a waiter.
-        pub(crate) async fn wait(&self) -> bool {
-            if self.permits.load(Ordering::Acquire) > 0 {
+        /// Not acquire a permit, but wait until the contdition are satisfied.
+        pub(crate) async fn wait(&self, kind: WaitKind) -> bool {
+            let acquired = match kind {
+                WaitKind::HasPermits => 1,
+                WaitKind::NoWaiter => 0,
+            };
+            if self.permits.load(Ordering::Acquire) > acquired {
                 true
             } else {
-                self.wait_cond(|| self.permits.load(Ordering::Acquire) > 0)
+                self.wait_cond(|| self.permits.load(Ordering::Acquire) > acquired)
                     .await;
                 false
             }
@@ -730,13 +784,50 @@ mod tests {
     }
 
     #[photonio::test]
+    async fn buffer_set_flush_active_buffer() {
+        let buffer_set = BufferSet::new(1, 1 << 10, 8);
+
+        let opts = FlushOptions {
+            wait: false,
+            allow_write_stall: false,
+        };
+        buffer_set.flush_active_buffer(&opts).await;
+
+        {
+            let current = buffer_set.current();
+            let buf = current.last_writer_buffer();
+            unsafe { buf.alloc_page(1, 32, false).unwrap() };
+        };
+        buffer_set.flush_active_buffer(&opts).await;
+    }
+
+    #[photonio::test]
+    async fn buffer_set_flush_active_buffer_and_wait() {
+        let buffer_set = BufferSet::new(1, 1 << 10, 8);
+
+        {
+            let current = buffer_set.current();
+            let buf = current.current_buffer.clone();
+            unsafe { buf.alloc_page(1, 32, false).unwrap() };
+            buf.on_flushed();
+        }
+
+        let opts = FlushOptions {
+            wait: true,
+            allow_write_stall: false,
+        };
+
+        buffer_set.flush_active_buffer(&opts).await;
+    }
+
+    #[photonio::test]
     async fn write_buffer_permits_basic() {
         let write_permits = Arc::new(buffer_permits::WriteBufferPermits::new(2));
         write_permits.acquire().await;
         write_permits.acquire().await;
 
         // Return immediately if there no waiter.
-        assert!(write_permits.wait().await);
+        assert!(write_permits.wait(buffer_permits::WaitKind::NoWaiter).await);
 
         let (tx, mut rx) = mpsc::channel(4);
         let mut tx_1 = tx.clone();
@@ -756,7 +847,9 @@ mod tests {
 
         let cloned_write_permits = write_permits.clone();
         let wait_task = photonio::task::spawn(async move {
-            cloned_write_permits.wait().await;
+            cloned_write_permits
+                .wait(buffer_permits::WaitKind::NoWaiter)
+                .await;
         });
 
         photonio::task::yield_now().await;
@@ -773,6 +866,6 @@ mod tests {
         acquire_task_1.await.unwrap_or_default();
         acquire_task_2.await.unwrap_or_default();
 
-        assert!(write_permits.wait().await);
+        assert!(write_permits.wait(buffer_permits::WaitKind::NoWaiter).await);
     }
 }

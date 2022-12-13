@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use crate::{
     env::Env,
     page::{Key, Value},
-    page_store::{PageStore, StoreStats},
+    page_store::{FlushOptions, PageStore, StoreStats},
     tree::*,
     Result,
 };
@@ -107,6 +107,11 @@ impl<E: Env> Table<E> {
     /// entries that are not visible to the LSN anymore.
     pub fn set_safe_lsn(&self, lsn: u64) {
         self.tree.set_safe_lsn(lsn);
+    }
+
+    /// Flush all write buffer data.
+    pub async fn flush(&self, opts: &FlushOptions) {
+        self.store.flush(opts).await;
     }
 }
 

@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use photondb::{env::Env, raw::Table, ChecksumType, Compression, TableOptions, TableStats};
+use photondb::{
+    env::Env, raw::Table, ChecksumType, Compression, FlushOptions, TableOptions, TableStats,
+};
 
 use super::Store;
 use crate::bench::{Args, Result};
@@ -53,6 +55,10 @@ where
     async fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>> {
         let r = self.table.get(key, lsn).await.expect("get fail");
         Ok(r)
+    }
+
+    async fn flush(&self) {
+        self.table.flush(&FlushOptions::default()).await;
     }
 
     async fn close(self) -> Result<(), Self> {

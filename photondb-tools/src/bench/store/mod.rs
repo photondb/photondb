@@ -16,6 +16,8 @@ pub(crate) trait Store<E>: std::fmt::Debug + Clone + Sync + Send + 'static {
 
     async fn get(&self, key: &[u8], lsn: u64) -> Result<Option<Vec<u8>>>;
 
+    async fn flush(&self);
+
     async fn close(self) -> Result<(), Self>;
 
     fn stats(&self) -> Option<TableStats>;

@@ -132,7 +132,7 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = 1)]
     verify_checksum: u8,
 
-    /// Enable compressioin or not.
+    /// Enable compression or not.
     #[arg(long, default_value_t = false)]
     enable_compression: bool,
 
@@ -156,6 +156,13 @@ enum BenchmarkType {
     ReadRandom,
     UpdateRandom,
     ReadRandomWriteRandom,
+    Flush,
+}
+
+impl BenchmarkType {
+    pub(crate) fn is_background_job(&self) -> bool {
+        matches!(self, BenchmarkType::Flush)
+    }
 }
 
 impl From<&str> for BenchmarkType {
@@ -167,6 +174,7 @@ impl From<&str> for BenchmarkType {
             "readrandom" => BenchmarkType::ReadRandom,
             "updaterandom" => BenchmarkType::UpdateRandom,
             "readrandomwriterandom" => BenchmarkType::ReadRandomWriteRandom,
+            "flush" => BenchmarkType::Flush,
             _ => panic!("invalid benchmark type"),
         }
     }
