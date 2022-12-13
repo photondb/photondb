@@ -246,7 +246,7 @@ pub(crate) async fn run(args: Args) -> Result<()> {
     let job = Arc::new(Job {
         stop: AtomicBool::new(false),
         args: args.clone(),
-        table,
+        table: table.clone(),
         key_prefix,
         timer: Timer::default(),
     });
@@ -270,6 +270,7 @@ pub(crate) async fn run(args: Args) -> Result<()> {
         for handle in handles {
             handle.await;
         }
+        table.close().await.expect("Only one references here");
     })
     .await;
 

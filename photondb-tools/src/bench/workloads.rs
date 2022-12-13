@@ -196,8 +196,8 @@ impl<S: Store<E>, E: Env> Workloads<S, E> {
     }
 
     async fn cleanup(&mut self) {
-        if let Some(_table) = self.table.take() {
-            // let _ = table.close().await;
+        if let Some(table) = self.table.take() {
+            table.close().await.expect("Only one references here");
         }
     }
 }

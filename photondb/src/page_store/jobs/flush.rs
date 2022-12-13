@@ -51,7 +51,7 @@ impl<E: Env> FlushCtx<E> {
     }
 
     pub(crate) async fn run(mut self) {
-        loop {
+        'OUTER: loop {
             let version = self.version_owner.current();
             let write_buffer = version.min_write_buffer();
 
@@ -63,7 +63,7 @@ impl<E: Env> FlushCtx<E> {
                     .await
                     .is_none()
                 {
-                    return;
+                    break 'OUTER;
                 }
             }
 
@@ -74,9 +74,42 @@ impl<E: Env> FlushCtx<E> {
                 }
             }
         }
+
+        if !self.options.avoid_flush_during_shutdown {
+            self.flush_during_shutdown().await;
+        }
     }
 
+    /// Flush write buffers when user try to shutdown a page store.
+    ///
+    /// Note: it assumes that there no any inflights writers during shutdown.
+    async fn flush_during_shutdown(self) {
+        let buffers_range = { self.version_owner.current().buffers_range() };
+        for id in buffers_range {
+            let buffer = {
+                let version = self.version_owner.current();
+                version
+                    .buffer_set
+                    .get(id)
+                    .expect("The target write buffer must exists")
+                    .clone()
+            };
+            if !buffer.is_sealed() {
+                let _ = buffer.seal();
+            }
+            assert!(buffer.is_flushable());
+            self.flush_impl(&buffer, false)
+                .await
+                .expect("TODO: flush write buffer");
+        }
+    }
+
+    #[inline]
     async fn flush(&self, write_buffer: &WriteBuffer) -> Result<()> {
+        self.flush_impl(write_buffer, true).await
+    }
+
+    async fn flush_impl(&self, write_buffer: &WriteBuffer, wait: bool) -> Result<()> {
         let start_at = Instant::now();
         let file_id = write_buffer.file_id();
         let (dealloc_pages, file_info, reclaimed_files) =
@@ -90,7 +123,7 @@ impl<E: Env> FlushCtx<E> {
             start_at.elapsed().as_micros()
         );
 
-        self.save_and_install_version(file_id, file_info, dealloc_pages, reclaimed_files)
+        self.save_and_install_version(file_id, file_info, dealloc_pages, reclaimed_files, wait)
             .await?;
         Ok(())
     }
@@ -101,6 +134,7 @@ impl<E: Env> FlushCtx<E> {
         file_info: FileInfo,
         dealloc_pages: Vec<u64>,
         reclaimed_files: HashSet<u32>,
+        wait_new_buffer: bool,
     ) -> Result<()> {
         let mut manifest = self.manifest.lock().await;
         let version = self.version_owner.current();
@@ -117,7 +151,9 @@ impl<E: Env> FlushCtx<E> {
 
         // Release buffer permit and ensure the new buffer is installed, before install
         // new version.
-        version.buffer_set.release_permit_and_wait(file_id).await;
+        if wait_new_buffer {
+            version.buffer_set.release_permit_and_wait(file_id).await;
+        }
 
         let delta = DeltaVersion {
             reason: VersionUpdateReason::Flush,

@@ -146,6 +146,13 @@ pub struct Options {
     ///
     /// Default: NONE.
     pub page_checksum_type: ChecksumType,
+
+    /// PhotonDB will flush all write buffers on DB close, if there are
+    /// unpersisted data. The flush can be skip to speed up DB close, but
+    /// unpersisted data WILL BE LOST.
+    ///
+    /// Default: false
+    pub avoid_flush_during_shutdown: bool,
 }
 
 impl Default for Options {
@@ -165,6 +172,7 @@ impl Default for Options {
             compression_on_flush: Compression::SNAPPY,
             compression_on_cold_compact: Compression::ZSTD,
             page_checksum_type: ChecksumType::NONE,
+            avoid_flush_during_shutdown: false,
         }
     }
 }
