@@ -119,7 +119,7 @@ pub struct Options {
     /// Default: 5000 file_readers.
     pub cache_file_reader_capacity: u64,
 
-    /// Whelther report error when no enough memory for page cache.
+    /// Whether report error when there is no enough memory for the page cache.
     ///
     /// Default: false
     pub cache_strict_capacity_limit: bool,
