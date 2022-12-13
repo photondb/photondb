@@ -161,10 +161,7 @@ enum BenchmarkType {
 
 impl BenchmarkType {
     pub(crate) fn is_background_job(&self) -> bool {
-        match self {
-            BenchmarkType::Flush => true,
-            _ => false,
-        }
+        matches!(self, BenchmarkType::Flush)
     }
 }
 
