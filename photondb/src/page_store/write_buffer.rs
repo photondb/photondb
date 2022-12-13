@@ -11,6 +11,7 @@ use super::Result;
 use crate::{
     page::{PageBuf, PageRef},
     page_store::Error,
+    util::latch::Latch,
 };
 
 pub(crate) struct WriteBuffer
@@ -24,6 +25,9 @@ where
 
     // The state of current buffer, see [`BufferState`] for details.
     buffer_state: AtomicU64,
+
+    /// A latch for flushed notify.
+    flush_latch: Latch,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -100,6 +104,7 @@ impl WriteBuffer {
             buf,
             buf_size,
             buffer_state: AtomicU64::new(default_state.apply()),
+            flush_latch: Latch::new(1),
         }
     }
 
@@ -116,6 +121,21 @@ impl WriteBuffer {
     #[inline]
     pub(crate) fn is_sealed(&self) -> bool {
         self.buffer_state().sealed
+    }
+
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.buffer_state().allocated == 0
+    }
+
+    #[inline]
+    pub(crate) async fn wait_flushed(&self) {
+        self.flush_latch.wait().await;
+    }
+
+    #[inline]
+    pub(crate) fn on_flushed(&self) {
+        self.flush_latch.count_down();
     }
 
     /// Allocate pages and record dealloc pages in one batch. This operation

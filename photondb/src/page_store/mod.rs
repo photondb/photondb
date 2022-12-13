@@ -183,6 +183,30 @@ impl Default for Options {
     }
 }
 
+/// Options that control manual flush operations.
+#[derive(Clone, Debug)]
+pub struct FlushOptions {
+    /// If true, the flush will wait until the flush is done.
+    ///
+    /// Default: true
+    wait: bool,
+
+    /// If true, then flush will start processing regardless of whether there is
+    /// a write stall during the flush process.
+    ///
+    /// Default: false
+    allow_write_stall: bool,
+}
+
+impl Default for FlushOptions {
+    fn default() -> Self {
+        FlushOptions {
+            wait: true,
+            allow_write_stall: false,
+        }
+    }
+}
+
 pub(crate) struct PageStore<E: Env> {
     options: Options,
     #[allow(unused)]
@@ -281,6 +305,12 @@ impl<E: Env> PageStore<E> {
         for job in jobs {
             job.await;
         }
+    }
+
+    /// Flush the active write buffer if it is not empty.
+    #[inline]
+    pub(crate) async fn flush(&self, opts: &FlushOptions) {
+        self.version().buffer_set.flush_active_buffer(opts).await
     }
 
     #[inline]
