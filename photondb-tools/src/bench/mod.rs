@@ -120,6 +120,14 @@ pub(crate) struct Args {
     #[arg(long, default_value_t = 134217728)]
     cache_size: u64,
 
+    /// Disable space reclamation
+    #[clap(long, default_value_t = false)]
+    disable_space_reclaiming: bool,
+
+    /// The max percentage of the space amplification.
+    #[clap(long, default_value_t = 100)]
+    max_space_amplification_percent: usize,
+
     /// The space watermark which the DB needed to reclaim
     #[clap(long, default_value_t = 10 << 30)]
     space_used_high: u64,

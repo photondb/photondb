@@ -72,6 +72,11 @@ pub struct Options {
     /// Default: false
     pub use_direct_io: bool,
 
+    /// If true, no space reclamation.
+    ///
+    /// Default: false
+    pub disable_space_reclaiming: bool,
+
     /// The max percentage of the space amplification.
     ///
     /// The space amplification is defined as the amount (in percentage) of
@@ -169,6 +174,7 @@ impl Default for Options {
             write_buffer_capacity: 128 << 20,
             max_write_buffers: 8,
             use_direct_io: false,
+            disable_space_reclaiming: false,
             max_space_amplification_percent: 100,
             space_used_high: u64::MAX,
             file_base_size: 64 << 20,

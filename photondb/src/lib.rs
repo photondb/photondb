@@ -69,6 +69,7 @@ mod tests {
             write_buffer_capacity: 1 << 20,
             max_write_buffers: 8,
             use_direct_io: false,
+            disable_space_reclaiming: false,
             max_space_amplification_percent: 10,
             space_used_high: u64::MAX,
             file_base_size: 1 << 20,
