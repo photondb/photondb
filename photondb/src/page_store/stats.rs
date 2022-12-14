@@ -32,14 +32,7 @@ impl StoreStats {
 
 impl Display for StoreStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
-            f,
-            "WritebufStats: read_in_buf: {}, read_in_files: {}, read_hit_rate: {:.2}%",
-            self.writebuf.read_in_buf,
-            self.writebuf.read_in_file,
-            (self.writebuf.read_in_buf as f64) * 100.
-                / (self.writebuf.read_in_buf + self.writebuf.read_in_file) as f64,
-        )?;
+        self.writebuf.fmt(f)?;
         writeln!(
             f,
             "PageCacheStats: lookup_hit: {}, lookup_miss: {}, hit_rate: {:.2}%, insert: {}, active_evict: {}, passive_evict: {}, recommendation: {:?}",
@@ -108,6 +101,7 @@ impl CacheStats {
 pub struct WritebufStats {
     pub read_in_buf: u64,
     pub read_in_file: u64,
+    pub read_file_bytes: u64,
 }
 
 impl WritebufStats {
@@ -115,7 +109,23 @@ impl WritebufStats {
         WritebufStats {
             read_in_buf: self.read_in_buf.wrapping_sub(o.read_in_buf),
             read_in_file: self.read_in_file.wrapping_sub(o.read_in_file),
+            read_file_bytes: self.read_file_bytes.wrapping_sub(o.read_file_bytes),
         }
+    }
+}
+
+impl Display for WritebufStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let read_hit_rate =
+            (self.read_in_buf as f64) * 100. / (self.read_in_buf + self.read_in_file) as f64;
+        writeln!(
+            f,
+            "WritebufStats: read_in_buf: {}, \
+                read_in_files: {}, \
+                read_file_bytes: {}, \
+                read_hit_rate: {read_hit_rate:.2}%",
+            self.read_in_buf, self.read_in_file, self.read_file_bytes,
+        )
     }
 }
 
@@ -123,6 +133,7 @@ impl WritebufStats {
 pub(crate) struct AtomicWritebufStats {
     pub(super) read_in_buf: Counter,
     pub(super) read_in_file: Counter,
+    pub(super) read_file_bytes: Counter,
 }
 
 impl AtomicWritebufStats {
@@ -130,6 +141,7 @@ impl AtomicWritebufStats {
         WritebufStats {
             read_in_buf: self.read_in_buf.get(),
             read_in_file: self.read_in_file.get(),
+            read_file_bytes: self.read_file_bytes.get(),
         }
     }
 }
@@ -148,6 +160,8 @@ pub struct JobStats {
     pub compact_write_bytes: u64,
     /// The total bytes input during compaction.
     pub compact_input_bytes: u64,
+    /// The total bytes read during compaction.
+    pub read_file_bytes: u64,
 }
 
 #[derive(Default, Debug)]
@@ -158,6 +172,7 @@ pub(crate) struct AtomicJobStats {
     pub(super) rewrite_input_bytes: Counter,
     pub(super) compact_write_bytes: Counter,
     pub(super) compact_input_bytes: Counter,
+    pub(super) read_file_bytes: Counter,
 }
 
 impl JobStats {
@@ -169,6 +184,7 @@ impl JobStats {
             rewrite_input_bytes: self.rewrite_input_bytes.wrapping_sub(o.rewrite_input_bytes),
             compact_write_bytes: self.compact_write_bytes.wrapping_sub(o.compact_write_bytes),
             compact_input_bytes: self.compact_input_bytes.wrapping_sub(o.compact_input_bytes),
+            read_file_bytes: self.read_file_bytes.wrapping_sub(o.read_file_bytes),
         }
     }
 }
@@ -190,6 +206,7 @@ impl Display for JobStats {
             rewrite_bytes: {}, \
             compact_input_bytes: {}, \
             compact_write_bytes: {}, \
+            read_file_bytes: {}, \
             write_amp: {:.2}",
             self.flush_write_bytes,
             self.flush_discard_bytes,
@@ -197,6 +214,7 @@ impl Display for JobStats {
             self.rewrite_bytes,
             self.compact_input_bytes,
             self.compact_write_bytes,
+            self.read_file_bytes,
             write_amp
         )
     }
@@ -211,6 +229,7 @@ impl AtomicJobStats {
             rewrite_input_bytes: self.rewrite_input_bytes.get(),
             compact_write_bytes: self.compact_write_bytes.get(),
             compact_input_bytes: self.compact_input_bytes.get(),
+            read_file_bytes: self.read_file_bytes.get(),
         }
     }
 }

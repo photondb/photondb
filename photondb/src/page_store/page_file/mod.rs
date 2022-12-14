@@ -156,9 +156,12 @@ pub(crate) mod facade {
             file_info: &FileInfo,
             addr: u64,
             handle: PageHandle,
-        ) -> Result<CacheEntry<Vec<u8>, ClockCache<Vec<u8>>>> {
+        ) -> Result<(
+            CacheEntry<Vec<u8>, ClockCache<Vec<u8>>>,
+            /* hit */ bool,
+        )> {
             if let Some(cache_entry) = self.page_cache.lookup(addr) {
-                return Ok(cache_entry);
+                return Ok((cache_entry, true));
             }
 
             let buf = self
@@ -170,7 +173,7 @@ pub(crate) mod facade {
                 .insert(addr, Some(buf), charge)
                 .expect("insert cache fail");
 
-            Ok(cache_entry.unwrap())
+            Ok((cache_entry.unwrap(), false))
         }
 
         pub(crate) async fn read_file_page(

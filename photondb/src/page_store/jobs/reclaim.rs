@@ -397,6 +397,9 @@ where
         let reader = self.page_files.open_page_file_meta_reader(file_id).await?;
         let page_table = reader.read_page_table().await?;
         let dealloc_pages = reader.read_delete_pages().await?;
+        self.job_stats
+            .read_file_bytes
+            .add(reader.into_inner().total_read_bytes());
 
         let total_rewrite_pages = self
             .rewrite_active_pages(file, version, &page_table)
@@ -659,6 +662,9 @@ where
                 .unwrap();
             builder.add_page(page_id, page_addr, &page).await.unwrap();
         }
+        self.job_stats
+            .read_file_bytes
+            .add(reader.total_read_bytes());
         let builder = builder.finish().await.unwrap();
         Ok((builder, dealloc_pages))
     }
@@ -761,6 +767,9 @@ where
             }
             builder = partial_builder.finish().await?;
         }
+        self.job_stats
+            .read_file_bytes
+            .add(reader.total_read_bytes());
         Ok(builder)
     }
 }

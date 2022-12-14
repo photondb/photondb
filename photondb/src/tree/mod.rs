@@ -122,12 +122,22 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     /// Gets the value corresponding to the key.
     pub(crate) async fn get(&self, key: Key<'_>) -> Result<Option<&[u8]>> {
         let (view, _) = self.find_leaf(key.raw).await?;
-        self.find_value(&key, &view).await
+        let value = self.find_value(&key, &view).await?;
+
+        let key_size = key.len() as u64;
+        let value_size = value.map(|v| v.len()).unwrap_or_default() as u64;
+        self.tree
+            .stats
+            .success
+            .read_bytes
+            .add(key_size + value_size);
+
+        Ok(value)
     }
 
     /// Writes the key-value pair to the tree.
     pub(crate) async fn write(&self, key: Key<'_>, value: Value<'_>) -> Result<()> {
-        let bytes = key.raw.len() + value.len();
+        let bytes = key.len() + value.len();
         loop {
             match self.try_write(key, value).await {
                 Ok(_) => {

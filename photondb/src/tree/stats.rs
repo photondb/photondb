@@ -23,10 +23,36 @@ impl TreeStats {
 
 impl Display for TreeStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "TreeStats_success: read: {}, write: {}, split_page: {}, reconcile_page: {}, consolidate_page: {}, write_bytes: {}",
-            self.success.read, self.success.write, self.success.split_page, self.success.reconcile_page, self.success.consolidate_page, self.success.write_bytes)?;
-        writeln!(f, "TreeStats_conflict: read: {}, write: {}, split_page: {}, reconcile_page: {}, consolidate_page: {}",
-            self.conflict.read, self.conflict.write, self.conflict.split_page, self.conflict.reconcile_page, self.conflict.consolidate_page)
+        writeln!(
+            f,
+            "TreeStats_success: read: {}, \
+                write: {}, \
+                split_page: {}, \
+                reconcile_page: {}, \
+                consolidate_page: {}, \
+                read_bytes: {}, \
+                write_bytes: {}",
+            self.success.read,
+            self.success.write,
+            self.success.split_page,
+            self.success.reconcile_page,
+            self.success.consolidate_page,
+            self.success.read_bytes,
+            self.success.write_bytes
+        )?;
+        writeln!(
+            f,
+            "TreeStats_conflict: read: {}, \
+                write: {}, \
+                split_page: {}, \
+                reconcile_page: {}, \
+                consolidate_page: {}",
+            self.conflict.read,
+            self.conflict.write,
+            self.conflict.split_page,
+            self.conflict.reconcile_page,
+            self.conflict.consolidate_page
+        )
     }
 }
 
@@ -54,6 +80,7 @@ pub struct TxnStats {
     pub reconcile_page: u64,
     pub consolidate_page: u64,
     pub rewrite_page: u64,
+    pub read_bytes: u64,
     pub write_bytes: u64,
 }
 
@@ -61,6 +88,7 @@ pub struct TxnStats {
 pub(super) struct AtomicTxnStats {
     pub(super) read: Counter,
     pub(super) write: Counter,
+    pub(super) read_bytes: Counter,
     pub(super) write_bytes: Counter,
     pub(super) split_page: Counter,
     pub(super) reconcile_page: Counter,
@@ -73,6 +101,7 @@ impl AtomicTxnStats {
         TxnStats {
             read: self.read.get(),
             write: self.write.get(),
+            read_bytes: self.read_bytes.get(),
             write_bytes: self.write_bytes.get(),
             split_page: self.split_page.get(),
             reconcile_page: self.reconcile_page.get(),
@@ -87,6 +116,7 @@ impl TxnStats {
         TxnStats {
             read: self.read.wrapping_sub(o.read),
             write: self.write.wrapping_sub(o.write),
+            read_bytes: self.read_bytes.wrapping_sub(o.read_bytes),
             write_bytes: self.write_bytes.wrapping_sub(o.write_bytes),
             split_page: self.split_page.wrapping_sub(o.split_page),
             reconcile_page: self.reconcile_page.wrapping_sub(o.reconcile_page),

@@ -196,6 +196,16 @@ impl std::fmt::Display for TableStats {
         self.tree.fmt(f)?;
         self.store.fmt(f)?;
 
+        let user_read_bytes = self.tree.success.read_bytes;
+        let front_read_bytes = self.store.writebuf.read_file_bytes;
+        let background_read_bytes = self.store.jobs.read_file_bytes;
+        let total_read_bytes = front_read_bytes + background_read_bytes;
+        let read_amp = if total_read_bytes < user_read_bytes {
+            0.0
+        } else {
+            ((total_read_bytes as f64) / (user_read_bytes as f64)) - 1.0
+        };
+
         let user_write_bytes = self.tree.success.write_bytes;
         let background_write_bytes =
             self.store.jobs.flush_write_bytes + self.store.jobs.compact_write_bytes;
@@ -206,9 +216,13 @@ impl std::fmt::Display for TableStats {
         };
         writeln!(
             f,
-            "TableStats: user_write_bytes: {user_write_bytes} \
-                background_write_bytes: {background_write_bytes} \
-                write_amp: {write_amp:.2}"
+            "TableStats: user_write_bytes: {user_write_bytes}, \
+                background_write_bytes: {background_write_bytes}, \
+                write_amp: {write_amp:.2}, \
+                user_read_bytes: {user_read_bytes}, \
+                front_read_bytes: {front_read_bytes}, \
+                background_read_bytes: {background_read_bytes}, \
+                read_amp: {read_amp:.2}"
         )
     }
 }
