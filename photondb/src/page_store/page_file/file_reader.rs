@@ -6,6 +6,7 @@ use super::{file_builder::*, types::FileMeta, FileId};
 use crate::{
     env::{Env, PositionalReader, PositionalReaderExt},
     page_store::{cache::Cache, stats::CacheStats, ClockCache, Error, Result},
+    util::atomic::Counter,
 };
 
 pub(crate) struct CommonFileReader<R: PositionalReader> {
@@ -13,6 +14,7 @@ pub(crate) struct CommonFileReader<R: PositionalReader> {
     use_direct: bool,
     pub(super) align_size: usize,
     pub(super) file_size: usize,
+    read_bytes: Counter,
 }
 
 impl<R: PositionalReader> CommonFileReader<R> {
@@ -23,6 +25,7 @@ impl<R: PositionalReader> CommonFileReader<R> {
             use_direct,
             align_size,
             file_size,
+            read_bytes: Counter::new(0),
         }
     }
 
@@ -36,6 +39,7 @@ impl<R: PositionalReader> CommonFileReader<R> {
                 .read_exact_at(buf, req_offset)
                 .await
                 .expect("read page data fail");
+            self.read_bytes.add(buf.len() as u64);
             return Ok(());
         }
 
@@ -52,6 +56,7 @@ impl<R: PositionalReader> CommonFileReader<R> {
             .expect("read page data fail");
 
         buf.copy_from_slice(&read_buf[offset_ahead..offset_ahead + buf.len()]);
+        self.read_bytes.add(buf.len() as u64);
 
         Ok(())
     }
@@ -86,6 +91,11 @@ impl<R: PositionalReader> CommonFileReader<R> {
         let mut buf = vec![0u8; block_handle.length as usize];
         self.read_exact_at(&mut buf, block_handle.offset).await?;
         Ok(buf)
+    }
+
+    #[inline]
+    pub(crate) fn total_read_bytes(&self) -> u64 {
+        self.read_bytes.get()
     }
 }
 

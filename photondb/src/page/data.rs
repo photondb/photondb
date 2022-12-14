@@ -10,6 +10,11 @@ impl<'a> Key<'a> {
     pub(crate) const fn new(raw: &'a [u8], lsn: u64) -> Self {
         Self { raw, lsn }
     }
+
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        self.raw.len() + core::mem::size_of::<u64>()
+    }
 }
 
 impl Ord for Key<'_> {

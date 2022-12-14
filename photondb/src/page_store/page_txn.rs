@@ -94,7 +94,7 @@ impl<E: Env> Guard<E> {
             panic!("The addr {addr} is not belongs to the target file {physical_id:?}");
         };
 
-        let entry = self
+        let (entry, hit) = self
             .page_files
             .read_page(physical_id, file_info, addr, handle)
             .await?;
@@ -104,6 +104,9 @@ impl<E: Env> Guard<E> {
 
         let last_guard = owned_pages.last().unwrap();
         let page = last_guard.value();
+        if !hit {
+            self.writebuf_stats.read_file_bytes.add(page.len() as u64);
+        }
 
         Ok(PageRef::new(unsafe {
             // Safety: the lifetime is guarranted by `guard`.
