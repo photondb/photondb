@@ -33,6 +33,7 @@ pub(crate) struct Version {
 
     next_version: AtomicPtr<Arc<Version>>,
     new_version_latch: Latch,
+    reclaiming_latch: Latch,
 
     _cleanup_guard: oneshot::Sender<()>,
     cleanup_handle: Mutex<Option<oneshot::Receiver<()>>>,
@@ -193,6 +194,7 @@ impl Version {
 
             next_version: AtomicPtr::default(),
             new_version_latch: Latch::new(1),
+            reclaiming_latch: Latch::new(1),
             _cleanup_guard: sender,
             cleanup_handle: Mutex::new(Some(receiver)),
         }
@@ -266,6 +268,17 @@ impl Version {
 
     pub(crate) fn now(&self) -> u32 {
         self.first_buffer_id
+    }
+
+    /// Mark this version as reclaimed.
+    #[inline]
+    pub(crate) fn reclaimed(&self) {
+        self.reclaiming_latch.count_down();
+    }
+
+    #[inline]
+    pub(crate) async fn wait_for_reclaiming(&self) {
+        self.reclaiming_latch.wait().await;
     }
 
     /// Release all previous writer buffers which is invisible.

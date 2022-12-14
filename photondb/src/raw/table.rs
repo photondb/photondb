@@ -113,6 +113,11 @@ impl<E: Env> Table<E> {
     pub async fn flush(&self, opts: &FlushOptions) {
         self.store.flush(opts).await;
     }
+
+    /// Wait all pending reclaiming to finish.
+    pub async fn wait_for_reclaiming(&self) {
+        self.store.wait_for_reclaiming().await;
+    }
 }
 
 /// A handle that holds some resources of a table for user operations.

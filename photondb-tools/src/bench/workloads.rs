@@ -207,6 +207,9 @@ impl<S: Store<E>, E: Env> Workloads<S, E> {
             BenchmarkType::Flush => {
                 self.table.as_ref().unwrap().flush().await;
             }
+            BenchmarkType::WaitForReclaiming => {
+                self.table.as_ref().unwrap().wait_for_reclaiming().await;
+            }
             _ => unreachable!(),
         }
         stats

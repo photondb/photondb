@@ -95,6 +95,10 @@ impl<E: Env> FlushCtx<E> {
                     .clone()
             };
             if !buffer.is_sealed() {
+                if buffer.is_empty() {
+                    // skip empty buffer.
+                    break;
+                }
                 let _ = buffer.seal();
             }
             assert!(buffer.is_flushable());
