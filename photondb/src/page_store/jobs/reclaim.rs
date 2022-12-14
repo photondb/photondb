@@ -143,8 +143,10 @@ where
     pub(crate) async fn run(mut self, mut version: Arc<Version>) {
         self.reclaim_orphan_page_files().await;
         loop {
-            self.reclaim(&version).await;
-            version.reclaimed();
+            if !self.options.disable_space_reclaiming {
+                self.reclaim(&version).await;
+                version.reclaimed();
+            }
             match with_shutdown(&mut self.shutdown, version.wait_next_version()).await {
                 Some(next_version) => version = next_version.refresh().unwrap_or(next_version),
                 None => break,
@@ -924,6 +926,10 @@ impl CompactStats {
 
 /// Wait until the running reclaiming progress to finish.
 pub(crate) async fn wait_for_reclaiming(options: &Options, mut version: Arc<Version>) {
+    if options.disable_space_reclaiming {
+        return;
+    }
+
     loop {
         let progress = ReclaimProgress::new(options, &version, &HashSet::default());
         progress.trace_log();
