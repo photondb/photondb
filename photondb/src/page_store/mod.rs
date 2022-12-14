@@ -45,7 +45,10 @@ mod stats;
 pub use page_file::{ChecksumType, Compression};
 pub use stats::StoreStats;
 
-use self::stats::{AtomicJobStats, AtomicWritebufStats};
+use self::{
+    jobs::wait_for_reclaiming,
+    stats::{AtomicJobStats, AtomicWritebufStats},
+};
 
 /// Options to configure a page store.
 #[non_exhaustive]
@@ -311,6 +314,12 @@ impl<E: Env> PageStore<E> {
     #[inline]
     pub(crate) async fn flush(&self, opts: &FlushOptions) {
         self.version().buffer_set.flush_active_buffer(opts).await
+    }
+
+    /// Wait all pending reclaiming to finish.
+    #[inline]
+    pub(crate) async fn wait_for_reclaiming(&self) {
+        wait_for_reclaiming(&self.options, self.version()).await;
     }
 
     #[inline]

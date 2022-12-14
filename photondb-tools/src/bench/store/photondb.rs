@@ -61,6 +61,10 @@ where
         self.table.flush(&FlushOptions::default()).await;
     }
 
+    async fn wait_for_reclaiming(&self) {
+        self.table.wait_for_reclaiming().await;
+    }
+
     async fn close(self) -> Result<(), Self> {
         self.table
             .close()

@@ -77,6 +77,25 @@ enum ReclaimJob {
 }
 
 #[derive(Debug, Default)]
+struct ReclaimProgress {
+    // some options.
+    target_space_amp: u64,
+    space_used_high: u64,
+    file_base_size: u64,
+
+    used_space: u64,
+    base_size: u64,
+    additional_size: u64,
+}
+
+#[derive(Debug)]
+enum ReclaimReason {
+    None,
+    HighSpaceUsage,
+    LargeSpaceAmp,
+}
+
+#[derive(Debug, Default)]
 struct CompactStats {
     num_active_pages: usize,
     input_size: usize,
@@ -102,7 +121,7 @@ where
         next_map_file_id: u32,
         orphan_page_files: HashSet<u32>,
         job_stat: Arc<AtomicJobStats>,
-        writebuf_stat: Arc<AtomicWritebufStats>,
+        writebuf_stats: Arc<AtomicWritebufStats>,
     ) -> Self {
         ReclaimCtx {
             options,
@@ -117,7 +136,7 @@ where
             cleaned_files: HashSet::default(),
             orphan_page_files,
             job_stats: job_stat,
-            writebuf_stats: writebuf_stat,
+            writebuf_stats,
         }
     }
 
@@ -125,6 +144,7 @@ where
         self.reclaim_orphan_page_files().await;
         loop {
             self.reclaim(&version).await;
+            version.reclaimed();
             match with_shutdown(&mut self.shutdown, version.wait_next_version()).await {
                 Some(next_version) => version = next_version.refresh().unwrap_or(next_version),
                 None => break,
@@ -140,11 +160,13 @@ where
         let empty_files = self.pick_empty_page_files(version, &cleaned_files);
         self.rewrite_files(empty_files, version).await;
 
-        if !self.is_reclaimable(version, &cleaned_files) {
+        let mut progress = ReclaimProgress::new(&self.options, version, &cleaned_files);
+        progress.trace_log();
+        if !progress.is_reclaimable() {
             return;
         }
 
-        self.reclaim_files_by_strategy(version, &cleaned_files)
+        self.reclaim_files_by_strategy(&mut progress, version, &cleaned_files)
             .await;
     }
 
@@ -207,6 +229,7 @@ where
 
     async fn reclaim_files_by_strategy(
         &mut self,
+        progress: &mut ReclaimProgress,
         version: &Arc<Version>,
         cleaned_files: &HashSet<FileId>,
     ) {
@@ -219,22 +242,25 @@ where
             if let Some(job) = builder.add(file, active_size) {
                 match job {
                     ReclaimJob::Rewrite(file_id) => {
-                        if let Err(err) = self.rewrite_file(file_id, version).await {
+                        if let Err(err) = self
+                            .rewrite_file_with_progress(Some(progress), file_id, version)
+                            .await
+                        {
                             todo!("reclaim files: {err:?}");
                         }
                     }
                     ReclaimJob::Compound(victims) => {
-                        self.reclaim_page_files(version, victims).await;
+                        self.reclaim_page_files(progress, version, victims).await;
                     }
                     ReclaimJob::Compact(victims) => {
-                        self.reclaim_map_files(version, victims).await;
+                        self.reclaim_map_files(progress, version, victims).await;
                     }
                 }
             }
 
             if self.shutdown.is_terminated()
                 || version.has_next_version()
-                || !self.is_reclaimable(version, &self.cleaned_files)
+                || !progress.is_reclaimable()
             {
                 break;
             }
@@ -243,13 +269,18 @@ where
 
     /// Reclaim page files by compounding victims into a new map file, and
     /// install new version.
-    async fn reclaim_page_files(&mut self, version: &Arc<Version>, victims: HashSet<u32>) {
+    async fn reclaim_page_files(
+        &mut self,
+        progress: &mut ReclaimProgress,
+        version: &Arc<Version>,
+        victims: HashSet<u32>,
+    ) {
         let file_id = self.next_map_file_id;
         self.next_map_file_id += 1;
 
         let file_infos = version.page_files();
         let (virtual_page_files, map_file, obsoleted_files, dealloc_page_map) = self
-            .compound_page_files(file_id, file_infos, victims)
+            .compound_page_files(progress, file_id, file_infos, victims)
             .await
             .unwrap();
 
@@ -281,14 +312,19 @@ where
         }
     }
 
-    async fn reclaim_map_files(&mut self, version: &Arc<Version>, victims: HashSet<u32>) {
+    async fn reclaim_map_files(
+        &mut self,
+        progress: &mut ReclaimProgress,
+        version: &Arc<Version>,
+        victims: HashSet<u32>,
+    ) {
         let file_id = self.next_map_file_id;
         self.next_map_file_id += 1;
 
         let map_files = version.map_files();
         let page_files = version.page_files();
         let (virtual_infos, file_info) = self
-            .compact_map_files(file_id, map_files, page_files, &victims)
+            .compact_map_files(progress, file_id, map_files, page_files, &victims)
             .await
             .unwrap();
 
@@ -324,7 +360,18 @@ where
         }
     }
 
+    #[inline]
     async fn rewrite_file(&mut self, file_id: u32, version: &Arc<Version>) -> Result<()> {
+        self.rewrite_file_with_progress(None, file_id, version)
+            .await
+    }
+
+    async fn rewrite_file_with_progress(
+        &mut self,
+        progress: Option<&mut ReclaimProgress>,
+        file_id: u32,
+        version: &Arc<Version>,
+    ) -> Result<()> {
         if self.cleaned_files.contains(&FileId::Page(file_id)) {
             // This file has been rewritten.
             return Ok(());
@@ -335,6 +382,9 @@ where
             .get(&file_id)
             .expect("File must exists");
         self.rewrite_file_impl(file, version).await?;
+        if let Some(progress) = progress {
+            progress.track_page_file(file);
+        }
         self.cleaned_files.insert(FileId::Page(file_id));
         Ok(())
     }
@@ -488,52 +538,13 @@ where
         strategy
     }
 
-    fn is_reclaimable(&self, version: &Version, cleaned_files: &HashSet<FileId>) -> bool {
-        let used_space =
-            compute_used_space(version.page_files(), version.map_files(), cleaned_files);
-        let base_size = compute_base_size(version.page_files(), cleaned_files);
-        let additional_size = used_space.saturating_sub(base_size);
-        let target_space_amp = self.options.max_space_amplification_percent as u64;
-
-        // For log
-        let space_amp = (additional_size as f64) / (base_size as f64);
-
-        if self.options.space_used_high < used_space
-            && 2 * self.options.file_base_size < additional_size as usize
-        {
-            trace!(
-                "db is reclaimable: space used {} exceeds water mark {}, base size {}, amp {:.4}",
-                used_space,
-                self.options.space_used_high,
-                base_size,
-                space_amp
-            );
-            true
-        } else if 0 < additional_size && target_space_amp * base_size <= additional_size * 100 {
-            trace!(
-                "db is reclaimable: space amplification {:.4} exceeds target {}, base size {}, used space {}",
-                space_amp, target_space_amp, base_size, used_space
-            );
-            true
-        } else {
-            trace!(
-                "db is not reclaimable, base size {}, additional size {}, used space {}, used high {}, space amp {:.4}",
-                base_size,
-                additional_size,
-                used_space,
-                self.options.space_used_high,
-                space_amp
-            );
-            false
-        }
-    }
-
     /// Compound a set of page files into a map file
     ///
     /// NOTE: We don't mix page file and map file in compounding, because they
     /// have different age (update frequency).
     async fn compound_page_files(
         &mut self,
+        progress: &mut ReclaimProgress,
         new_file_id: u32,
         file_infos: &HashMap<u32, FileInfo>,
         victims: HashSet<u32>,
@@ -582,6 +593,7 @@ where
             } else {
                 dealloc_page_map.insert(id, dealloc_pages);
             }
+            progress.track_page_file(file_info);
             self.cleaned_files.insert(FileId::Page(id));
         }
 
@@ -653,6 +665,7 @@ where
     /// compacted files as obsoleted to reclaim space.
     async fn compact_map_files(
         &mut self,
+        progress: &mut ReclaimProgress,
         new_file_id: u32,
         map_files: &HashMap<u32, MapFileInfo>,
         page_files: &HashMap<u32, FileInfo>,
@@ -678,6 +691,7 @@ where
                 .compact_map_file(builder, &mut stats, info, page_files)
                 .await?;
             self.cleaned_files.insert(FileId::Map(id));
+            progress.track_map_file(info, page_files);
         }
 
         // When we include the page in a new segment that contains re-written pages from
@@ -798,11 +812,129 @@ impl ReclaimJobBuilder {
     }
 }
 
+impl ReclaimProgress {
+    fn new(
+        option: &Options,
+        version: &Version,
+        cleaned_files: &HashSet<FileId>,
+    ) -> ReclaimProgress {
+        let target_space_amp = option.max_space_amplification_percent as u64;
+        let space_used_high = option.space_used_high;
+        let file_base_size = option.file_base_size as u64;
+        let used_space =
+            compute_used_space(version.page_files(), version.map_files(), cleaned_files);
+        let base_size = compute_base_size(version.page_files(), cleaned_files);
+        let additional_size = used_space.saturating_sub(base_size);
+        ReclaimProgress {
+            target_space_amp,
+            space_used_high,
+            file_base_size,
+            used_space,
+            base_size,
+            additional_size,
+        }
+    }
+
+    fn track_page_file(&mut self, file: &FileInfo) {
+        assert!(file.get_map_file_id().is_none());
+        self.used_space = self.used_space.saturating_sub(file.file_size() as u64);
+        self.base_size = self.base_size.saturating_sub(file.effective_size() as u64);
+        self.additional_size = self.used_space.saturating_sub(self.base_size);
+    }
+
+    fn track_map_file(&mut self, file: &MapFileInfo, page_files: &HashMap<u32, FileInfo>) {
+        self.used_space = self.used_space.saturating_sub(file.file_size() as u64);
+        let effective_size = file
+            .meta()
+            .page_files()
+            .keys()
+            .map(|id| {
+                page_files
+                    .get(id)
+                    .map(FileInfo::effective_size)
+                    .unwrap_or_default()
+            })
+            .sum::<usize>() as u64;
+        self.base_size = self.base_size.saturating_sub(effective_size);
+        self.additional_size = self.used_space.saturating_sub(self.base_size);
+    }
+
+    fn reclaim_reason(&self) -> ReclaimReason {
+        // If space usage exceeds high watermark,
+        if self.space_used_high < self.used_space
+            // .. and enough space for reclaiming.
+            && 2 * self.file_base_size < self.additional_size
+        {
+            ReclaimReason::HighSpaceUsage
+        } else if 0 < self.additional_size
+            && self.target_space_amp * self.base_size <= self.additional_size * 100
+        {
+            ReclaimReason::LargeSpaceAmp
+        } else {
+            ReclaimReason::None
+        }
+    }
+
+    fn is_reclaimable(&self) -> bool {
+        match self.reclaim_reason() {
+            ReclaimReason::HighSpaceUsage | ReclaimReason::LargeSpaceAmp => true,
+            ReclaimReason::None => false,
+        }
+    }
+
+    fn trace_log(&self) {
+        let space_amp = (self.additional_size as f64) / (self.base_size as f64);
+        match self.reclaim_reason() {
+            ReclaimReason::HighSpaceUsage => {
+                trace!(
+                    "db is reclaimable: space used {} exceeds water mark {}, base size {}, amp {:.4}",
+                    self.used_space,
+                    self.space_used_high,
+                    self.base_size,
+                    space_amp
+                );
+            }
+            ReclaimReason::LargeSpaceAmp => {
+                trace!(
+                    "db is reclaimable: space amplification {:.4} exceeds target {}, base size {}, used space {}",
+                    space_amp, self.target_space_amp, self.base_size, self.used_space
+                );
+            }
+            ReclaimReason::None => {
+                trace!(
+                    "db is not reclaimable, base size {}, additional size {}, used space {}, used high {}, space amp {:.4}",
+                    self.base_size,
+                    self.additional_size,
+                    self.used_space,
+                    self.space_used_high,
+                    space_amp
+                );
+            }
+        }
+    }
+}
+
 impl CompactStats {
     fn collect(&mut self, info: &FileInfo) {
         self.num_active_pages += info.num_active_pages();
         self.input_size += info.total_page_size();
         self.output_size += info.effective_size();
+    }
+}
+
+/// Wait until the running reclaiming progress to finish.
+pub(crate) async fn wait_for_reclaiming(options: &Options, mut version: Arc<Version>) {
+    loop {
+        let progress = ReclaimProgress::new(options, &version, &HashSet::default());
+        progress.trace_log();
+        if progress.is_reclaimable() {
+            version.wait_for_reclaiming().await;
+            if let Some(next_version) = version.try_next() {
+                version = next_version;
+                continue;
+            }
+        }
+        break;
     }
 }
 
@@ -1079,8 +1211,11 @@ mod tests {
 
         let version = ctx.version_owner.current();
         let victims = files.keys().cloned().collect::<HashSet<_>>();
-        let (new_files, map_file, _, dealloc_page_map) =
-            ctx.compound_page_files(1, &files, victims).await.unwrap();
+        let mut progress = ReclaimProgress::new(&ctx.options, &version, &HashSet::default());
+        let (new_files, map_file, _, dealloc_page_map) = ctx
+            .compound_page_files(&mut progress, 1, &files, victims)
+            .await
+            .unwrap();
         for (id, pages) in dealloc_page_map {
             ctx.rewrite_dealloc_pages(id, &version, &pages)
                 .await
@@ -1151,8 +1286,10 @@ mod tests {
         map_files.insert(m1, m1_info);
         map_files.insert(m2, m2_info);
         let victims = HashSet::from_iter(vec![m1, m2].into_iter());
+        let version = ctx.version_owner.current();
+        let mut progress = ReclaimProgress::new(&ctx.options, &version, &HashSet::default());
         let (virtual_infos, m3_info) = ctx
-            .compact_map_files(m3, &map_files, &page_files, &victims)
+            .compact_map_files(&mut progress, m3, &map_files, &page_files, &victims)
             .await
             .unwrap();
 
@@ -1218,8 +1355,9 @@ mod tests {
         // No concurrent operations.
         unsafe { ctx.version_owner.install(delta) };
         let version = ctx.version_owner.current();
-
-        ctx.reclaim_map_files(&version, victims).await;
+        let mut progress = ReclaimProgress::new(&ctx.options, &version, &HashSet::default());
+        ctx.reclaim_map_files(&mut progress, &version, victims)
+            .await;
 
         let version = ctx.version_owner.current();
         let page_files = version.page_files();

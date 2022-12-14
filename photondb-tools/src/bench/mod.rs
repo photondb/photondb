@@ -157,11 +157,15 @@ enum BenchmarkType {
     UpdateRandom,
     ReadRandomWriteRandom,
     Flush,
+    WaitForReclaiming,
 }
 
 impl BenchmarkType {
     pub(crate) fn is_background_job(&self) -> bool {
-        matches!(self, BenchmarkType::Flush)
+        matches!(
+            self,
+            BenchmarkType::Flush | BenchmarkType::WaitForReclaiming
+        )
     }
 }
 
@@ -175,6 +179,7 @@ impl From<&str> for BenchmarkType {
             "updaterandom" => BenchmarkType::UpdateRandom,
             "readrandomwriterandom" => BenchmarkType::ReadRandomWriteRandom,
             "flush" => BenchmarkType::Flush,
+            "waitforreclaiming" => BenchmarkType::WaitForReclaiming,
             _ => panic!("invalid benchmark type"),
         }
     }

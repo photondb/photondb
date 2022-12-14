@@ -5,4 +5,4 @@ pub(crate) mod flush;
 pub(crate) mod reclaim;
 
 use flush::version_snapshot;
-pub(crate) use reclaim::RewritePage;
+pub(crate) use reclaim::{wait_for_reclaiming, RewritePage};

@@ -18,6 +18,8 @@ pub(crate) trait Store<E>: std::fmt::Debug + Clone + Sync + Send + 'static {
 
     async fn flush(&self);
 
+    async fn wait_for_reclaiming(&self);
+
     async fn close(self) -> Result<(), Self>;
 
     fn stats(&self) -> Option<TableStats>;
