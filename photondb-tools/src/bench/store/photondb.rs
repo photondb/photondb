@@ -26,6 +26,7 @@ where
         options.page_store.cache_strict_capacity_limit = true;
         options.page_store.cache_estimated_entry_charge = 4840;
         options.page_store.cache_capacity = config.cache_size as usize;
+        options.page_store.max_write_buffers = config.max_write_buffers;
         options.page_store.write_buffer_capacity = config.write_buffer_size as u32;
         options.page_store.disable_space_reclaiming = config.disable_space_reclaiming;
         options.page_store.max_space_amplification_percent = config.max_space_amplification_percent;
