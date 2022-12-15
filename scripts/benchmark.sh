@@ -20,6 +20,7 @@ function display_usage() {
   echo -e "\tfillseq_disable_wal"
   echo -e "\tupdaterandom"
   echo -e "\treadrandom"
+  echo -e "\twaitforreclaiming"
   echo -e "\tdebug"
   echo ""
   echo "Generic enviroment Variables:"
@@ -37,6 +38,8 @@ function display_usage() {
   echo -e "\tDURATION\t\t\tNumber of seconds for which the test runs"
   echo -e "\tWRITES\t\t\t\tNumber of writes for which the test runs"
   echo -e "\tWRITE_BUFFER_SIZE_MB\t\tThe size of the write buffer in MB (default: 128)"
+  echo -e "\tDISABLE_SPACE_RECLAIMING\tDisable space reclamation (default: false)"
+  echo -e "\tMAX_SPACE_AMP\t\t\tThe max percent of space amplification to reclaim space (default: 10)"
   echo -e "\tSPACE_USED_HIGH\t\t\tThe space watermark which the DB needed to reclaim, in bytes (default: 100G)"
   echo -e "\tUSE_O_DIRECT\t\t\tUse O_DIRECT for user reads and compaction"
   echo -e "\tSTATS_INTERVAL_SECONDS\t\tValue for stats_interval_seconds"
@@ -86,6 +89,8 @@ write_buffer_mb=${WRITE_BUFFER_SIZE_MB:-128}
 space_used_high=${SPACE_USED_HIGH:-107374182400}
 stats_interval_seconds=${STATS_INTERVAL_SECONDS:-60}
 report_interval_seconds=${REPORT_INTERVAL_SECONDS:-1}
+max_space_amp=${MAX_SPACE_AMP:-10}
+disable_space_reclaiming=${DISABLE_SPACE_RECLAIMING:-0}
 
 # o_direct_flags=""
 # if [ ! -z $USE_O_DIRECT ]; then
@@ -104,6 +109,7 @@ const_params_base="
   \
   --write-buffer-size=$(( $write_buffer_mb * M)) \
   --space-used-high=$space_used_high \
+  --max-space-amplification-percent=$max_space_amp \
   \
   --verify-checksum=1 \
   \
@@ -114,6 +120,10 @@ const_params_base="
   $bench_args"
 
 const_params="$const_params_base "
+
+if [ $disable_space_reclaiming = 1 ] || [ $disable_space_reclaiming = true ]; then
+    const_params="$const_params --disable-space-reclaiming"
+fi
 
 # You probably don't want to set both --writes and --duration
 if [ $duration -gt 0 ]; then
@@ -378,6 +388,27 @@ function run_readrandom {
   summarize_result $log_file_name readrandom.t${num_threads} readrandom
 }
 
+function run_waitforreclaiming {
+  echo "Wait for reclaiming"
+  log_file_name="${output_dir}/benchmark_waitforreclaiming.log"
+  time_cmd=$( get_cmd $log_file_name.time )
+  cmd="$time_cmd ./target/release/photondb-tools bench --benchmarks=waitforreclaiming \
+        $params_w \
+        --use-existing-db=1 \
+        --seed-base=$( date +%s ) \
+        2>&1 | tee -a $log_file_name"
+  if [[ "$job_id" != "" ]]; then
+    echo "Job ID: ${job_id}" > $log_file_name
+    echo $cmd | tee -a $log_file_name
+  else
+    echo $cmd | tee $log_file_name
+  fi
+  start_stats $log_file_name.stats
+  eval $cmd
+  stop_stats $log_file_name.stats
+  summarize_result $log_file_name waitforreclaiming waitforreclaiming
+}
+
 function now() {
   echo `date +"%s"`
 }
@@ -401,6 +432,8 @@ for job in ${jobs[@]}; do
     run_change updaterandom updaterandom updaterandom
   elif [ $job = readrandom ]; then
     run_readrandom
+  elif [ $job = waitforreclaiming ]; then
+    run_waitforreclaiming
   elif [ $job = debug ]; then
     num_keys=1000; # debug
     echo "Setting num_keys to $num_keys"
