@@ -10,7 +10,7 @@ mod tree_test {
     use quickcheck::*;
     use rand_distr::*;
 
-    use crate::{raw::table, *};
+    use crate::*;
 
     #[test]
     #[ignore]
