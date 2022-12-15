@@ -439,7 +439,8 @@ mod tests {
             wb.seal().unwrap();
             let (deleted_pages, file_info, _) = ctx.build_page_file(&wb).await.unwrap();
             assert!(deleted_pages.is_empty());
-            assert!(!file_info.is_page_active(addr));
+            assert!(file_info.may_page_active(addr));
+            assert!(file_info.get_page_handle(addr).is_none())
         }
     }
 
@@ -454,7 +455,8 @@ mod tests {
             wb.seal().unwrap();
             let (deleted_pages, file_info, _) = ctx.build_page_file(&wb).await.unwrap();
             assert!(deleted_pages.is_empty());
-            assert!(!file_info.is_page_active(addr));
+            assert!(file_info.may_page_active(addr));
+            assert!(file_info.get_page_handle(addr).is_none());
         }
     }
 
@@ -472,7 +474,6 @@ mod tests {
     }
 
     fn make_obsoleted_file(id: u32) -> FileInfo {
-        let active_pages = roaring::RoaringBitmap::new();
         let meta = FileMeta::new(
             id,
             0,
@@ -482,12 +483,18 @@ mod tests {
             Compression::NONE,
             ChecksumType::CRC32,
         );
-        FileInfo::new(active_pages, 0, id, id, HashSet::default(), Arc::new(meta))
+        FileInfo::new(
+            0,
+            roaring::RoaringBitmap::new(),
+            0,
+            id,
+            id,
+            HashSet::default(),
+            Arc::new(meta),
+        )
     }
 
-    fn make_active_file(id: u32, page_addr: u32) -> FileInfo {
-        let mut active_pages = roaring::RoaringBitmap::new();
-        active_pages.insert(page_addr);
+    fn make_active_file(id: u32, _page_addr: u32) -> FileInfo {
         let meta = FileMeta::new(
             id,
             1,
@@ -497,7 +504,15 @@ mod tests {
             Compression::NONE,
             ChecksumType::CRC32,
         );
-        FileInfo::new(active_pages, 1, id, id, HashSet::default(), Arc::new(meta))
+        FileInfo::new(
+            1,
+            roaring::RoaringBitmap::new(),
+            1,
+            id,
+            id,
+            HashSet::default(),
+            Arc::new(meta),
+        )
     }
 
     #[test]
@@ -512,7 +527,7 @@ mod tests {
     }
 
     fn make_obsoleted_file_but_refer_others(id: u32, refer: u32) -> FileInfo {
-        let active_pages = roaring::RoaringBitmap::new();
+        let dealloc_pages = roaring::RoaringBitmap::new();
         let meta = FileMeta::new(
             id,
             0,
@@ -524,7 +539,7 @@ mod tests {
         );
         let mut refers = HashSet::default();
         refers.insert(refer);
-        FileInfo::new(active_pages, 0, id, id, refers, Arc::new(meta))
+        FileInfo::new(0, dealloc_pages, 0, id, id, refers, Arc::new(meta))
     }
 
     #[test]

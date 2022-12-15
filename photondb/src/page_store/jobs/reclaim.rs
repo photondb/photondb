@@ -1242,15 +1242,20 @@ mod tests {
         assert!(new_files
             .get(&file_id_1)
             .unwrap()
-            .is_page_active(pa(file_id_1, 16)));
-        assert!(!new_files
+            .may_page_active(pa(file_id_1, 16)));
+        assert!(new_files
             .get(&file_id_1)
             .unwrap()
-            .is_page_active(pa(file_id_1, 32)));
+            .may_page_active(pa(file_id_1, 32)));
+        assert!(new_files
+            .get(&file_id_1)
+            .unwrap()
+            .get_page_handle(pa(file_id_1, 32))
+            .is_none());
         assert!(new_files
             .get(&file_id_2)
             .unwrap()
-            .is_page_active(pa(file_id_2, 32)));
+            .may_page_active(pa(file_id_2, 32)));
     }
 
     async fn build_map_file(
