@@ -18,6 +18,7 @@ function display_usage() {
   echo ""
   echo "These are the available benchmark tests:"
   echo -e "\tfillseq_disable_wal"
+  echo -e "\tbulkload"
   echo -e "\tupdaterandom"
   echo -e "\treadrandom"
   echo -e "\twaitforreclaiming"
@@ -341,6 +342,26 @@ function run_fillseq {
   summarize_result $log_file_name $test_name fillseq
 }
 
+function run_bulkload {
+  echo "Bulk loading $num_keys random keys"
+  log_file_name=$output_dir/benchmark_bulkload_fillrandom.log
+  time_cmd=$( get_cmd $log_file_name.time )
+  cmd="$time_cmd ./target/release/photondb-tools bench --benchmarks=fillrandom \
+       --use_existing_db=0 \
+       $params_bulkload \
+       --threads=1 \
+       --seed=$( date +%s ) \
+       2>&1 | tee -a $log_file_name"
+  if [[ "$job_id" != "" ]]; then
+    echo "Job ID: ${job_id}" > $log_file_name
+    echo $cmd | tee -a $log_file_name
+  else
+    echo $cmd | tee $log_file_name
+  fi
+  eval $cmd
+  summarize_result $log_file_name bulkload fillrandom
+}
+
 function run_change {
   output_name=$1
   grep_name=$2
@@ -428,6 +449,8 @@ for job in ${jobs[@]}; do
   start=$(now)
   if [ $job = fillseq_disable_wal ]; then
     run_fillseq 1
+  elif [ $job = bulkload ]; then
+    run_bulkload
   elif [ $job = updaterandom ]; then
     run_change updaterandom updaterandom updaterandom
   elif [ $job = readrandom ]; then
