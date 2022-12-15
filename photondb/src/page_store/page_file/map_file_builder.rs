@@ -1,5 +1,8 @@
 #![allow(unused)]
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use super::{
     compression::Compression, constant::*, types::MapFileMeta, BlockHandler, BufferedWriter,
@@ -168,7 +171,7 @@ impl<'a, E: Env> PartialFileBuilder<'a, E> {
             self.inner
                 .as_partial_file_meta(self.builder.file_id, self.base_offset, data);
         let file_pages = file_meta.file_page_count();
-        let dealloc_pages = roaring::RoaringBitmap::new();
+        let dealloc_pages = HashSet::new();
         let active_size = file_meta.total_page_size();
         self.builder.file_offset = self.builder.writer.next_offset() as usize;
         let file_info = FileInfo::new(

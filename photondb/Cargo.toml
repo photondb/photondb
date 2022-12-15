@@ -18,7 +18,6 @@ once_cell = "1.15"
 photonio = { workspace = true }
 prost = "0.11"
 thiserror = "1.0.37"
-roaring = "0.10"
 bytes = "1.2.1"
 libc = "0.2.137"
 snap = "1.1.0"

@@ -23,7 +23,7 @@ pub(crate) struct PageHandle {
 #[derive(Clone)]
 pub(crate) struct FileInfo {
     file_pages: usize,
-    dealloc_pages: roaring::RoaringBitmap,
+    dealloc_pages: HashSet<u32>,
 
     up1: u32,
     up2: u32,
@@ -39,7 +39,7 @@ pub(crate) struct FileInfo {
 impl FileInfo {
     pub(crate) fn new(
         file_pages: usize,
-        dealloc_pages: roaring::RoaringBitmap,
+        dealloc_pages: HashSet<u32>,
         active_size: usize,
         up1: u32,
         up2: u32,
@@ -64,7 +64,7 @@ impl FileInfo {
 
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
-        self.file_pages == 0 || (self.dealloc_pages.len() == (self.file_pages as u64))
+        self.file_pages == 0 || (self.dealloc_pages.len() == self.file_pages)
     }
 
     #[inline]
@@ -78,7 +78,7 @@ impl FileInfo {
 
     pub(crate) fn deactivate_page(&mut self, now: u32, page_addr: u64) -> bool {
         let (_, index) = split_page_addr(page_addr);
-        if self.dealloc_pages.push(index) {
+        if self.dealloc_pages.insert(index) {
             if let Some((_, page_size)) = self.meta.get_page_handle(page_addr) {
                 self.active_size -= page_size;
             }
@@ -112,7 +112,7 @@ impl FileInfo {
     #[inline]
     pub(crate) fn may_page_active(&self, page_addr: u64) -> bool {
         let index = page_addr as u32;
-        !self.dealloc_pages.contains(index)
+        !self.dealloc_pages.contains(&index)
     }
 
     #[inline]
@@ -465,7 +465,7 @@ impl<'a> Iterator for FileInfoIterator<'a> {
         loop {
             let id = *self.iter.next()?;
             let offset = id as u32;
-            if self.info.dealloc_pages.contains(offset) {
+            if self.info.dealloc_pages.contains(&offset) {
                 continue;
             }
             return Some(id);

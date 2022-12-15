@@ -485,7 +485,7 @@ mod tests {
         );
         FileInfo::new(
             0,
-            roaring::RoaringBitmap::new(),
+            HashSet::new(),
             0,
             id,
             id,
@@ -506,7 +506,7 @@ mod tests {
         );
         FileInfo::new(
             1,
-            roaring::RoaringBitmap::new(),
+            HashSet::new(),
             1,
             id,
             id,
@@ -527,7 +527,6 @@ mod tests {
     }
 
     fn make_obsoleted_file_but_refer_others(id: u32, refer: u32) -> FileInfo {
-        let dealloc_pages = roaring::RoaringBitmap::new();
         let meta = FileMeta::new(
             id,
             0,
@@ -539,7 +538,7 @@ mod tests {
         );
         let mut refers = HashSet::default();
         refers.insert(refer);
-        FileInfo::new(0, dealloc_pages, 0, id, id, refers, Arc::new(meta))
+        FileInfo::new(0, HashSet::new(), 0, id, id, refers, Arc::new(meta))
     }
 
     #[test]

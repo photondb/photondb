@@ -100,7 +100,7 @@ impl<'a, E: Env> FileBuilder<'a, E> {
         let meta = self.inner.as_page_file_meta(file_size, footer.data_handle);
         let file_pages = meta.file_page_count();
 
-        let dealloc_pages = roaring::RoaringBitmap::new();
+        let dealloc_pages = HashSet::new();
         let active_size = meta.total_page_size();
         Ok(FileInfo::new(
             file_pages,
