@@ -125,12 +125,16 @@ pub(crate) struct Args {
     disable_space_reclaiming: bool,
 
     /// The max percentage of the space amplification.
-    #[clap(long, default_value_t = 100)]
+    #[clap(long, default_value_t = 20)]
     max_space_amplification_percent: usize,
 
     /// The space watermark which the DB needed to reclaim
     #[clap(long, default_value_t = 10 << 30)]
     space_used_high: u64,
+
+    /// The maxmum number of write buffers.
+    #[arg(long, default_value_t = 4)]
+    max_write_buffers: usize,
 
     /// Size for write buffer.
     #[arg(long, default_value_t = 134217728)]
