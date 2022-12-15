@@ -228,7 +228,10 @@ impl<E: Env> FileReaderCache<E> {
             return Ok(cached.value().clone());
         }
         let reader = init.await;
-        self.cache.insert(key, Some(reader.clone()), 1)?;
+        match self.cache.insert(key, Some(reader.clone()), 1) {
+            Ok(_) | Err(Error::MemoryLimit) => {}
+            Err(err) => return Err(err),
+        }
         Ok(reader)
     }
 

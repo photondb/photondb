@@ -17,8 +17,7 @@ mod tree_test {
     fn btreemap_cmp_test() {
         env_logger::init();
         let f = |ops| {
-            // let path = tempdir::TempDir::new("sdd").unwrap();
-            let path = tempdir::TempDir::new_in("/home/robi/test1", "sdd").unwrap();
+            let path = tempdir::TempDir::new("sdd").unwrap();
             let r = match panic::catch_unwind(|| {
                 if let Err(e) = prop_cmp_btreemap(ops, path.path()) {
                     eprintln!("check fail: {:?}", e);
@@ -120,6 +119,8 @@ mod tree_test {
     fn prop_cmp_btreemap(ops: Vec<Op>, path: impl AsRef<Path>) -> Result<()> {
         let mut table_opt = TableOptions::default();
         table_opt.page_store.write_buffer_capacity = 16 << 10;
+        table_opt.page_store.cache_strict_capacity_limit = true;
+        table_opt.page_store.cache_capacity = 8 << 10;
         let mut table = std::Table::open(path.as_ref(), table_opt)?;
         info!("open table");
         let mut treemap: BTreeMap<Key, u16> = BTreeMap::new();
@@ -128,7 +129,11 @@ mod tree_test {
         for op in ops {
             match op {
                 Op::Set(k, v) => {
-                    let prev_tab = table.get(&k.0, lsn).unwrap();
+                    let prev_tab = table.get(&k.0, lsn);
+                    if let Err(Error::MemoryLimit) = prev_tab {
+                        continue;
+                    }
+                    let prev_tab = prev_tab.unwrap();
                     lsn += 1;
                     info!("put {:?}", k);
                     table.put(&k.0, lsn, &[0, v]).unwrap();
@@ -144,7 +149,12 @@ mod tree_test {
                     );
                 }
                 Op::Get(k) => {
-                    let res1 = table.get(&k.0, lsn).unwrap().map(|v| bytes_to_u16(&v));
+                    let res1 = table.get(&k.0, lsn);
+                    if let Err(Error::MemoryLimit) = res1 {
+                        continue;
+                    }
+                    let res1 = res1.unwrap();
+                    let res1 = res1.map(|v| bytes_to_u16(&v));
                     lsn += 1;
                     let res2 = treemap.get(&k).cloned();
                     assert_eq!(

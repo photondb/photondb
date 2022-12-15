@@ -168,10 +168,7 @@ pub(crate) mod facade {
                 .read_file_page(file_id, file_info.meta(), handle)
                 .await?;
             let charge = buf.len();
-            let cache_entry = self
-                .page_cache
-                .insert(addr, Some(buf), charge)
-                .expect("insert cache fail");
+            let cache_entry = self.page_cache.insert(addr, Some(buf), charge)?;
 
             Ok((cache_entry.unwrap(), false))
         }
@@ -348,9 +345,14 @@ pub(crate) mod facade {
                 return Ok(());
             }
             let val = page_content.to_owned(); // TODO: aligned buffer pool
-            let guard = self
+            let guard = match self
                 .page_cache
-                .insert(page_addr, Some(val), page_content.len())?;
+                .insert(page_addr, Some(val), page_content.len())
+            {
+                Ok(guard) => guard,
+                Err(Error::MemoryLimit) => return Ok(()),
+                Err(err) => return Err(err),
+            };
             drop(guard);
             Ok(())
         }
