@@ -135,7 +135,7 @@ impl<S: Store<E>, E: Env> Workloads<S, E> {
 
     async fn exec_op(&mut self, op: &BenchOperation, _warmup: bool) -> Stats<S, E> {
         if op.benchmark_type.is_background_job() {
-            return self.exec_bg_op(op).await;
+            return self.exec_bg_op(*op).await;
         }
 
         let thread_num = self.config.threads;
@@ -201,17 +201,22 @@ impl<S: Store<E>, E: Env> Workloads<S, E> {
         op_stats
     }
 
-    async fn exec_bg_op(&mut self, op: &BenchOperation) -> Stats<S, E> {
+    async fn exec_bg_op(&mut self, op: BenchOperation) -> Stats<S, E> {
         let stats = Stats::start(0, self.config.to_owned(), self.table.to_owned());
-        match op.benchmark_type {
-            BenchmarkType::Flush => {
-                self.table.as_ref().unwrap().flush().await;
-            }
-            BenchmarkType::WaitForReclaiming => {
-                self.table.as_ref().unwrap().wait_for_reclaiming().await;
-            }
-            _ => unreachable!(),
-        }
+        let table = self.table.as_ref().unwrap().clone();
+        self.env
+            .spawn_background(async move {
+                match op.benchmark_type {
+                    BenchmarkType::Flush => {
+                        table.flush().await;
+                    }
+                    BenchmarkType::WaitForReclaiming => {
+                        table.wait_for_reclaiming().await;
+                    }
+                    _ => unreachable!(),
+                }
+            })
+            .await;
         stats
     }
 
