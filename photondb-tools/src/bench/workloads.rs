@@ -135,7 +135,7 @@ impl<S: Store<E>, E: Env> Workloads<S, E> {
 
     async fn exec_op(&mut self, op: &BenchOperation, _warmup: bool) -> Stats<S, E> {
         if op.benchmark_type.is_background_job() {
-            return self.exec_bg_op(op.clone()).await;
+            return self.exec_bg_op(*op).await;
         }
 
         let thread_num = self.config.threads;
