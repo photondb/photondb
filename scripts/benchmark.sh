@@ -358,7 +358,9 @@ function run_bulkload {
   else
     echo $cmd | tee $log_file_name
   fi
+  start_stats $log_file_name.stats
   eval $cmd
+  stop_stats $log_file_name.stats
   summarize_result $log_file_name bulkload fillrandom
 }
 
