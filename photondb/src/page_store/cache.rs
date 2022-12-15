@@ -486,11 +486,10 @@ pub(crate) mod clock {
                 return Err(Error::MemoryLimit);
             }
             // Grab any available capacity, and free up any more required.
-            let old_usage = self.usage.load(Ordering::Relaxed);
-            let new_usage = if old_usage != capacity {
-                let mut new_usage;
-                loop {
-                    new_usage = capacity.min(old_usage + total_charge);
+            let (old_usage, new_usage) = loop {
+                let old_usage = self.usage.load(Ordering::Relaxed);
+                if old_usage != capacity {
+                    let new_usage = capacity.min(old_usage + total_charge);
                     if self
                         .usage
                         .compare_exchange_weak(
@@ -501,12 +500,11 @@ pub(crate) mod clock {
                         )
                         .is_ok()
                     {
-                        break;
+                        break (old_usage, new_usage);
                     }
+                } else {
+                    break (old_usage, old_usage);
                 }
-                new_usage
-            } else {
-                old_usage
             };
             let need_evict_charge = old_usage + total_charge - new_usage;
             let mut request_evict_charge = need_evict_charge;
