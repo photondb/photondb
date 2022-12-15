@@ -344,12 +344,12 @@ function run_fillseq {
 
 function run_bulkload {
   echo "Bulk loading $num_keys random keys"
-  log_file_name=$output_dir/benchmark_bulkload_fillrandom.log
+  log_file_name=$output_dir/benchmark_bulkload_fillrandom.t${num_threads}.log
   time_cmd=$( get_cmd $log_file_name.time )
   cmd="$time_cmd ./target/release/photondb-tools bench --benchmarks=fillrandom \
        --use_existing_db=0 \
        $params_bulkload \
-       --threads=1 \
+       --threads=${num_threads} \
        --seed=$( date +%s ) \
        2>&1 | tee -a $log_file_name"
   if [[ "$job_id" != "" ]]; then
