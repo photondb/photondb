@@ -206,10 +206,12 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
 
         // 1. recover virtual file infos.
         for (&file_id, file_meta) in &meta_reader.file_meta_map {
-            let active_pages = file_meta.pages_bitmap();
+            let file_pages = file_meta.file_page_count();
+            let dealloc_pages = HashSet::new();
             let active_size = file_meta.total_page_size();
             let file_info = FileInfo::new(
-                active_pages,
+                file_pages,
+                dealloc_pages,
                 active_size,
                 file.up1,
                 file.up2,
@@ -265,10 +267,12 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
         }
 
         // 2. recover file info
-        let active_pages = file_meta.pages_bitmap();
+        let dealloc_pages = HashSet::new();
+        let file_pages = file_meta.file_page_count();
         let active_size = file_meta.total_page_size();
         let info = FileInfo::new(
-            active_pages,
+            file_pages,
+            dealloc_pages,
             active_size,
             file.up1,
             file.up2,

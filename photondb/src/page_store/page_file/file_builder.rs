@@ -98,10 +98,13 @@ impl<'a, E: Env> FileBuilder<'a, E> {
         let file_size = foot_offset as usize + footer_dat.len();
 
         let meta = self.inner.as_page_file_meta(file_size, footer.data_handle);
-        let active_pages = meta.pages_bitmap();
+        let file_pages = meta.file_page_count();
+
+        let dealloc_pages = HashSet::new();
         let active_size = meta.total_page_size();
         Ok(FileInfo::new(
-            active_pages,
+            file_pages,
+            dealloc_pages,
             active_size,
             self.inner.file_id,
             self.inner.file_id,
