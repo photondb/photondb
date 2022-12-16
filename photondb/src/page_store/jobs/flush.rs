@@ -402,7 +402,7 @@ mod tests {
             version::{DeltaVersion, Version, VersionOwner},
             ChecksumType, FileInfo, Manifest, PageFiles, WriteBuffer,
         },
-        util::shutdown::ShutdownNotifier,
+        util::{bitmap::FixedBitmap, shutdown::ShutdownNotifier},
         PageStoreOptions,
     };
 
@@ -484,8 +484,7 @@ mod tests {
             ChecksumType::CRC32,
         );
         FileInfo::new(
-            0,
-            HashSet::new(),
+            FixedBitmap::new(123),
             0,
             id,
             id,
@@ -505,8 +504,7 @@ mod tests {
             ChecksumType::CRC32,
         );
         FileInfo::new(
-            1,
-            HashSet::new(),
+            FixedBitmap::new(1),
             1,
             id,
             id,
@@ -538,7 +536,7 @@ mod tests {
         );
         let mut refers = HashSet::default();
         refers.insert(refer);
-        FileInfo::new(0, HashSet::new(), 0, id, id, refers, Arc::new(meta))
+        FileInfo::new(FixedBitmap::new(1), 0, id, id, refers, Arc::new(meta))
     }
 
     #[test]

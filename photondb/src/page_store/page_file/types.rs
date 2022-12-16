@@ -1,10 +1,13 @@
 use std::{
-    collections::{btree_map::Keys, BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
 use super::{compression::Compression, ChecksumType};
-use crate::page_store::{Error, Result};
+use crate::{
+    page_store::{Error, Result},
+    util::bitmap::FixedBitmap,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum FileId {
@@ -22,8 +25,7 @@ pub(crate) struct PageHandle {
 /// (partial of map file).
 #[derive(Clone)]
 pub(crate) struct FileInfo {
-    file_pages: usize,
-    dealloc_pages: HashSet<u32>,
+    dealloc_pages: FixedBitmap,
 
     up1: u32,
     up2: u32,
@@ -38,8 +40,7 @@ pub(crate) struct FileInfo {
 
 impl FileInfo {
     pub(crate) fn new(
-        file_pages: usize,
-        dealloc_pages: HashSet<u32>,
+        dealloc_pages: FixedBitmap,
         active_size: usize,
         up1: u32,
         up2: u32,
@@ -47,7 +48,6 @@ impl FileInfo {
         meta: Arc<FileMeta>,
     ) -> Self {
         Self {
-            file_pages,
             dealloc_pages,
             active_size,
             up1,
@@ -64,7 +64,7 @@ impl FileInfo {
 
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
-        self.file_pages == 0 || (self.dealloc_pages.len() == self.file_pages)
+        self.dealloc_pages.is_full()
     }
 
     #[inline]
@@ -77,27 +77,30 @@ impl FileInfo {
     }
 
     pub(crate) fn deactivate_page(&mut self, now: u32, page_addr: u64) -> bool {
-        let (_, index) = split_page_addr(page_addr);
-        if self.dealloc_pages.insert(index) {
-            if let Some((_, page_size)) = self.meta.get_page_handle(page_addr) {
-                self.active_size -= page_size;
-            }
+        let Some((index, _, page_size)) = self.meta.get_page_handle(page_addr) else {
+            return false;
+        };
+
+        if self.dealloc_pages.set(index as u32) {
+            self.active_size -= page_size;
             if self.up1 < now {
                 self.up2 = self.up1;
                 self.up1 = now;
             }
             return true;
         }
+
         false
     }
 
     /// Get the [`PageHandle`] of the corresponding page. Returns `None` if no
     /// such active page exists.
     pub(crate) fn get_page_handle(&self, page_addr: u64) -> Option<PageHandle> {
-        if !self.may_page_active(page_addr) {
+        let (index, offset, size) = self.meta.get_page_handle(page_addr)?;
+        if self.dealloc_pages.test(index as u32) {
             return None;
         }
-        let (offset, size) = self.meta.get_page_handle(page_addr)?;
+
         Some(PageHandle {
             offset: offset as u32,
             size: size as u32,
@@ -109,10 +112,13 @@ impl FileInfo {
         self.meta.clone()
     }
 
-    #[inline]
+    #[cfg(test)]
     pub(crate) fn may_page_active(&self, page_addr: u64) -> bool {
-        let index = page_addr as u32;
-        !self.dealloc_pages.contains(&index)
+        self.meta
+            .get_page_handle(page_addr)
+            .map(|(index, _, _)| index as u32)
+            .map(|index| !self.dealloc_pages.test(index))
+            .unwrap_or_default()
     }
 
     #[inline]
@@ -127,7 +133,7 @@ impl FileInfo {
 
     #[inline]
     pub(crate) fn num_active_pages(&self) -> usize {
-        self.file_pages - (self.dealloc_pages.len() as usize)
+        self.dealloc_pages.free() as usize
     }
 
     #[inline]
@@ -142,7 +148,7 @@ impl FileInfo {
 
     #[inline]
     pub(crate) fn empty_pages_rate(&self) -> f64 {
-        let active_pages = self.num_active_pages() as f64;
+        let active_pages = self.dealloc_pages.free() as f64;
         let total_pages = self.meta.total_pages() as f64 + 0.1;
         debug_assert!(active_pages <= total_pages);
         1.0 - (active_pages / total_pages)
@@ -189,7 +195,8 @@ pub(crate) struct FileMeta {
     /// The id of map file which contains the page file.
     belong_to: Option<u32>,
 
-    data_offsets: BTreeMap<u64, u64>, // TODO: reduce this size.
+    data_offsets: Vec<(/* addr */ u64, /* offset */ u64)>,
+    // data_offsets: BTreeMap<u64, u64>, // TODO: reduce this size.
 
     // [0] -> page_table, [1] ->  delete page, [2], meta_block_end
     meta_indexes: Vec<u64>,
@@ -208,6 +215,7 @@ impl FileMeta {
         compression: Compression,
         checksum_type: ChecksumType,
     ) -> Self {
+        let data_offsets: Vec<_> = data_offsets.into_iter().collect();
         Self {
             file_id,
             file_size,
@@ -232,6 +240,7 @@ impl FileMeta {
         compression: Compression,
         checksum_type: ChecksumType,
     ) -> Self {
+        let data_offsets: Vec<_> = data_offsets.into_iter().collect();
         FileMeta {
             file_id,
             file_size: 0,
@@ -259,19 +268,25 @@ impl FileMeta {
     pub(crate) fn get_page_handle(
         &self,
         page_addr: u64,
-    ) -> Option<(u64 /* offset */, usize /* size */)> {
-        let mut iter = self.data_offsets.range(page_addr..);
-        let start_offset = match iter.next() {
-            Some((addr, offset)) if *addr == page_addr => *offset,
-            _ => return None, // no page exist.
+    ) -> Option<(
+        usize, /* index */
+        u64,   /* offset */
+        usize, /* size */
+    )> {
+        let (index, start_offset) = match self
+            .data_offsets
+            .binary_search_by_key(&page_addr, |(addr, _)| *addr)
+        {
+            Ok(index) => (index, unsafe { self.data_offsets.get_unchecked(index) }.1),
+            Err(_) => return None, // no such page exists
         };
-        let end_offset = match iter.next() {
+        let end_offset = match self.data_offsets.get(index + 1) {
             Some((_, offset)) => *offset,
             None => self.page_table_offset() as u64, /* it's the last page use
                                                       * total-page-size as
                                                       * end val. */
         };
-        Some((start_offset, (end_offset - start_offset) as usize))
+        Some((index, start_offset, (end_offset - start_offset) as usize))
     }
 
     /// Return the total page (include inactive page).
@@ -300,11 +315,6 @@ impl FileMeta {
     #[inline]
     pub(crate) fn block_size(&self) -> usize {
         self.block_size
-    }
-
-    #[inline]
-    pub(crate) fn data_offsets(&self) -> &BTreeMap<u64, u64> {
-        &self.data_offsets
     }
 
     #[inline]
@@ -338,8 +348,8 @@ impl FileMeta {
     }
 
     #[inline]
-    pub(crate) fn file_page_count(&self) -> usize {
-        self.data_offsets().keys().len()
+    pub(crate) fn dealloc_pages_bitmap(&self) -> FixedBitmap {
+        FixedBitmap::new(self.data_offsets.len() as u32)
     }
 }
 
@@ -448,13 +458,12 @@ impl MapFileMeta {
 /// active pages.
 pub(crate) struct FileInfoIterator<'a> {
     info: &'a FileInfo,
-    iter: Keys<'a, u64, u64>,
+    index: usize,
 }
 
 impl<'a> FileInfoIterator<'a> {
     fn new(info: &'a FileInfo) -> Self {
-        let iter = info.meta.data_offsets().keys();
-        FileInfoIterator { info, iter }
+        FileInfoIterator { info, index: 0 }
     }
 }
 
@@ -463,12 +472,16 @@ impl<'a> Iterator for FileInfoIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let id = *self.iter.next()?;
-            let offset = id as u32;
-            if self.info.dealloc_pages.contains(&offset) {
-                continue;
+            let index = self.index;
+            self.index += 1;
+            if self.info.meta.data_offsets.len() <= index {
+                return None;
             }
-            return Some(id);
+
+            if !self.info.dealloc_pages.test(index as u32) {
+                let (page_addr, _) = unsafe { self.info.meta.data_offsets.get_unchecked(index) };
+                return Some(*page_addr);
+            }
         }
     }
 }
