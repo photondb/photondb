@@ -196,7 +196,6 @@ pub(crate) struct FileMeta {
     belong_to: Option<u32>,
 
     data_offsets: Vec<(/* addr */ u64, /* offset */ u64)>,
-    // data_offsets: BTreeMap<u64, u64>, // TODO: reduce this size.
 
     // [0] -> page_table, [1] ->  delete page, [2], meta_block_end
     meta_indexes: Vec<u64>,
