@@ -30,8 +30,7 @@
     io_error_more,
     type_alias_impl_trait,
     hash_drain_filter,
-    pointer_is_aligned,
-    test
+    pointer_is_aligned
 )]
 
 pub mod env;
