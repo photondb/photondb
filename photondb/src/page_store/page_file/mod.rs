@@ -507,7 +507,7 @@ pub(crate) mod facade {
                     //     8192 + 8192 / 2 + 8192 / 3
                     // );
                     let page3 = page_addr(2, 4);
-                    let (page3_offset, _page3_size) =
+                    let (_, page3_offset, _page3_size) =
                         meta_reader.file_metadata().get_page_handle(page3).unwrap();
                     let handle = ret_info.get_page_handle(page3).unwrap();
                     assert_eq!(page3_offset as u32, handle.offset);
@@ -521,7 +521,7 @@ pub(crate) mod facade {
                 };
 
                 {
-                    let (offset, size) = meta.get_page_handle(page_addr(2, 4)).unwrap();
+                    let (_, offset, size) = meta.get_page_handle(page_addr(2, 4)).unwrap();
                     let handle = PageHandle {
                         offset: offset as u32,
                         size: size as u32,

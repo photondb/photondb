@@ -170,13 +170,11 @@ impl<'a, E: Env> PartialFileBuilder<'a, E> {
         let file_meta =
             self.inner
                 .as_partial_file_meta(self.builder.file_id, self.base_offset, data);
-        let file_pages = file_meta.file_page_count();
-        let dealloc_pages = HashSet::new();
+        let staled_pages = file_meta.dealloc_pages_bitmap();
         let active_size = file_meta.total_page_size();
         self.builder.file_offset = self.builder.writer.next_offset() as usize;
         let file_info = FileInfo::new(
-            file_pages,
-            dealloc_pages,
+            staled_pages,
             active_size,
             self.file_id,
             self.file_id,
