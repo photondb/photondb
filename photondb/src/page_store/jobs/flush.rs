@@ -439,7 +439,7 @@ mod tests {
             wb.seal().unwrap();
             let (deleted_pages, file_info, _) = ctx.build_page_file(&wb).await.unwrap();
             assert!(deleted_pages.is_empty());
-            assert!(file_info.may_page_active(addr));
+            assert!(!file_info.is_page_active(addr));
             assert!(file_info.get_page_handle(addr).is_none())
         }
     }
@@ -455,7 +455,7 @@ mod tests {
             wb.seal().unwrap();
             let (deleted_pages, file_info, _) = ctx.build_page_file(&wb).await.unwrap();
             assert!(deleted_pages.is_empty());
-            assert!(file_info.may_page_active(addr));
+            assert!(!file_info.is_page_active(addr));
             assert!(file_info.get_page_handle(addr).is_none());
         }
     }
@@ -484,7 +484,7 @@ mod tests {
             ChecksumType::CRC32,
         );
         FileInfo::new(
-            FixedBitmap::new(123),
+            FixedBitmap::new(0),
             0,
             id,
             id,
@@ -536,7 +536,7 @@ mod tests {
         );
         let mut refers = HashSet::default();
         refers.insert(refer);
-        FileInfo::new(FixedBitmap::new(1), 0, id, id, refers, Arc::new(meta))
+        FileInfo::new(FixedBitmap::new(0), 0, id, id, refers, Arc::new(meta))
     }
 
     #[test]

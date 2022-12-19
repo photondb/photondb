@@ -1151,7 +1151,7 @@ mod tests {
             &[301, 302, 303],
         )
         .await;
-        file_info.deactivate_page(3, 32);
+        assert!(file_info.deactivate_page(3, pa(2, 32)));
 
         let mut files = HashMap::new();
         files.insert(2, file_info.clone());
@@ -1205,7 +1205,7 @@ mod tests {
             &[301, 302, 303],
         )
         .await;
-        file_info_1.deactivate_page(3, pa(file_id_1, 32));
+        assert!(file_info_1.deactivate_page(3, pa(file_id_1, 32)));
 
         let file_info_2 = build_page_file(
             &ctx.page_files,
@@ -1242,11 +1242,11 @@ mod tests {
         assert!(new_files
             .get(&file_id_1)
             .unwrap()
-            .may_page_active(pa(file_id_1, 16)));
-        assert!(new_files
+            .is_page_active(pa(file_id_1, 16)));
+        assert!(!new_files
             .get(&file_id_1)
             .unwrap()
-            .may_page_active(pa(file_id_1, 32)));
+            .is_page_active(pa(file_id_1, 32)));
         assert!(new_files
             .get(&file_id_1)
             .unwrap()
@@ -1255,7 +1255,7 @@ mod tests {
         assert!(new_files
             .get(&file_id_2)
             .unwrap()
-            .may_page_active(pa(file_id_2, 32)));
+            .is_page_active(pa(file_id_2, 32)));
     }
 
     async fn build_map_file(

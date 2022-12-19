@@ -113,7 +113,7 @@ impl FileInfo {
     }
 
     #[cfg(test)]
-    pub(crate) fn may_page_active(&self, page_addr: u64) -> bool {
+    pub(crate) fn is_page_active(&self, page_addr: u64) -> bool {
         self.meta
             .get_page_handle(page_addr)
             .map(|(index, _, _)| index as u32)
