@@ -202,7 +202,7 @@ impl<S: Store<E>, E: Env> Workloads<S, E> {
     }
 
     async fn exec_bg_op(&mut self, op: BenchOperation) -> Stats<S, E> {
-        let stats = Stats::start(0, self.config.to_owned(), self.table.to_owned());
+        let mut stats = Stats::start(0, self.config.to_owned(), self.table.to_owned());
         let table = self.table.as_ref().unwrap().clone();
         self.env
             .spawn_background(async move {
@@ -217,6 +217,7 @@ impl<S: Store<E>, E: Env> Workloads<S, E> {
                 }
             })
             .await;
+        stats.stop();
         stats
     }
 
