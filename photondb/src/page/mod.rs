@@ -10,7 +10,7 @@ mod codec;
 
 mod base_page;
 use base_page::PageBuilder;
-pub(crate) use base_page::{PageBuf, PageKind, PageRef, PageTier};
+pub(crate) use base_page::{PageBuf, PageInfo, PageKind, PageRef, PageTier};
 
 mod sorted_page;
 pub(crate) use sorted_page::{

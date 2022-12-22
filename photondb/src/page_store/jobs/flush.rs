@@ -206,7 +206,7 @@ impl<E: Env> FlushCtx<E> {
                     }
                     let content = page.data();
                     builder
-                        .add_page(header.page_id(), page_addr, content)
+                        .add_page(header.page_id(), page_addr, page.info(), content)
                         .await?;
                     write_bytes += content.len();
                     let _ = self.page_files.populate_cache(page_addr, content);

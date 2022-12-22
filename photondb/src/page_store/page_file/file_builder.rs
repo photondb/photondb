@@ -14,6 +14,7 @@ use super::{
 };
 use crate::{
     env::{Directory, Env, SequentialWriter, SequentialWriterExt},
+    page::PageInfo,
     page_store::{Error, Result},
 };
 
@@ -61,10 +62,17 @@ impl<'a, E: Env> FileBuilder<'a, E> {
         &mut self,
         page_id: u64,
         page_addr: u64,
+        page_info: PageInfo,
         page_content: &[u8],
     ) -> Result<()> {
         self.inner
-            .add_page(&mut self.writer, page_id, page_addr, page_content)
+            .add_page(
+                &mut self.writer,
+                page_id,
+                page_addr,
+                page_info,
+                page_content,
+            )
             .await
     }
 
@@ -144,13 +152,14 @@ impl CommonFileBuilder {
         writer: &mut BufferedWriter<'a, E>,
         page_id: u64,
         page_addr: u64,
+        page_info: PageInfo,
         page_content: &[u8],
     ) -> Result<()> {
         let mut tmp_buf = vec![0u8; compress_max_len(self.compression, page_content)]; // TODO: pool this.
         let page_content = compress_page(self.compression, page_content, &mut tmp_buf)?;
         let checksum = checksum::checksum(self.checksum, page_content);
         let file_offset = writer.write_with_checksum(page_content, checksum).await?;
-        self.index.add_data_block(page_addr, file_offset);
+        self.index.add_data_block(page_addr, file_offset, page_info);
         self.meta.add_page(page_addr, page_id);
         Ok(())
     }
@@ -447,8 +456,10 @@ struct IndexBlockBuilder {
 
 impl IndexBlockBuilder {
     #[inline]
-    pub(crate) fn add_data_block(&mut self, page_addr: u64, file_offset: u64) {
-        self.index_block.page_offsets.insert(page_addr, file_offset);
+    pub(crate) fn add_data_block(&mut self, page_addr: u64, file_offset: u64, page_info: PageInfo) {
+        self.index_block
+            .page_offsets
+            .insert(page_addr, (file_offset, page_info));
     }
 
     #[inline]
@@ -473,7 +484,7 @@ impl IndexBlockBuilder {
 
 #[derive(Default)]
 pub(crate) struct IndexBlock {
-    pub(crate) page_offsets: BTreeMap<u64, u64>,
+    pub(crate) page_offsets: BTreeMap<u64, (u64, PageInfo)>,
     pub(crate) meta_page_table: Option<u64>,
     pub(crate) meta_delete_pages: Option<u64>,
 }
@@ -481,10 +492,13 @@ pub(crate) struct IndexBlock {
 impl IndexBlock {
     fn encode_data_block_index(&self) -> Vec<u8> {
         let mut bytes =
-            Vec::with_capacity(self.page_offsets.len() * core::mem::size_of::<u64>() * 2);
-        for (page_addr, offset) in &self.page_offsets {
+            Vec::with_capacity(self.page_offsets.len() * core::mem::size_of::<u64>() * 4);
+        for (page_addr, (offset, page_info)) in &self.page_offsets {
             bytes.extend_from_slice(&page_addr.to_le_bytes());
-            bytes.extend_from_slice(&offset.to_le_bytes())
+            bytes.extend_from_slice(&offset.to_le_bytes());
+            let (meta, next) = page_info.value();
+            bytes.extend_from_slice(&meta.to_le_bytes());
+            bytes.extend_from_slice(&next.to_le_bytes());
         }
         bytes
     }
@@ -499,23 +513,48 @@ impl IndexBlock {
     pub(crate) fn decode(data_index_bytes: &[u8], meta_index_bytes: &[u8]) -> Result<Self> {
         let mut page_offsets = BTreeMap::new();
         let mut idx = 0;
+        let mut last_offset = None;
         while idx < data_index_bytes.len() {
-            let end = idx + core::mem::size_of::<u64>() * 2;
+            let end = idx + core::mem::size_of::<u64>() * 4;
             if end > data_index_bytes.len() {
                 return Err(Error::Corrupted);
             }
+
+            let end = idx + core::mem::size_of::<u64>();
             let page_addr = u64::from_le_bytes(
-                data_index_bytes[idx..idx + core::mem::size_of::<u64>()]
+                data_index_bytes[idx..end]
                     .try_into()
                     .map_err(|_| Error::Corrupted)?,
             );
-            let page_id = u64::from_le_bytes(
-                data_index_bytes
-                    [idx + core::mem::size_of::<u64>()..idx + core::mem::size_of::<u64>() * 2]
+
+            idx = end;
+            let end = idx + core::mem::size_of::<u64>();
+            let offset = u64::from_le_bytes(
+                data_index_bytes[idx..end]
                     .try_into()
                     .map_err(|_| Error::Corrupted)?,
             );
-            page_offsets.insert(page_addr, page_id);
+
+            idx = end;
+            let end = idx + core::mem::size_of::<u64>();
+            let meta = u64::from_le_bytes(
+                data_index_bytes[idx..end]
+                    .try_into()
+                    .map_err(|_| Error::Corrupted)?,
+            );
+
+            idx = end;
+            let end = idx + core::mem::size_of::<u64>();
+            let next = u64::from_le_bytes(
+                data_index_bytes[idx..end]
+                    .try_into()
+                    .map_err(|_| Error::Corrupted)?,
+            );
+            if let Some((addr, last_offset, meta, next)) = last_offset {
+                let size = (offset - last_offset) as usize;
+                page_offsets.insert(addr, (last_offset, PageInfo::from_raw(meta, next, size)));
+            }
+            last_offset = Some((page_addr, offset, meta, next));
             idx = end;
         }
 
@@ -532,6 +571,10 @@ impl IndexBlock {
                 .try_into()
                 .map_err(|_| Error::Corrupted)?,
         ));
+        if let Some((addr, offset, meta, next)) = last_offset {
+            let size = (meta_page_table.unwrap() - offset) as usize;
+            page_offsets.insert(addr, (offset, PageInfo::from_raw(meta, next, size)));
+        }
         Ok(Self {
             page_offsets,
             meta_page_table,
@@ -542,7 +585,7 @@ impl IndexBlock {
     pub(crate) fn as_meta_file_cached(
         &self,
         data_handle: BlockHandler,
-    ) -> (Vec<u64>, BTreeMap<u64, u64>) {
+    ) -> (Vec<u64>, BTreeMap<u64, (u64, PageInfo)>) {
         let indexes = vec![
             self.meta_page_table.as_ref().unwrap().to_owned(),
             self.meta_delete_pages.as_ref().unwrap().to_owned(),

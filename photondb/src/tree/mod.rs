@@ -159,7 +159,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
 
         // Try to split the page before every write to avoid starving the split
         // operation due to contentions.
-        if self.should_split_page(view.page) && self.split_page(view.clone()).await.is_ok() {
+        if self.should_split_page(&view.page) && self.split_page(view.clone()).await.is_ok() {
             return Err(Error::Again);
         }
 
@@ -178,7 +178,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             match txn.update_page(view.id, view.addr, new_addr) {
                 Ok(_) => {
                     view.addr = new_addr;
-                    view.page = new_page.into();
+                    view.page = new_page.info();
                     break;
                 }
                 Err(None) => return Err(Error::Again),
@@ -188,7 +188,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                     // the same. However, this doesn't work for the root
                     // because we split the root without updating its epoch.
                     if view.id != ROOT_ID {
-                        let page = self.guard.read_page(addr).await?;
+                        let page = self.guard.read_page_info(addr)?;
                         if page.epoch() == view.page.epoch() {
                             txn = _txn;
                             view.addr = addr;
@@ -202,7 +202,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         }
 
         // Try to consolidate the page if it is too long.
-        if self.should_consolidate_page(view.page) {
+        if self.should_consolidate_page(&view.page) {
             let _ = self.consolidate_and_restructure_page(view).await;
         }
         Ok(())
@@ -211,7 +211,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     /// Returns a view to the page.
     async fn page_view<'g>(&'g self, id: u64, range: Option<Range<'g>>) -> Result<PageView<'g>> {
         let addr = self.guard.page_addr(id);
-        let page = self.guard.read_page(addr).await?;
+        let page = self.guard.read_page_info(addr)?;
         Ok(PageView {
             id,
             addr,
@@ -291,25 +291,18 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     ///
     /// This function returns when it reaches the end of the chain or the
     /// applied function returns true.
-    async fn walk_page<'g, F>(
-        &'g self,
-        mut addr: u64,
-        mut page: PageRef<'g>,
-        mut f: F,
-    ) -> Result<()>
+    async fn walk_page<'g, F>(&'g self, mut addr: u64, mut f: F) -> Result<()>
     where
         F: FnMut(u64, PageRef<'g>) -> bool,
     {
-        loop {
+        while addr != 0 {
+            let page = self.guard.read_page(addr).await?;
             if f(addr, page) {
-                return Ok(());
+                break;
             }
             addr = page.chain_next();
-            if addr == 0 {
-                return Ok(());
-            }
-            page = self.guard.read_page(addr).await?;
         }
+        Ok(())
     }
 
     /// Creates an iterator over the key-value pairs in the page.
@@ -320,7 +313,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     {
         let mut builder = MergingIterBuilder::with_capacity(view.page.chain_len() as usize);
         let mut range_limit = None;
-        self.walk_page(view.addr, view.page, |_, page| {
+        self.walk_page(view.addr, |_, page| {
             match page.kind() {
                 PageKind::Data => {
                     builder.add(SortedPageIter::from(page));
@@ -351,7 +344,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         view: &PageView<'g>,
     ) -> Result<Option<&'g [u8]>> {
         let mut value = None;
-        self.walk_page(view.addr, view.page, |_, page| {
+        self.walk_page(view.addr, |_, page| {
             debug_assert!(page.tier().is_leaf());
             // We only care about data pages here.
             if page.kind().is_data() {
@@ -385,7 +378,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         view: &PageView<'g>,
     ) -> Result<Option<(Index, Range<'g>)>> {
         let mut child = None;
-        self.walk_page(view.addr, view.page, |_, page| {
+        self.walk_page(view.addr, |_, page| {
             debug_assert!(page.tier().is_inner());
             // We only care about data pages here.
             if page.kind().is_data() {
@@ -435,7 +428,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             return self.split_root_impl::<K, V>(view).await;
         }
 
-        let page = SortedPageRef::<K, V>::from(view.page);
+        let page = self.guard.read_page(view.addr).await?;
+        let page = SortedPageRef::<K, V>::from(page);
         let Some((split_key, _, right_iter)) = page.into_split_iter() else {
             return Ok(());
         };
@@ -464,7 +458,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                 trace!("split page {:?} with delta {:?}", view, delta);
                 self.tree.stats.success.split_page.inc();
                 view.addr = new_addr;
-                view.page = new_page.into();
+                view.page = new_page.info();
             })
             .map_err(|_| {
                 self.tree.stats.conflict.split_page.inc();
@@ -483,7 +477,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         assert_eq!(view.page.epoch(), 0);
         assert_eq!(view.page.chain_len(), 1);
 
-        let page = SortedPageRef::<K, V>::from(view.page);
+        let page = self.guard.read_page(view.addr).await?;
+        let page = SortedPageRef::<K, V>::from(page);
         let Some((split_key, left_iter, right_iter)) = page.into_split_iter() else {
             return Ok(());
         };
@@ -563,7 +558,8 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         };
         let left_key = range.start;
         let left_index = Index::new(view.id, view.page.epoch());
-        let (split_key, split_index) = split_delta_from_page(view.page);
+        let page = self.guard.read_page(view.addr).await?;
+        let (split_key, split_index) = split_delta_from_page(page);
         // Build a delta page with the child on the left and the new split page on
         // the right.
         let delta = if let Some(range_end) = range.end {
@@ -589,12 +585,12 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             .map(|_| {
                 trace!("reconcile split page {:?} with delta {:?}", view, delta);
                 parent.addr = new_addr;
-                parent.page = new_page.into();
+                parent.page = new_page.info();
             })
             .map_err(|_| Error::Again)?;
 
         // Try to consolidate the parent page if it is too long.
-        if self.should_consolidate_page(parent.page) {
+        if self.should_consolidate_page(&parent.page) {
             let _ = self.consolidate_and_restructure_page(parent).await;
         }
         Ok(())
@@ -643,7 +639,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                 trace!("consolidate page {:?}", view);
                 self.tree.stats.success.consolidate_page.inc();
                 view.addr = new_addr;
-                view.page = new_page.into();
+                view.page = new_page.info();
                 view
             })
             .map_err(|_| {
@@ -664,10 +660,10 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         let chain_len = view.page.chain_len() as usize;
         let mut builder = MergingIterBuilder::with_capacity(chain_len);
         let mut page_size = 0;
-        let mut last_page = view.page;
+        let mut last_page = view.page.clone();
         let mut page_addrs = Vec::with_capacity(chain_len);
         let mut range_limit = None;
-        self.walk_page(view.addr, view.page, |addr, page| {
+        self.walk_page(view.addr, |addr, page| {
             match page.kind() {
                 PageKind::Data => {
                     // Inner pages can not do partial consolidations because of the placeholders.
@@ -676,7 +672,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                         && builder.len() >= 2
                         && page_size < page.size() / 2
                         && range_limit.is_none()
-                        && !self.should_consolidate_page(page)
+                        && !self.should_consolidate_page(&page.info())
                     {
                         return true;
                     }
@@ -690,7 +686,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                     }
                 }
             }
-            last_page = page;
+            last_page = page.info();
             page_addrs.push(addr);
             false
         })
@@ -707,7 +703,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     async fn consolidate_and_restructure_page<'g>(&'g self, mut view: PageView<'g>) -> Result<()> {
         view = self.consolidate_page(view).await?;
         // Try to split the page if it is too large.
-        if self.should_split_page(view.page) {
+        if self.should_split_page(&view.page) {
             let _ = self.split_page(view).await;
         }
         Ok(())
@@ -748,11 +744,11 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     {
         // Skip the first page if it is a split delta.
         let (old_addr, old_page) = if view.page.kind() != PageKind::Split {
-            (view.addr, view.page)
+            (view.addr, view.page.clone())
         } else {
             let addr = view.page.chain_next();
             assert!(addr != 0);
-            let page = self.guard.read_page(addr).await?;
+            let page = self.guard.read_page_info(addr)?;
             (addr, page)
         };
 
@@ -761,7 +757,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         let mut builder = MergingIterBuilder::with_capacity(chain_len);
         let mut page_addrs = Vec::with_capacity(chain_len);
         let mut range_limit = None;
-        self.walk_page(old_addr, old_page, |addr, page| {
+        self.walk_page(old_addr, |addr, page| {
             match page.kind() {
                 PageKind::Data => {
                     builder.add(SortedPageIter::<K, V>::from(page));
@@ -788,8 +784,9 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         new_page.set_epoch(old_page.epoch());
         // Relocate the first page if it is skipped.
         if view.addr != old_addr {
+            let split_delta_page = self.guard.read_page(view.addr).await?;
             let (addr, mut page) = txn.alloc_page(view.page.size()).await?;
-            page.copy_from(view.page);
+            page.copy_from(split_delta_page);
             page.set_chain_len(new_page.chain_len() + 1);
             page.set_chain_next(new_addr);
             new_addr = addr;
@@ -811,7 +808,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     // Returns true if the page should be split.
-    fn should_split_page(&self, page: PageRef<'_>) -> bool {
+    fn should_split_page(&self, page: &PageInfo) -> bool {
         let mut max_size = self.tree.options.page_size;
         if page.tier().is_inner() {
             // Adjust the page size for inner pages.
@@ -821,7 +818,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
     }
 
     // Returns true if the page should be consolidated.
-    fn should_consolidate_page(&self, page: PageRef<'_>) -> bool {
+    fn should_consolidate_page(&self, page: &PageInfo) -> bool {
         let mut max_chain_len = self.tree.options.page_chain_length;
         if page.tier().is_inner() {
             // Adjust the chain length for inner pages.
@@ -900,7 +897,7 @@ where
     V: SortedPageValue,
 {
     iter: MergingPageIter<'a, K, V>,
-    last_page: PageRef<'a>,
+    last_page: PageInfo,
     page_addrs: Vec<u64>,
 }
 
