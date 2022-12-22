@@ -7,7 +7,7 @@ pub(crate) use error::{Error, Result};
 
 mod page_txn;
 use futures::lock::Mutex;
-pub(crate) use page_txn::{AccessHint, Guard};
+pub(crate) use page_txn::{Guard, PageReadOption};
 
 mod page_table;
 use page_table::PageTable;
@@ -40,7 +40,7 @@ pub(crate) use strategy::{MinDeclineRateStrategyBuilder, StrategyBuilder};
 
 mod cache;
 #[allow(unused_imports)]
-pub(crate) use cache::{clock::ClockCache, lru::LRUCache, Cache, CacheEntry};
+pub(crate) use cache::{clock::ClockCache, lru::LRUCache, Cache, CacheEntry, CacheToken};
 
 mod stats;
 pub use page_file::{ChecksumType, Compression};

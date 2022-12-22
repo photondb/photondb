@@ -5,7 +5,7 @@ use ::std::{
 };
 
 use super::*;
-use crate::page_store::{page_txn::AccessHint, stats::CacheStats};
+use crate::page_store::stats::CacheStats;
 
 const LOAD_FACTOR: f64 = 0.7;
 const STRICT_LOAD_FACTOR: f64 = 0.84;
@@ -979,7 +979,7 @@ impl<T: Clone> Cache<T> for ClockCache<T> {
                 Some(CacheEntry {
                     handle: Handle::Clock(ptr),
                     cache: self.clone(),
-                    hint: None,
+                    token: CacheToken::default(),
                 })
             }
         })
@@ -1001,13 +1001,13 @@ impl<T: Clone> Cache<T> for ClockCache<T> {
                 Some(CacheEntry {
                     handle: Handle::Clock(ptr),
                     cache: self.clone(),
-                    hint: None,
+                    token: CacheToken::default(),
                 })
             }
         })
     }
 
-    fn lookup(self: &Arc<Self>, key: u64, _hint: AccessHint) -> Option<CacheEntry<T, Self>> {
+    fn lookup(self: &Arc<Self>, key: u64) -> Option<CacheEntry<T, Self>> {
         let hash = Self::hash_key(key);
         let idx = self.shard(hash);
         let shard = &self.shards[idx as usize];
@@ -1018,12 +1018,12 @@ impl<T: Clone> Cache<T> for ClockCache<T> {
             Some(CacheEntry {
                 handle: Handle::Clock(ptr),
                 cache: self.clone(),
-                hint: None,
+                token: CacheToken::default(),
             })
         }
     }
 
-    fn release(&self, h: &Handle<T>, _hint: &Option<AccessHint>) -> bool {
+    fn release(&self, h: &Handle<T>, _token: CacheToken) -> bool {
         if let Handle::Clock(ch) = *h {
             let hash = unsafe { (*ch).hash };
             let idx = self.shard(hash);

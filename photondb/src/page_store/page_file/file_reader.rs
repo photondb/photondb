@@ -5,7 +5,7 @@ use futures::Future;
 use super::{file_builder::*, types::FileMeta, FileId};
 use crate::{
     env::{Env, PositionalReader, PositionalReaderExt},
-    page_store::{cache::Cache, stats::CacheStats, AccessHint, Error, LRUCache, Result},
+    page_store::{cache::Cache, stats::CacheStats, Error, LRUCache, Result},
     util::atomic::Counter,
 };
 
@@ -224,7 +224,7 @@ impl<E: Env> FileReaderCache<E> {
         init: impl Future<Output = Arc<PageFileReader<E::PositionalReader>>>,
     ) -> Result<Arc<PageFileReader<E::PositionalReader>>> {
         let key = Self::file_id_to_key(file_id);
-        if let Some(cached) = self.cache.lookup(key, AccessHint::READ_CACHE) {
+        if let Some(cached) = self.cache.lookup(key) {
             return Ok(cached.value().clone());
         }
         let reader = init.await;

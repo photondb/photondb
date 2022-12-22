@@ -2,6 +2,7 @@ use std::{
     fmt,
     ops::{Deref, DerefMut},
     ptr,
+    sync::atomic::{AtomicU8, Ordering},
 };
 
 use ::std::sync::{
@@ -9,7 +10,7 @@ use ::std::sync::{
     Arc,
 };
 
-use super::{page_txn::AccessHint, stats::CacheStats};
+use super::stats::CacheStats;
 use crate::{
     page_store::{Error, Result},
     util::atomic::Counter,
@@ -33,9 +34,9 @@ pub(crate) trait Cache<T: Clone>: Sized {
         charge: usize,
     ) -> Result<Option<CacheEntry<T, Self>>>;
 
-    fn lookup(self: &Arc<Self>, key: u64, hint: AccessHint) -> Option<CacheEntry<T, Self>>;
+    fn lookup(self: &Arc<Self>, key: u64) -> Option<CacheEntry<T, Self>>;
 
-    fn release(&self, h: &Handle<T>, hint: &Option<AccessHint>) -> bool;
+    fn release(&self, h: &Handle<T>, cache_token: CacheToken) -> bool;
 
     fn erase(self: &Arc<Self>, key: u64);
 
@@ -49,7 +50,48 @@ where
 {
     handle: Handle<T>,
     cache: Arc<C>,
-    hint: Option<AccessHint>,
+    token: CacheToken,
+}
+
+pub(crate) const CACHE_AS_HOT: u8 = 0;
+pub(crate) const CACHE_AS_COLD: u8 = 1;
+pub(crate) const CACHE_DISCARD: u8 = 2;
+
+#[derive(Clone)]
+pub(crate) struct CacheToken {
+    returning_behavior: Arc<AtomicU8>,
+}
+
+impl Default for CacheToken {
+    fn default() -> Self {
+        Self {
+            returning_behavior: Arc::new(AtomicU8::new(CACHE_AS_HOT)),
+        }
+    }
+}
+
+impl CacheToken {
+    pub(crate) fn new(behavior: u8) -> Self {
+        Self {
+            returning_behavior: Arc::new(AtomicU8::new(behavior)),
+        }
+    }
+
+    pub(crate) fn returning_behavior_match(&self, behavior: u8) -> bool {
+        self.returning_behavior.load(Ordering::Relaxed) == behavior
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn invalidate_from_cache(&self) {
+        self.returning_behavior
+            .store(CACHE_DISCARD, Ordering::Relaxed);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn return_cache_as_cold(&self) {
+        self.returning_behavior
+            .store(CACHE_AS_COLD, Ordering::Relaxed);
+    }
 }
 
 unsafe impl<T, C> Send for CacheEntry<T, C>
@@ -72,7 +114,7 @@ where
     C: Cache<T>,
 {
     fn drop(&mut self) {
-        self.cache.release(&self.handle, &self.hint);
+        self.cache.release(&self.handle, self.token.clone());
     }
 }
 
@@ -94,6 +136,10 @@ where
             Handle::Clock(h) => unsafe { (*h).value.as_ref().unwrap() },
             Handle::Lru(h) => unsafe { (*h).value.as_ref().unwrap() },
         }
+    }
+
+    pub(crate) fn cache_token(&self) -> CacheToken {
+        self.token.clone()
     }
 }
 
@@ -288,7 +334,7 @@ mod tests {
 
         let h = c.insert(1, Some(vec![1]), 1).unwrap().unwrap();
         drop(h);
-        let h = c.lookup(1, AccessHint::READ_CACHE).unwrap();
+        let h = c.lookup(1).unwrap();
         assert_eq!(h.key(), 1);
         drop(h);
 
@@ -297,15 +343,15 @@ mod tests {
 
         let h = c.insert(3, Some(vec![3]), 1).unwrap().unwrap();
         drop(h);
-        let h = c.lookup(3, AccessHint::READ_CACHE).unwrap();
+        let h = c.lookup(3).unwrap();
         assert_eq!(h.key(), 3);
         drop(h);
 
-        let h = c.lookup(1, AccessHint::READ_CACHE);
+        let h = c.lookup(1);
         assert!(h.is_none());
 
         c.erase(3);
-        let h = c.lookup(3, AccessHint::READ_CACHE);
+        let h = c.lookup(3);
         assert!(h.is_none());
     }
 
@@ -326,11 +372,11 @@ mod tests {
         };
         t1.join().unwrap();
 
-        let v = c.lookup(3, AccessHint::READ_CACHE).unwrap();
+        let v = c.lookup(3).unwrap();
         assert_eq!(v.key(), 3);
         drop(v);
-        assert!(c.lookup(1, AccessHint::READ_CACHE).is_none());
-        assert!(c.lookup(2, AccessHint::READ_CACHE).is_none());
+        assert!(c.lookup(1).is_none());
+        assert!(c.lookup(2).is_none());
 
         let v = c.insert(4, Some(vec![4]), 1).unwrap().unwrap();
         assert_eq!(v.key(), 4);
@@ -339,7 +385,7 @@ mod tests {
         let t2 = {
             let c = c.clone();
             thread::spawn(move || {
-                let v = c.lookup(3, AccessHint::READ_CACHE).unwrap();
+                let v = c.lookup(3).unwrap();
                 assert_eq!(v.key(), 3);
                 drop(v)
             })
@@ -347,7 +393,7 @@ mod tests {
         let t3 = {
             let c = c.clone();
             thread::spawn(move || {
-                let v = c.lookup(4, AccessHint::READ_CACHE).unwrap();
+                let v = c.lookup(4).unwrap();
                 assert_eq!(v.key(), 4);
                 drop(v);
             })
@@ -356,6 +402,6 @@ mod tests {
         t2.join().unwrap();
 
         c.erase(4);
-        assert!(c.lookup(4, AccessHint::READ_CACHE).is_none());
+        assert!(c.lookup(4).is_none());
     }
 }

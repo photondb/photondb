@@ -45,7 +45,7 @@ pub(crate) mod facade {
     use crate::{
         env::{Env, PositionalReader, SequentialWriter},
         page_store::{
-            page_txn::AccessHint, stats::CacheStats, Cache, CacheEntry, Error, LRUCache, Result,
+            page_txn::PageReadOption, stats::CacheStats, Cache, CacheEntry, Error, LRUCache, Result,
         },
         PageStoreOptions,
     };
@@ -152,9 +152,9 @@ pub(crate) mod facade {
             file_info: &FileInfo,
             addr: u64,
             handle: PageHandle,
-            hint: AccessHint,
+            hint: PageReadOption,
         ) -> Result<(CacheEntry<Vec<u8>, LRUCache<Vec<u8>>>, /* hit */ bool)> {
-            if let Some(cache_entry) = self.page_cache.lookup(addr, hint) {
+            if let Some(cache_entry) = self.page_cache.lookup(addr) {
                 return Ok((cache_entry, true));
             }
 
@@ -164,8 +164,10 @@ pub(crate) mod facade {
 
             let charge = buf.len();
             let cache_entry = match hint {
-                AccessHint::READ_CACHE => self.page_cache.insert(addr, Some(buf), charge)?,
-                AccessHint::READ_THEN_REPLACE => self.page_cache.detach(addr, Some(buf), charge)?,
+                PageReadOption::DEFAULT => self.page_cache.insert(addr, Some(buf), charge)?,
+                PageReadOption::NOT_REFILL_CACHE => {
+                    self.page_cache.detach(addr, Some(buf), charge)?
+                }
                 _ => unreachable!(),
             };
 

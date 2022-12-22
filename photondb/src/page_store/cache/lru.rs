@@ -8,8 +8,8 @@ use std::{
 
 use parking_lot::Mutex;
 
-use super::{AtomicCacheStats, Cache, CacheEntry, Handle, LRUHandle};
-use crate::page_store::{stats::CacheStats, AccessHint, Result};
+use super::{AtomicCacheStats, Cache, CacheEntry, CacheToken, Handle, LRUHandle, CACHE_DISCARD};
+use crate::page_store::{cache::CACHE_AS_HOT, stats::CacheStats, Result};
 
 pub(crate) struct LRUCache<T: Clone> {
     shards: Vec<Mutex<LRUCacheShard<T>>>,
@@ -121,7 +121,7 @@ impl<T: Clone> Cache<T> for LRUCache<T> {
                 Some(CacheEntry {
                     handle: Handle::Lru(ptr),
                     cache: self.clone(),
-                    hint: None,
+                    token: CacheToken::default(),
                 })
             }
         })
@@ -146,15 +146,11 @@ impl<T: Clone> Cache<T> for LRUCache<T> {
         Ok(Some(CacheEntry {
             handle: Handle::Lru(handle),
             cache: self.clone(),
-            hint: None,
+            token: CacheToken::new(CACHE_DISCARD),
         }))
     }
 
-    fn lookup(
-        self: &std::sync::Arc<Self>,
-        key: u64,
-        hint: crate::page_store::AccessHint,
-    ) -> Option<CacheEntry<T, Self>> {
+    fn lookup(self: &std::sync::Arc<Self>, key: u64) -> Option<CacheEntry<T, Self>> {
         let hash = Self::hash_key(key);
         let idx = self.shard(hash);
         let shard = &self.shards[idx as usize];
@@ -167,19 +163,19 @@ impl<T: Clone> Cache<T> for LRUCache<T> {
             let entry = CacheEntry {
                 handle: Handle::Lru(ptr),
                 cache: self.clone(),
-                hint: Some(hint),
+                token: CacheToken::default(),
             };
             Some(entry)
         }
     }
 
-    fn release(&self, h: &Handle<T>, hint: &Option<AccessHint>) -> bool {
+    fn release(&self, h: &Handle<T>, token: CacheToken) -> bool {
         unsafe {
             if let Handle::Lru(lh) = *h {
                 let hash = (*lh).hash;
                 let idx = self.shard(hash);
                 let mut shard = self.shards[idx as usize].lock();
-                shard.release(lh, hint);
+                shard.release(lh, token);
                 true
             } else {
                 unreachable!()
@@ -250,7 +246,7 @@ impl<T: Clone> LRUCacheShard<T> {
         Ok(lhd)
     }
 
-    unsafe fn release(&mut self, h: *mut LRUHandle<T>, hint: &Option<AccessHint>) {
+    unsafe fn release(&mut self, h: *mut LRUHandle<T>, token: CacheToken) {
         assert!(!h.is_null());
         if (*h).detached {
             drop(Box::from_raw(h));
@@ -267,10 +263,11 @@ impl<T: Clone> LRUCacheShard<T> {
         // Keep the handle in lru list if it is still in the cache and the cache is not
         // over-sized.
         if (*h).is_in_cache() {
-            if self.usage.load(Ordering::Relaxed) <= self.capacity {
-                let as_recent =
-                    hint.is_none() || (*hint.as_ref().unwrap() != AccessHint::READ_THEN_REPLACE);
-                self.lru_insert(h, as_recent);
+            if self.usage.load(Ordering::Relaxed) <= self.capacity
+                && !token.returning_behavior_match(CACHE_DISCARD)
+            {
+                let as_hot = token.returning_behavior_match(CACHE_AS_HOT);
+                self.lru_insert(h, as_hot);
                 return;
             }
 
