@@ -3,11 +3,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use bitflags::bitflags;
+
 use super::{
     stats::AtomicWritebufStats,
     version::Version,
     write_buffer::{RecordHeader, ReleaseState},
-    CacheEntry, ClockCache, Error, PageFiles, PageTable, Result, WriteBuffer, NAN_ID,
+    CacheEntry, Error, LRUCache, PageFiles, PageTable, Result, WriteBuffer, NAN_ID,
 };
 use crate::{
     env::Env,
@@ -15,7 +17,19 @@ use crate::{
     page_store::page_file::FileId,
 };
 
-type CacheEntryGuard = CacheEntry<Vec<u8>, ClockCache<Vec<u8>>>;
+bitflags! {
+/// PageAccess hint.
+pub struct AccessHint: u8 {
+    /// Normal Access, page_store will refill cache when meet cache miss.
+    const READ_CACHE = 0;
+    /// Read-then-replace Access.
+    ///  - Hitted cached entry will be evict soon when ref == 0.
+    ///  - Missed entry will be read from disk but not refill into cache.
+    const READ_THEN_REPLACE = 1;
+}
+}
+
+type CacheEntryGuard = CacheEntry<Vec<u8>, LRUCache<Vec<u8>>>;
 
 pub(crate) struct Guard<E: Env>
 where
@@ -95,7 +109,7 @@ impl<E: Env> Guard<E> {
         Ok(page_info)
     }
 
-    pub(crate) async fn read_page(&self, addr: u64) -> Result<PageRef> {
+    pub(crate) async fn read_page(&self, addr: u64, hint: AccessHint) -> Result<PageRef> {
         let logical_id = (addr >> 32) as u32;
         if let Some(buf) = self.version.get(logical_id) {
             self.writebuf_stats.read_in_buf.inc();
@@ -122,7 +136,7 @@ impl<E: Env> Guard<E> {
 
         let (entry, hit) = self
             .page_files
-            .read_page(physical_id, file_info, addr, handle)
+            .read_page(physical_id, file_info, addr, handle, hint)
             .await?;
 
         let mut owned_pages = self.cache_guards.lock().expect("Poisoned");
@@ -134,10 +148,16 @@ impl<E: Env> Guard<E> {
             self.writebuf_stats.read_file_bytes.add(page.len() as u64);
         }
 
-        Ok(PageRef::new(unsafe {
+        let page = PageRef::new(unsafe {
             // Safety: the lifetime is guarranted by `guard`.
             std::slice::from_raw_parts(page.as_ptr(), page.len())
-        }))
+        });
+
+        if !hit && !page.tier().is_leaf() {
+            self.writebuf_stats.miss_innner.inc();
+        }
+
+        Ok(page)
     }
 }
 

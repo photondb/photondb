@@ -102,6 +102,7 @@ pub struct WritebufStats {
     pub read_in_buf: u64,
     pub read_in_file: u64,
     pub read_file_bytes: u64,
+    pub miss_inner: u64,
 }
 
 impl WritebufStats {
@@ -110,6 +111,7 @@ impl WritebufStats {
             read_in_buf: self.read_in_buf.wrapping_sub(o.read_in_buf),
             read_in_file: self.read_in_file.wrapping_sub(o.read_in_file),
             read_file_bytes: self.read_file_bytes.wrapping_sub(o.read_file_bytes),
+            miss_inner: self.miss_inner.wrapping_sub(o.miss_inner),
         }
     }
 }
@@ -123,8 +125,9 @@ impl Display for WritebufStats {
             "WritebufStats: read_in_buf: {}, \
                 read_in_files: {}, \
                 read_file_bytes: {}, \
-                read_hit_rate: {read_hit_rate:.2}%",
-            self.read_in_buf, self.read_in_file, self.read_file_bytes,
+                read_hit_rate: {read_hit_rate:.2}%, \
+                miss_inner: {}",
+            self.read_in_buf, self.read_in_file, self.read_file_bytes, self.miss_inner,
         )
     }
 }
@@ -134,6 +137,7 @@ pub(crate) struct AtomicWritebufStats {
     pub(super) read_in_buf: Counter,
     pub(super) read_in_file: Counter,
     pub(super) read_file_bytes: Counter,
+    pub(super) miss_innner: Counter,
 }
 
 impl AtomicWritebufStats {
@@ -142,6 +146,7 @@ impl AtomicWritebufStats {
             read_in_buf: self.read_in_buf.get(),
             read_in_file: self.read_in_file.get(),
             read_file_bytes: self.read_file_bytes.get(),
+            miss_inner: self.miss_innner.get(),
         }
     }
 }

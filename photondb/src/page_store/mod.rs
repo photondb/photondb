@@ -7,7 +7,7 @@ pub(crate) use error::{Error, Result};
 
 mod page_txn;
 use futures::lock::Mutex;
-pub(crate) use page_txn::Guard;
+pub(crate) use page_txn::{AccessHint, Guard};
 
 mod page_table;
 use page_table::PageTable;
@@ -39,7 +39,8 @@ mod strategy;
 pub(crate) use strategy::{MinDeclineRateStrategyBuilder, StrategyBuilder};
 
 mod cache;
-pub(crate) use cache::{clock::ClockCache, Cache, CacheEntry};
+#[allow(unused_imports)]
+pub(crate) use cache::{clock::ClockCache, lru::LRUCache, Cache, CacheEntry};
 
 mod stats;
 pub use page_file::{ChecksumType, Compression};
@@ -134,7 +135,7 @@ pub struct Options {
 
     /// Insert warm pages into PageCache during flush if true.
     ///
-    /// Default: false
+    /// Default: true
     pub prepopulate_cache_on_flush: bool,
 
     /// Separate page files into hot/cold parts.
@@ -182,7 +183,7 @@ impl Default for Options {
             cache_estimated_entry_charge: 8 << 10,
             cache_file_reader_capacity: 5000,
             cache_strict_capacity_limit: false,
-            prepopulate_cache_on_flush: false,
+            prepopulate_cache_on_flush: true,
             separate_hot_cold_files: true,
             compression_on_flush: Compression::SNAPPY,
             compression_on_cold_compact: Compression::ZSTD,
