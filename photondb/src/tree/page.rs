@@ -11,7 +11,7 @@ pub(super) const NULL_INDEX: Index = Index::new(NAN_ID, 0);
 pub(super) struct PageView<'a> {
     pub(super) id: u64,
     pub(super) addr: u64,
-    pub(super) page: PageRef<'a>,
+    pub(super) page: PageInfo,
     pub(super) range: Option<Range<'a>>,
 }
 

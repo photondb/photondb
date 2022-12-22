@@ -10,6 +10,7 @@ use super::{
 };
 use crate::{
     env::Env,
+    page::PageInfo,
     page_store::{Error, Result},
 };
 
@@ -148,10 +149,17 @@ impl<'a, E: Env> PartialFileBuilder<'a, E> {
         &mut self,
         page_id: u64,
         page_addr: u64,
+        page_info: PageInfo,
         page_content: &[u8],
     ) -> Result<()> {
         self.inner
-            .add_page(&mut self.builder.writer, page_id, page_addr, page_content)
+            .add_page(
+                &mut self.builder.writer,
+                page_id,
+                page_addr,
+                page_info,
+                page_content,
+            )
             .await
     }
 
@@ -364,21 +372,34 @@ mod tests {
 
         // Add page file 1.
         let mut file_builder = builder.add_file(1);
-        file_builder.add_page(1, 1, &[]).await.unwrap();
+        file_builder
+            .add_page(1, 1, empty_page_info(), &[])
+            .await
+            .unwrap();
 
         let builder = file_builder.finish().await.unwrap();
 
         // Add page file 2.
         let mut file_builder = builder.add_file(2);
-        file_builder.add_page(1, 1, &[]).await.unwrap();
+        file_builder
+            .add_page(1, 1, empty_page_info(), &[])
+            .await
+            .unwrap();
 
         let builder = file_builder.finish().await.unwrap();
 
         // Add page file 3.
         let mut file_builder = builder.add_file(3);
-        file_builder.add_page(1, 1, &[]).await.unwrap();
+        file_builder
+            .add_page(1, 1, empty_page_info(), &[])
+            .await
+            .unwrap();
 
         let mut builder = file_builder.finish().await.unwrap();
         builder.finish(1).await.unwrap();
+    }
+
+    fn empty_page_info() -> PageInfo {
+        PageInfo::from_raw(0, 0, 0)
     }
 }

@@ -105,6 +105,14 @@ impl PagePtr {
     pub(super) fn content_mut<'a>(&mut self) -> &'a mut [u8] {
         unsafe { slice::from_raw_parts_mut(self.content_ptr(), self.content_size()) }
     }
+
+    /// Returns the page info.
+    pub(crate) fn info(&self) -> PageInfo {
+        let meta = unsafe { self.as_ptr().cast::<u64>().read() };
+        let next = self.chain_next();
+        let size = self.len;
+        PageInfo { meta, next, size }
+    }
 }
 
 impl PagePtr {
@@ -392,6 +400,68 @@ impl PageBuilder {
         page.set_epoch(0);
         page.set_chain_len(1);
         page.set_chain_next(0);
+    }
+}
+
+/// The info of a page.
+#[derive(Debug, Clone)]
+pub(crate) struct PageInfo {
+    meta: u64,
+    next: u64,
+    /// The size of the page, include header.
+    size: usize,
+}
+
+impl PageInfo {
+    #[inline]
+    pub(crate) fn from_raw(meta: u64, next: u64, size: usize) -> Self {
+        PageInfo { meta, next, size }
+    }
+
+    /// Returns the page tier.
+    #[inline]
+    pub(crate) fn tier(&self) -> PageTier {
+        self.flags().tier()
+    }
+
+    /// Returns the page kind
+    #[inline]
+    pub(crate) fn kind(&self) -> PageKind {
+        self.flags().kind()
+    }
+
+    /// Returns the page epoch.
+    #[inline]
+    pub(crate) fn epoch(&self) -> u64 {
+        self.meta & PAGE_EPOCH_MAX
+    }
+
+    /// Returns the address of the next page.
+    #[inline]
+    pub(crate) fn chain_next(&self) -> u64 {
+        self.next
+    }
+
+    /// Returns the length of the chain.
+    #[inline]
+    pub(crate) fn chain_len(&self) -> u8 {
+        (self.meta >> ((PAGE_EPOCH_LEN + 1) * 8)) as u8
+    }
+
+    /// Returns the page size.
+    #[inline]
+    pub(crate) fn size(&self) -> usize {
+        self.size
+    }
+
+    #[inline]
+    pub(crate) fn value(&self) -> (u64, u64) {
+        (self.meta, self.next)
+    }
+
+    #[inline]
+    fn flags(&self) -> PageFlags {
+        PageFlags((self.meta >> (PAGE_EPOCH_LEN * 8)) as u8)
     }
 }
 

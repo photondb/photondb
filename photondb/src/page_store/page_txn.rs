@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     env::Env,
-    page::{PageBuf, PageRef},
+    page::{PageBuf, PageInfo, PageRef},
     page_store::page_file::FileId,
 };
 
@@ -69,25 +69,51 @@ impl<E: Env> Guard<E> {
         self.page_table.get(id)
     }
 
-    pub(crate) async fn read_page(&self, addr: u64) -> Result<PageRef> {
-        let logic_id = (addr >> 32) as u32;
-        if let Some(buf) = self.version.get(logic_id) {
+    pub(crate) fn read_page_info(&self, addr: u64) -> Result<PageInfo> {
+        let logical_id = (addr >> 32) as u32;
+        if let Some(buf) = self.version.get(logical_id) {
             // Safety: all mutable references are released.
+            let page = unsafe { buf.page(addr) };
+            return Ok(page.info());
+        }
+
+        let Some(file_info) = self.version.page_files().get(&logical_id) else {
+            panic!("File {logical_id} (addr {addr}) is not exists");
+        };
+        assert_eq!(file_info.get_file_id(), logical_id);
+
+        let Some(page_info) = file_info.get_page_info(addr) else {
+            let physical_id = if let Some(id) = file_info.get_map_file_id() {
+                // This is partial page file, read page from the corresponding map file.
+                FileId::Map(id)
+            } else {
+                FileId::Page(logical_id)
+            };
+            panic!("The addr {addr} is not belongs to the target file {physical_id:?}");
+        };
+
+        Ok(page_info)
+    }
+
+    pub(crate) async fn read_page(&self, addr: u64) -> Result<PageRef> {
+        let logical_id = (addr >> 32) as u32;
+        if let Some(buf) = self.version.get(logical_id) {
             self.writebuf_stats.read_in_buf.inc();
+            // Safety: all mutable references are released.
             return Ok(unsafe { buf.page(addr) });
         }
         self.writebuf_stats.read_in_file.inc();
 
-        let Some(file_info) = self.version.page_files().get(&logic_id) else {
-            panic!("File {logic_id} (addr {addr}) is not exists");
+        let Some(file_info) = self.version.page_files().get(&logical_id) else {
+            panic!("File {logical_id} (addr {addr}) is not exists");
         };
-        assert_eq!(file_info.get_file_id(), logic_id);
+        assert_eq!(file_info.get_file_id(), logical_id);
 
         let physical_id = if let Some(id) = file_info.get_map_file_id() {
             // This is partial page file, read page from the corresponding map file.
             FileId::Map(id)
         } else {
-            FileId::Page(logic_id)
+            FileId::Page(logical_id)
         };
 
         let Some(handle) = file_info.get_page_handle(addr) else {

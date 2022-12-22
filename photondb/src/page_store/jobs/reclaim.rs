@@ -9,6 +9,7 @@ use log::{debug, info, trace};
 
 use crate::{
     env::Env,
+    page::PageRef,
     page_store::{
         page_file::{FileId, MapFileBuilder, PartialFileBuilder},
         page_table::PageTable,
@@ -660,7 +661,11 @@ where
                 .read_file_page_from_reader(reader.clone(), file_info.meta(), handle, &mut page)
                 .await
                 .unwrap();
-            builder.add_page(page_id, page_addr, &page).await.unwrap();
+            let page_ref = PageRef::new(page.as_slice());
+            builder
+                .add_page(page_id, page_addr, page_ref.info(), &page)
+                .await
+                .unwrap();
         }
         self.job_stats
             .read_file_bytes
@@ -763,7 +768,10 @@ where
                 self.page_files
                     .read_file_page_from_reader(reader.clone(), info.meta(), handle, &mut page)
                     .await?;
-                partial_builder.add_page(page_id, page_addr, &page).await?;
+                let page_ref = PageRef::new(page.as_slice());
+                partial_builder
+                    .add_page(page_id, page_addr, page_ref.info(), &page)
+                    .await?;
             }
             builder = partial_builder.finish().await?;
         }
@@ -1047,6 +1055,7 @@ mod tests {
     use super::*;
     use crate::{
         env::Photon,
+        page::PageInfo,
         page_store::{
             page_file::Compression, version::DeltaVersion, ChecksumType,
             MinDeclineRateStrategyBuilder, RecordRef,
@@ -1087,7 +1096,11 @@ mod tests {
             .await
             .unwrap();
         for (page_id, page_addr) in pages {
-            builder.add_page(*page_id, *page_addr, &[0]).await.unwrap();
+            let page_info = PageInfo::from_raw(0, 0, 32);
+            builder
+                .add_page(*page_id, *page_addr, page_info, &[0; 32])
+                .await
+                .unwrap();
         }
         builder.add_delete_pages(dealloc_pages);
         builder.finish().await.unwrap()
@@ -1270,8 +1283,9 @@ mod tests {
         for (id, pages) in pages {
             let mut file_builder = builder.add_file(id);
             for (page_id, page_addr) in pages {
+                let page_info = PageInfo::from_raw(0, 0, 32);
                 file_builder
-                    .add_page(page_id, page_addr, &[0])
+                    .add_page(page_id, page_addr, page_info, &[0; 32])
                     .await
                     .unwrap();
             }
@@ -1325,7 +1339,7 @@ mod tests {
 
         let f4_info = virtual_infos.get(&f4).unwrap();
         assert!(f4_info.get_page_handle(pa(f4, 0)).is_none());
-        assert!(f4_info.get_page_handle(pa(f2, 32)).is_none());
+        assert!(f4_info.get_page_handle(pa(f4, 32)).is_some());
         assert!(f4_info.get_page_handle(pa(f4, 64)).is_some());
 
         let base_size = virtual_infos
@@ -1393,7 +1407,7 @@ mod tests {
 
         let f4_info = page_files.get(&f4).unwrap();
         assert!(f4_info.get_page_handle(pa(f4, 0)).is_none());
-        assert!(f4_info.get_page_handle(pa(f2, 32)).is_none());
+        assert!(f4_info.get_page_handle(pa(f4, 32)).is_some());
         assert!(f4_info.get_page_handle(pa(f4, 64)).is_some());
 
         let map_files = version.map_files();

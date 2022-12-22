@@ -404,6 +404,7 @@ pub(crate) mod facade {
         use tempdir::TempDir;
 
         use super::*;
+        use crate::page::PageInfo;
 
         #[photonio::test]
         fn test_file_builder() {
@@ -415,7 +416,10 @@ pub(crate) mod facade {
                 .await
                 .unwrap();
             builder.add_delete_pages(&[1, 2]);
-            builder.add_page(3, 1, &[3, 4, 1]).await.unwrap();
+            builder
+                .add_page(3, 1, empty_page_info(), &[3, 4, 1])
+                .await
+                .unwrap();
             builder.finish().await.unwrap();
         }
 
@@ -433,13 +437,13 @@ pub(crate) mod facade {
                     .await
                     .unwrap();
                 b.add_delete_pages(&[page_addr(1, 0), page_addr(1, 1)]);
-                b.add_page(1, page_addr(2, 2), &[7].repeat(8192))
+                b.add_page(1, page_addr(2, 2), empty_page_info(), &[7].repeat(8192))
                     .await
                     .unwrap();
-                b.add_page(2, page_addr(2, 3), &[8].repeat(8192 / 2))
+                b.add_page(2, page_addr(2, 3), empty_page_info(), &[8].repeat(8192 / 2))
                     .await
                     .unwrap();
-                b.add_page(3, page_addr(2, 4), &[9].repeat(8192 / 3))
+                b.add_page(3, page_addr(2, 4), empty_page_info(), &[9].repeat(8192 / 3))
                     .await
                     .unwrap();
                 let info = b.finish().await.unwrap();
@@ -488,13 +492,13 @@ pub(crate) mod facade {
                     .await
                     .unwrap();
                 b.add_delete_pages(&[page_addr(1, 0), page_addr(1, 1)]);
-                b.add_page(1, page_addr(2, 2), &[7].repeat(8192))
+                b.add_page(1, page_addr(2, 2), empty_page_info(), &[7].repeat(8192))
                     .await
                     .unwrap();
-                b.add_page(2, page_addr(2, 3), &[8].repeat(8192 / 2))
+                b.add_page(2, page_addr(2, 3), empty_page_info(), &[8].repeat(8192 / 2))
                     .await
                     .unwrap();
-                b.add_page(3, page_addr(2, 4), &[9].repeat(8192 / 3))
+                b.add_page(3, page_addr(2, 4), empty_page_info(), &[9].repeat(8192 / 3))
                     .await
                     .unwrap();
                 b.finish().await.unwrap()
@@ -550,9 +554,15 @@ pub(crate) mod facade {
                     .new_page_file_builder(file_id, Compression::ZSTD)
                     .await
                     .unwrap();
-                b.add_page(1, page_addr1, &[1].repeat(10)).await.unwrap();
-                b.add_page(1, page_addr2, &[2].repeat(10)).await.unwrap();
-                b.add_page(2, page_addr3, &[3].repeat(10)).await.unwrap();
+                b.add_page(1, page_addr1, empty_page_info(), &[1].repeat(10))
+                    .await
+                    .unwrap();
+                b.add_page(1, page_addr2, empty_page_info(), &[2].repeat(10))
+                    .await
+                    .unwrap();
+                b.add_page(2, page_addr3, empty_page_info(), &[3].repeat(10))
+                    .await
+                    .unwrap();
                 let file_info = b.finish().await.unwrap();
                 assert!(file_info.get_page_handle(page_addr1).is_some())
             }
@@ -581,8 +591,12 @@ pub(crate) mod facade {
                     .new_page_file_builder(file_id, Compression::ZSTD)
                     .await
                     .unwrap();
-                b.add_page(1, page_addr1, &[1].repeat(10)).await.unwrap();
-                b.add_page(1, page_addr2, &[2].repeat(10)).await.unwrap();
+                b.add_page(1, page_addr1, empty_page_info(), &[1].repeat(10))
+                    .await
+                    .unwrap();
+                b.add_page(1, page_addr2, empty_page_info(), &[2].repeat(10))
+                    .await
+                    .unwrap();
                 let file_info = b.finish().await.unwrap();
                 assert!(file_info.get_page_handle(page_addr1).is_some())
             }
@@ -623,6 +637,10 @@ pub(crate) mod facade {
                 cache_capacity: 2 << 10,
                 ..Default::default()
             }
+        }
+
+        fn empty_page_info() -> PageInfo {
+            PageInfo::from_raw(0, 0, 0)
         }
     }
 }
