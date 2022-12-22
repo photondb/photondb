@@ -8,8 +8,11 @@ use std::{
 
 use parking_lot::Mutex;
 
-use super::{AtomicCacheStats, Cache, CacheEntry, CacheToken, Handle, LRUHandle, CACHE_DISCARD};
-use crate::page_store::{cache::CACHE_AS_HOT, stats::CacheStats, Result};
+use super::{
+    AtomicCacheStats, Cache, CacheEntry, CacheToken, Handle, LRUHandle, CACHE_AS_COLD,
+    CACHE_DISCARD,
+};
+use crate::page_store::{cache::CACHE_AS_HOT, stats::CacheStats, CacheOption, Result};
 
 pub(crate) struct LRUCache<T: Clone> {
     shards: Vec<Mutex<LRUCacheShard<T>>>,
@@ -109,45 +112,30 @@ impl<T: Clone> Cache<T> for LRUCache<T> {
         key: u64,
         value: Option<T>,
         charge: usize,
+        option: CacheOption,
     ) -> Result<Option<CacheEntry<T, Self>>> {
         let hash = Self::hash_key(key);
         let idx = self.shard(hash);
         let shard = &self.shards[idx as usize];
         let mut shard = shard.lock();
-        unsafe { shard.insert(key, hash, value, charge) }.map(|ptr| {
+        unsafe { shard.insert(key, hash, value, charge, option) }.map(|ptr| {
             if ptr.is_null() {
                 None
             } else {
+                let token = if unsafe { (*ptr).detached } {
+                    CacheToken::new(CACHE_DISCARD)
+                } else if option == CacheOption::REFILL_COLD_WHEN_NOT_FULL {
+                    CacheToken::new(CACHE_AS_COLD)
+                } else {
+                    CacheToken::default()
+                };
                 Some(CacheEntry {
                     handle: Handle::Lru(ptr),
                     cache: self.clone(),
-                    token: CacheToken::default(),
+                    token,
                 })
             }
         })
-    }
-
-    fn detach(
-        self: &std::sync::Arc<Self>,
-        key: u64,
-        value: Option<T>,
-        charge: usize,
-    ) -> Result<Option<CacheEntry<T, Self>>> {
-        let hash = Self::hash_key(key);
-        let h = Box::new(LRUHandle {
-            key,
-            hash,
-            value,
-            charge,
-            detached: true,
-            ..Default::default()
-        });
-        let handle = Box::into_raw(h);
-        Ok(Some(CacheEntry {
-            handle: Handle::Lru(handle),
-            cache: self.clone(),
-            token: CacheToken::new(CACHE_DISCARD),
-        }))
     }
 
     fn lookup(self: &std::sync::Arc<Self>, key: u64) -> Option<CacheEntry<T, Self>> {
@@ -225,8 +213,20 @@ impl<T: Clone> LRUCacheShard<T> {
         hash: u32,
         value: Option<T>,
         charge: usize,
+        option: CacheOption,
     ) -> Result<*mut LRUHandle<T>> {
-        self.evict_from_lru(charge);
+        if !self.evict_from_lru(charge, option) {
+            let h = Box::new(LRUHandle {
+                key,
+                hash,
+                value,
+                charge,
+                detached: true,
+                ..Default::default()
+            });
+            let handle = Box::into_raw(h);
+            return Ok(handle);
+        }
         let h = Box::new(LRUHandle {
             key,
             value,
@@ -332,7 +332,12 @@ impl<T: Clone> LRUCacheShard<T> {
         self.lru_usage.fetch_sub((*e).charge, Ordering::Relaxed);
     }
 
-    unsafe fn evict_from_lru(&mut self, charge: usize) {
+    unsafe fn evict_from_lru(&mut self, charge: usize, option: CacheOption) -> bool {
+        if option == CacheOption::REFILL_COLD_WHEN_NOT_FULL
+            && self.usage.load(Ordering::Relaxed) + charge > self.capacity
+        {
+            return false;
+        }
         while self.usage.load(Ordering::Relaxed) + charge > self.capacity
             && !std::ptr::eq((*self.head.ptr).next_linked, self.head.ptr)
         {
@@ -342,6 +347,7 @@ impl<T: Clone> LRUCacheShard<T> {
             self.clear_handle(old_ptr);
             self.stats.passive_evict.inc();
         }
+        true
     }
 
     unsafe fn clear_handle(&mut self, lh: *mut LRUHandle<T>) {

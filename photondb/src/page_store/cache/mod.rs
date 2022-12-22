@@ -10,7 +10,7 @@ use ::std::sync::{
     Arc,
 };
 
-use super::stats::CacheStats;
+use super::{stats::CacheStats, CacheOption};
 use crate::{
     page_store::{Error, Result},
     util::atomic::Counter,
@@ -25,13 +25,7 @@ pub(crate) trait Cache<T: Clone>: Sized {
         key: u64,
         value: Option<T>,
         charge: usize,
-    ) -> Result<Option<CacheEntry<T, Self>>>;
-
-    fn detach(
-        self: &Arc<Self>,
-        key: u64,
-        value: Option<T>,
-        charge: usize,
+        option: CacheOption,
     ) -> Result<Option<CacheEntry<T, Self>>>;
 
     fn lookup(self: &Arc<Self>, key: u64) -> Option<CacheEntry<T, Self>>;
@@ -332,16 +326,25 @@ mod tests {
 
         let c = Arc::new(LRUCache::new(2, -1));
 
-        let h = c.insert(1, Some(vec![1]), 1).unwrap().unwrap();
+        let h = c
+            .insert(1, Some(vec![1]), 1, CacheOption::default())
+            .unwrap()
+            .unwrap();
         drop(h);
         let h = c.lookup(1).unwrap();
         assert_eq!(h.key(), 1);
         drop(h);
 
-        let h = c.insert(2, Some(vec![2]), 1).unwrap().unwrap();
+        let h = c
+            .insert(2, Some(vec![2]), 1, CacheOption::default())
+            .unwrap()
+            .unwrap();
         drop(h);
 
-        let h = c.insert(3, Some(vec![3]), 1).unwrap().unwrap();
+        let h = c
+            .insert(3, Some(vec![3]), 1, CacheOption::default())
+            .unwrap()
+            .unwrap();
         drop(h);
         let h = c.lookup(3).unwrap();
         assert_eq!(h.key(), 3);
@@ -364,7 +367,10 @@ mod tests {
             let c = c.clone();
             thread::spawn(move || {
                 for i in 1..=3 {
-                    let v = c.insert(i, Some(vec![i]), 1).unwrap().unwrap();
+                    let v = c
+                        .insert(i, Some(vec![i]), 1, CacheOption::default())
+                        .unwrap()
+                        .unwrap();
                     assert_eq!(v.key(), i);
                     drop(v);
                 }
@@ -378,7 +384,10 @@ mod tests {
         assert!(c.lookup(1).is_none());
         assert!(c.lookup(2).is_none());
 
-        let v = c.insert(4, Some(vec![4]), 1).unwrap().unwrap();
+        let v = c
+            .insert(4, Some(vec![4]), 1, CacheOption::default())
+            .unwrap()
+            .unwrap();
         assert_eq!(v.key(), 4);
         drop(v);
 

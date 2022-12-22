@@ -5,7 +5,7 @@ use futures::Future;
 use super::{file_builder::*, types::FileMeta, FileId};
 use crate::{
     env::{Env, PositionalReader, PositionalReaderExt},
-    page_store::{cache::Cache, stats::CacheStats, Error, LRUCache, Result},
+    page_store::{cache::Cache, stats::CacheStats, CacheOption, Error, LRUCache, Result},
     util::atomic::Counter,
 };
 
@@ -228,7 +228,10 @@ impl<E: Env> FileReaderCache<E> {
             return Ok(cached.value().clone());
         }
         let reader = init.await;
-        match self.cache.insert(key, Some(reader.clone()), 1) {
+        match self
+            .cache
+            .insert(key, Some(reader.clone()), 1, CacheOption::default())
+        {
             Ok(_) | Err(Error::MemoryLimit) => {}
             Err(err) => return Err(err),
         }

@@ -19,21 +19,21 @@ use crate::{
 };
 
 bitflags! {
-/// PageStore Read Option.
-pub struct PageReadOption: u8 {
-    /// Default: read from cache first, read disk and refill cache when cache miss.
+/// Cache Option.
+pub struct CacheOption: u8 {
+    /// Default: read from cache first, read disk and refill cache as recent used when cache miss.
     const DEFAULT = 0;
-    /// NotRefillCache: read from cache first and read disk when cache miss but NOT refill cache after read disk.
+    /// RefillColdWhenNotFull: read from cache first and read disk when cache miss.
+    /// It will refil cache as cold when cache has space after cache miss and Not refill cache when cache already full.
     /// It's normally be used when read some cold data(not in cache) and discard them soon(i.g. consolidate)
-    /// So it avoid refill those code data into cache.
-    const NOT_REFILL_CACHE = 1;
+    const REFILL_COLD_WHEN_NOT_FULL = 1;
 }
 }
 
-impl Default for PageReadOption {
+impl Default for CacheOption {
     fn default() -> Self {
         Self {
-            bits: PageReadOption::DEFAULT.bits,
+            bits: CacheOption::DEFAULT.bits,
         }
     }
 }
@@ -121,7 +121,7 @@ impl<E: Env> Guard<E> {
     pub(crate) async fn read_page(
         &self,
         addr: u64,
-        hint: PageReadOption,
+        hint: CacheOption,
     ) -> Result<(PageRef, Option<CacheToken>)> {
         let logical_id = (addr >> 32) as u32;
         if let Some(buf) = self.version.get(logical_id) {

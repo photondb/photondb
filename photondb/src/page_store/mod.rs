@@ -7,7 +7,7 @@ pub(crate) use error::{Error, Result};
 
 mod page_txn;
 use futures::lock::Mutex;
-pub(crate) use page_txn::{Guard, PageReadOption};
+pub(crate) use page_txn::{CacheOption, Guard};
 
 mod page_table;
 use page_table::PageTable;

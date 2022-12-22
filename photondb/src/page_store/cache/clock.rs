@@ -901,25 +901,6 @@ impl<T: Clone> ClockCacheShard<T> {
         self.table.insert(h, self.capacity)
     }
 
-    fn detached_insert(
-        &self,
-        key: u64,
-        hash: u32,
-        value: Option<T>,
-        charge: usize,
-    ) -> Result<*mut ClockHandle<T>> {
-        let h = ClockHandle {
-            key,
-            value,
-            hash,
-            charge,
-            ..Default::default()
-        };
-        self.table.usage.fetch_add(charge, Ordering::Relaxed);
-        let h = self.table.detached_insert(&h);
-        Ok(h)
-    }
-
     fn lookup(&self, key: u64, hash: u32) -> *mut ClockHandle<T> {
         self.table.lookup(key, hash)
     }
@@ -968,33 +949,12 @@ impl<T: Clone> Cache<T> for ClockCache<T> {
         key: u64,
         value: Option<T>,
         charge: usize,
+        _option: CacheOption,
     ) -> Result<Option<CacheEntry<T, Self>>> {
         let hash = Self::hash_key(key);
         let idx = self.shard(hash);
         let shard = &self.shards[idx as usize];
         shard.insert(key, hash, value, charge).map(|ptr| {
-            if ptr.is_null() {
-                None
-            } else {
-                Some(CacheEntry {
-                    handle: Handle::Clock(ptr),
-                    cache: self.clone(),
-                    token: CacheToken::default(),
-                })
-            }
-        })
-    }
-
-    fn detach(
-        self: &Arc<Self>,
-        key: u64,
-        value: Option<T>,
-        charge: usize,
-    ) -> Result<Option<CacheEntry<T, Self>>> {
-        let hash = Self::hash_key(key);
-        let idx = self.shard(hash);
-        let shard = &self.shards[idx as usize];
-        shard.detached_insert(key, hash, value, charge).map(|ptr| {
             if ptr.is_null() {
                 None
             } else {

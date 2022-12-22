@@ -45,7 +45,7 @@ pub(crate) mod facade {
     use crate::{
         env::{Env, PositionalReader, SequentialWriter},
         page_store::{
-            page_txn::PageReadOption, stats::CacheStats, Cache, CacheEntry, Error, LRUCache, Result,
+            page_txn::CacheOption, stats::CacheStats, Cache, CacheEntry, Error, LRUCache, Result,
         },
         PageStoreOptions,
     };
@@ -152,7 +152,7 @@ pub(crate) mod facade {
             file_info: &FileInfo,
             addr: u64,
             handle: PageHandle,
-            hint: PageReadOption,
+            hint: CacheOption,
         ) -> Result<(CacheEntry<Vec<u8>, LRUCache<Vec<u8>>>, /* hit */ bool)> {
             if let Some(cache_entry) = self.page_cache.lookup(addr) {
                 return Ok((cache_entry, true));
@@ -163,14 +163,7 @@ pub(crate) mod facade {
                 .await?;
 
             let charge = buf.len();
-            let cache_entry = match hint {
-                PageReadOption::DEFAULT => self.page_cache.insert(addr, Some(buf), charge)?,
-                PageReadOption::NOT_REFILL_CACHE => {
-                    self.page_cache.detach(addr, Some(buf), charge)?
-                }
-                _ => unreachable!(),
-            };
-
+            let cache_entry = self.page_cache.insert(addr, Some(buf), charge, hint)?;
             Ok((cache_entry.unwrap(), false))
         }
 
@@ -346,10 +339,12 @@ pub(crate) mod facade {
                 return Ok(());
             }
             let val = page_content.to_owned(); // TODO: aligned buffer pool
-            let guard = match self
-                .page_cache
-                .insert(page_addr, Some(val), page_content.len())
-            {
+            let guard = match self.page_cache.insert(
+                page_addr,
+                Some(val),
+                page_content.len(),
+                CacheOption::default(),
+            ) {
                 Ok(guard) => guard,
                 Err(Error::MemoryLimit) => return Ok(()),
                 Err(err) => return Err(err),
