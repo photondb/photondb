@@ -5,7 +5,7 @@ use futures::Future;
 use super::{file_builder::*, types::FileMeta, FileId};
 use crate::{
     env::{Env, PositionalReader, PositionalReaderExt},
-    page_store::{cache::Cache, stats::CacheStats, ClockCache, Error, Result},
+    page_store::{cache::Cache, stats::CacheStats, CacheOption, Error, LRUCache, Result},
     util::atomic::Counter,
 };
 
@@ -205,13 +205,13 @@ impl<R: PositionalReader> MetaReader<R> {
 }
 
 pub(super) struct FileReaderCache<E: Env> {
-    cache: Arc<ClockCache<Arc<PageFileReader<E::PositionalReader>>>>,
+    cache: Arc<LRUCache<Arc<PageFileReader<E::PositionalReader>>>>,
     _marker: PhantomData<E>,
 }
 
 impl<E: Env> FileReaderCache<E> {
     pub(super) fn new(max_size: u64) -> Self {
-        let cache = Arc::new(ClockCache::new(max_size as usize, 1, -1, false, false));
+        let cache = Arc::new(LRUCache::new(max_size as usize, -1));
         Self {
             cache,
             _marker: PhantomData,
@@ -228,7 +228,10 @@ impl<E: Env> FileReaderCache<E> {
             return Ok(cached.value().clone());
         }
         let reader = init.await;
-        match self.cache.insert(key, Some(reader.clone()), 1) {
+        match self
+            .cache
+            .insert(key, Some(reader.clone()), 1, CacheOption::default())
+        {
             Ok(_) | Err(Error::MemoryLimit) => {}
             Err(err) => return Err(err),
         }

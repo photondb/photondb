@@ -44,7 +44,9 @@ pub(crate) mod facade {
     };
     use crate::{
         env::{Env, PositionalReader, SequentialWriter},
-        page_store::{stats::CacheStats, Cache, CacheEntry, ClockCache, Error, Result},
+        page_store::{
+            page_txn::CacheOption, stats::CacheStats, Cache, CacheEntry, Error, LRUCache, Result,
+        },
         PageStoreOptions,
     };
 
@@ -63,7 +65,7 @@ pub(crate) mod facade {
         write_checksum_type: ChecksumType,
 
         reader_cache: file_reader::FileReaderCache<E>,
-        page_cache: Arc<ClockCache<Vec<u8>>>,
+        page_cache: Arc<LRUCache<Vec<u8>>>,
     }
 
     impl<E: Env> PageFiles<E> {
@@ -77,13 +79,7 @@ pub(crate) mod facade {
             let base = base.into();
             let base_dir = env.open_dir(&base).await.expect("open base dir fail");
             let reader_cache = FileReaderCache::new(options.cache_file_reader_capacity);
-            let page_cache = Arc::new(ClockCache::new(
-                options.cache_capacity,
-                options.cache_estimated_entry_charge,
-                -1,
-                options.cache_strict_capacity_limit,
-                false,
-            ));
+            let page_cache = Arc::new(LRUCache::new(options.cache_capacity, -1));
             let use_direct = options.use_direct_io;
             let prepopulate_cache_on_flush = options.prepopulate_cache_on_flush;
             let write_checksum_type = options.page_checksum_type;
@@ -156,10 +152,8 @@ pub(crate) mod facade {
             file_info: &FileInfo,
             addr: u64,
             handle: PageHandle,
-        ) -> Result<(
-            CacheEntry<Vec<u8>, ClockCache<Vec<u8>>>,
-            /* hit */ bool,
-        )> {
+            hint: CacheOption,
+        ) -> Result<(CacheEntry<Vec<u8>, LRUCache<Vec<u8>>>, /* hit */ bool)> {
             if let Some(cache_entry) = self.page_cache.lookup(addr) {
                 return Ok((cache_entry, true));
             }
@@ -167,9 +161,9 @@ pub(crate) mod facade {
             let buf = self
                 .read_file_page(file_id, file_info.meta(), handle)
                 .await?;
-            let charge = buf.len();
-            let cache_entry = self.page_cache.insert(addr, Some(buf), charge)?;
 
+            let charge = buf.len();
+            let cache_entry = self.page_cache.insert(addr, Some(buf), charge, hint)?;
             Ok((cache_entry.unwrap(), false))
         }
 
@@ -345,10 +339,12 @@ pub(crate) mod facade {
                 return Ok(());
             }
             let val = page_content.to_owned(); // TODO: aligned buffer pool
-            let guard = match self
-                .page_cache
-                .insert(page_addr, Some(val), page_content.len())
-            {
+            let guard = match self.page_cache.insert(
+                page_addr,
+                Some(val),
+                page_content.len(),
+                CacheOption::default(),
+            ) {
                 Ok(guard) => guard,
                 Err(Error::MemoryLimit) => return Ok(()),
                 Err(err) => return Err(err),

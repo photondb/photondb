@@ -3,11 +3,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use bitflags::bitflags;
+
 use super::{
+    cache::CacheToken,
     stats::AtomicWritebufStats,
     version::Version,
     write_buffer::{RecordHeader, ReleaseState},
-    CacheEntry, ClockCache, Error, PageFiles, PageTable, Result, WriteBuffer, NAN_ID,
+    CacheEntry, Error, LRUCache, PageFiles, PageTable, Result, WriteBuffer, NAN_ID,
 };
 use crate::{
     env::Env,
@@ -15,7 +18,27 @@ use crate::{
     page_store::page_file::FileId,
 };
 
-type CacheEntryGuard = CacheEntry<Vec<u8>, ClockCache<Vec<u8>>>;
+bitflags! {
+/// Cache Option.
+pub struct CacheOption: u8 {
+    /// Default: read from cache first, read disk and refill cache as recent used when cache miss.
+    const DEFAULT = 0;
+    /// RefillColdWhenNotFull: read from cache first and read disk when cache miss.
+    /// It will refil cache as cold when cache has space after cache miss and Not refill cache when cache already full.
+    /// It's normally be used when read some cold data(not in cache) and discard them soon(i.g. consolidate)
+    const REFILL_COLD_WHEN_NOT_FULL = 1;
+}
+}
+
+impl Default for CacheOption {
+    fn default() -> Self {
+        Self {
+            bits: CacheOption::DEFAULT.bits,
+        }
+    }
+}
+
+type CacheEntryGuard = CacheEntry<Vec<u8>, LRUCache<Vec<u8>>>;
 
 pub(crate) struct Guard<E: Env>
 where
@@ -95,12 +118,16 @@ impl<E: Env> Guard<E> {
         Ok(page_info)
     }
 
-    pub(crate) async fn read_page(&self, addr: u64) -> Result<PageRef> {
+    pub(crate) async fn read_page(
+        &self,
+        addr: u64,
+        hint: CacheOption,
+    ) -> Result<(PageRef, Option<CacheToken>)> {
         let logical_id = (addr >> 32) as u32;
         if let Some(buf) = self.version.get(logical_id) {
             self.writebuf_stats.read_in_buf.inc();
             // Safety: all mutable references are released.
-            return Ok(unsafe { buf.page(addr) });
+            return Ok((unsafe { buf.page(addr) }, None));
         }
         self.writebuf_stats.read_in_file.inc();
 
@@ -122,7 +149,7 @@ impl<E: Env> Guard<E> {
 
         let (entry, hit) = self
             .page_files
-            .read_page(physical_id, file_info, addr, handle)
+            .read_page(physical_id, file_info, addr, handle, hint)
             .await?;
 
         let mut owned_pages = self.cache_guards.lock().expect("Poisoned");
@@ -133,11 +160,18 @@ impl<E: Env> Guard<E> {
         if !hit {
             self.writebuf_stats.read_file_bytes.add(page.len() as u64);
         }
+        let cache_token = last_guard.cache_token();
 
-        Ok(PageRef::new(unsafe {
+        let page = PageRef::new(unsafe {
             // Safety: the lifetime is guarranted by `guard`.
             std::slice::from_raw_parts(page.as_ptr(), page.len())
-        }))
+        });
+
+        if !hit && !page.tier().is_leaf() {
+            self.writebuf_stats.miss_innner.inc();
+        }
+
+        Ok((page, Some(cache_token)))
     }
 }
 
