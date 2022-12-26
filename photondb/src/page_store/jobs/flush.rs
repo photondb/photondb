@@ -259,7 +259,9 @@ impl<E: Env> FlushCtx<E> {
                     continue;
                 }
                 if let Some(map_file_id) = file_info.get_map_file_id() {
-                    let map_file = map_files.get_mut(&map_file_id).expect("Must exists");
+                    let Some(map_file) = map_files.get_mut(&map_file_id) else {
+                        panic!("dealloc page {page_addr} with virtual file {file_id}, but map file {map_file_id} not exists");
+                    };
                     map_file.on_update(now);
                 }
             };
@@ -316,7 +318,7 @@ fn drain_obsoleted_map_files(
     'OUTER: for (map_id, info) in &mut *map_files {
         for file_id in info.meta().page_files().keys() {
             if let Some(file_info) = files.get(file_id) {
-                if file_info.is_empty() {
+                if !file_info.is_empty() {
                     continue 'OUTER;
                 }
             }
