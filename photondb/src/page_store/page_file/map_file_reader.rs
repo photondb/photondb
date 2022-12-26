@@ -24,6 +24,8 @@ pub(crate) struct MapFileMetaHolder {
     pub(crate) file_meta_map: HashMap<u32, Arc<FileMeta>>,
     /// The page tables of page files.
     pub(crate) page_tables: HashMap<u32, BTreeMap<u64, u64>>,
+    /// The dealloc pages
+    pub(crate) dealloc_pages: Vec<u64>,
 }
 
 impl MapFileMetaHolder {
@@ -55,6 +57,8 @@ impl MapFileMetaHolder {
             page_tables.insert(page_index.file_id, page_table);
             offset = page_index.meta_handle.offset + page_index.meta_handle.length;
         }
+        let dealloc_pages = Self::read_dealloc_pages(&reader, &footer).await?;
+
         let file_meta = Arc::new(MapFileMeta::new(
             file_id,
             reader.file_size,
@@ -65,10 +69,11 @@ impl MapFileMetaHolder {
             file_meta_map,
             file_meta,
             page_tables,
+            dealloc_pages,
         })
     }
 
-    /// Read the page table of the specified partital file.
+    /// Read the page table of the specified partial file.
     async fn read_page_table<R: PositionalReader>(
         reader: &MapFileReader<R>,
         file_meta: &FileMeta,
@@ -125,5 +130,23 @@ impl MapFileMetaHolder {
             buf = &mut buf[RECORD_SIZE..];
         }
         Ok(indexes)
+    }
+
+    /// Read the dealloc pages block.
+    async fn read_dealloc_pages<R: PositionalReader>(
+        reader: &MapFileReader<R>,
+        footer: &Footer,
+    ) -> Result<Vec<u64>> {
+        let handle = footer.dealloc_pages_handle;
+        let mut buf = reader.read_block(handle).await?;
+        let mut buf = buf.as_mut_slice();
+        let mut dealloc_pages = Vec::default();
+        while !buf.is_empty() {
+            let mut payload = [0u8; core::mem::size_of::<u64>()];
+            payload.copy_from_slice(&buf[..core::mem::size_of::<u64>()]);
+            dealloc_pages.push(u64::from_le_bytes(payload));
+            buf = &mut buf[core::mem::size_of::<u64>()..];
+        }
+        Ok(dealloc_pages)
     }
 }

@@ -240,15 +240,8 @@ impl<E: Env> PageStore<E> {
         P: AsRef<Path>,
         R: RewritePage<E>,
     {
-        let (
-            next_page_file_id,
-            next_map_file_id,
-            manifest,
-            table,
-            page_files,
-            delta,
-            orphan_page_files,
-        ) = Self::recover(env.to_owned(), path, &options).await?;
+        let (next_page_file_id, manifest, table, page_files, delta, orphan_page_files) =
+            Self::recover(env.to_owned(), path, &options).await?;
 
         let version = Version::new(
             options.write_buffer_capacity,
@@ -280,7 +273,7 @@ impl<E: Env> PageStore<E> {
         // Spawn background jobs.
         store.spawn_flush_job();
         store.spawn_cleanup_job();
-        store.spawn_reclaim_job(next_map_file_id, rewriter, orphan_page_files);
+        store.spawn_reclaim_job(rewriter, orphan_page_files);
 
         Ok(store)
     }
@@ -353,12 +346,8 @@ impl<E: Env> PageStore<E> {
         self.jobs.push(handle);
     }
 
-    fn spawn_reclaim_job<R>(
-        &mut self,
-        next_map_file_id: u32,
-        rewriter: R,
-        orphan_page_files: HashSet<u32>,
-    ) where
+    fn spawn_reclaim_job<R>(&mut self, rewriter: R, orphan_page_files: HashSet<u32>)
+    where
         R: RewritePage<E>,
     {
         let strategy_builder = Box::new(MinDeclineRateStrategyBuilder);
@@ -371,7 +360,6 @@ impl<E: Env> PageStore<E> {
             self.page_files.clone(),
             self.version_owner.clone(),
             self.manifest.clone(),
-            next_map_file_id,
             orphan_page_files,
             self.job_stats.clone(),
             self.writebuf_stats.clone(),

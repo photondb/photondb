@@ -48,7 +48,6 @@ where
     version_owner: Arc<VersionOwner>,
     manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
 
-    next_map_file_id: u32,
     cleaned_files: HashSet<FileId>,
     orphan_page_files: HashSet<u32>,
 
@@ -119,7 +118,6 @@ where
         page_files: Arc<PageFiles<E>>,
         version_owner: Arc<VersionOwner>,
         manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
-        next_map_file_id: u32,
         orphan_page_files: HashSet<u32>,
         job_stat: Arc<AtomicJobStats>,
         writebuf_stats: Arc<AtomicWritebufStats>,
@@ -133,7 +131,6 @@ where
             page_files,
             version_owner,
             manifest,
-            next_map_file_id,
             cleaned_files: HashSet::default(),
             orphan_page_files,
             job_stats: job_stat,
@@ -278,11 +275,13 @@ where
         version: &Arc<Version>,
         victims: HashSet<u32>,
     ) {
-        let file_id = self.next_map_file_id;
-        self.next_map_file_id += 1;
+        let file_id = {
+            let mut lock = self.manifest.lock().await;
+            lock.next_map_file_id()
+        };
 
         let file_infos = version.page_files();
-        let (virtual_page_files, map_file, obsoleted_files, dealloc_page_map) = self
+        let (virtual_page_files, map_file, obsoleted_files) = self
             .compound_page_files(progress, file_id, file_infos, victims)
             .await
             .unwrap();
@@ -303,16 +302,6 @@ where
         delta.obsoleted_page_files = obsoleted_files.into_iter().collect();
         // Safety: the mutable reference of [`Manifest`] is hold.
         unsafe { self.version_owner.install(delta) };
-
-        // Rewrite dealloc pages for compounded page files.
-        //
-        // It's recoverable, see `reclaim_orphan_page_files` for details.
-        drop(manifest);
-        for (id, dealloc_pages) in dealloc_page_map {
-            self.rewrite_dealloc_pages(id, &version, &dealloc_pages)
-                .await
-                .unwrap();
-        }
     }
 
     async fn reclaim_map_files(
@@ -321,8 +310,10 @@ where
         version: &Arc<Version>,
         victims: HashSet<u32>,
     ) {
-        let file_id = self.next_map_file_id;
-        self.next_map_file_id += 1;
+        let file_id = {
+            let mut lock = self.manifest.lock().await;
+            lock.next_map_file_id()
+        };
 
         let map_files = version.map_files();
         let page_files = version.page_files();
@@ -554,15 +545,10 @@ where
         new_file_id: u32,
         file_infos: &HashMap<u32, FileInfo>,
         victims: HashSet<u32>,
-    ) -> Result<(
-        HashMap<u32, FileInfo>,
-        MapFileInfo,
-        Vec<u32>,
-        HashMap<u32, Vec<u64>>,
-    )> {
+    ) -> Result<(HashMap<u32, FileInfo>, MapFileInfo, Vec<u32>)> {
         let start_at = Instant::now();
         let mut num_active_pages = 0;
-        let mut num_dealloc_pages = 0;
+        let num_dealloc_pages = 0;
         let mut input_size = 0;
         let mut output_size = 0;
         let mut builder = self
@@ -574,13 +560,10 @@ where
             )
             .await?;
         let mut obsoleted_files = vec![];
-        let mut dealloc_page_map = HashMap::default();
         let mut victims = victims.into_iter().collect::<Vec<_>>();
         victims.sort_unstable();
         let mut up2_sum = 0;
         for &id in &victims {
-            let dealloc_pages;
-
             // Compound page file into map file
             let file_builder = builder.add_file(id);
             let file_info = file_infos.get(&id).expect("Victims must exists");
@@ -588,17 +571,12 @@ where
             input_size += file_info.file_size();
             output_size += file_info.effective_size();
             num_active_pages += file_info.num_active_pages();
-            (builder, dealloc_pages) = self
+            builder = self
                 .compound_partial_page_file(file_builder, file_info)
                 .await?;
-            num_dealloc_pages += dealloc_pages.len();
 
             // .. and rewrite dealloc pages if exists
-            if dealloc_pages.is_empty() {
-                obsoleted_files.push(id);
-            } else {
-                dealloc_page_map.insert(id, dealloc_pages);
-            }
+            obsoleted_files.push(id);
             progress.track_page_file(file_info);
             self.cleaned_files.insert(FileId::Page(id));
         }
@@ -623,7 +601,7 @@ where
                 latest {elapsed} microseconds",
         );
 
-        Ok((virtual_infos, file_info, obsoleted_files, dealloc_page_map))
+        Ok((virtual_infos, file_info, obsoleted_files))
     }
 
     /// Write all active pages of the corresponding page file into a map file
@@ -632,16 +610,16 @@ where
         &self,
         mut builder: PartialFileBuilder<'a, E>,
         file_info: &FileInfo,
-    ) -> Result<(MapFileBuilder<'a, E>, Vec<u64>)> {
+    ) -> Result<MapFileBuilder<'a, E>> {
         let file_id = file_info.get_file_id();
         debug!("compound partial page file {file_id}");
-        let reader = self
-            .page_files
-            .open_page_file_meta_reader(file_id)
-            .await
-            .unwrap();
-        let page_table = reader.read_page_table().await.unwrap();
-        let dealloc_pages = reader.read_delete_pages().await.unwrap();
+        let reader = self.page_files.open_page_file_meta_reader(file_id).await?;
+        {
+            let dealloc_pages = reader.read_delete_pages().await?;
+            builder.add_dealloc_pages(&dealloc_pages);
+        }
+
+        let page_table = reader.read_page_table().await?;
         let reader = reader.into_inner();
         let mut page = vec![];
         for page_addr in file_info.iter() {
@@ -671,7 +649,7 @@ where
             .read_file_bytes
             .add(reader.total_read_bytes());
         let builder = builder.finish().await.unwrap();
-        Ok((builder, dealloc_pages))
+        Ok(builder)
     }
 
     /// Compact a set of map files into a new map file, and release mark the
@@ -756,6 +734,7 @@ where
             stats.collect(info);
             let page_table = file_meta.page_tables.get(&id).expect("Must exists");
             let mut partial_builder = builder.add_file(id);
+            partial_builder.add_dealloc_pages(&file_meta.dealloc_pages);
             for page_addr in info.iter() {
                 let page_id = *page_table.get(&page_addr).expect("Must exists");
                 let handle = info.get_page_handle(page_addr).expect("Must exists");
@@ -1138,7 +1117,6 @@ mod tests {
             manifest,
             version_owner,
             cleaned_files: HashSet::default(),
-            next_map_file_id: 1,
             orphan_page_files,
             job_stats: Arc::default(),
             writebuf_stats: Default::default(),
@@ -1240,15 +1218,10 @@ mod tests {
         let version = ctx.version_owner.current();
         let victims = files.keys().cloned().collect::<HashSet<_>>();
         let mut progress = ReclaimProgress::new(&ctx.options, &version, &HashSet::default());
-        let (new_files, map_file, _, dealloc_page_map) = ctx
+        let (new_files, map_file, _) = ctx
             .compound_page_files(&mut progress, 1, &files, victims)
             .await
             .unwrap();
-        for (id, pages) in dealloc_page_map {
-            ctx.rewrite_dealloc_pages(id, &version, &pages)
-                .await
-                .unwrap();
-        }
         assert_eq!(map_file.meta().num_page_files(), 2);
         assert!(new_files.contains_key(&file_id_1));
         assert!(new_files.contains_key(&file_id_2));
@@ -1362,7 +1335,10 @@ mod tests {
 
         let (f1, f2, f3, f4) = (1, 2, 3, 4);
         let (m1, m2, m3) = (1, 2, 3);
-        ctx.next_map_file_id = m3;
+        {
+            let mut lock = ctx.manifest.lock().await;
+            lock.reset_next_map_file_id(m3);
+        }
         let mut pages = HashMap::new();
         pages.insert(f1, vec![(1, pa(f1, 16)), (2, pa(f1, 32)), (3, pa(f1, 64))]);
         pages.insert(f2, vec![(4, pa(f2, 16)), (5, pa(f2, 32)), (6, pa(f2, 64))]);

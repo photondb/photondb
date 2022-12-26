@@ -558,7 +558,6 @@ mod tests {
 
     #[photonio::test]
     async fn page_txn_insert_page() {
-        env_logger::init();
         let env = crate::env::Photon;
         let base = tempdir::TempDir::new("test_page_insert_page").unwrap();
         let files = Arc::new(PageFiles::new(env, base.path(), &test_option()).await);

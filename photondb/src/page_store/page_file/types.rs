@@ -418,12 +418,29 @@ pub(crate) struct MapFileInfo {
     up1: u32,
     up2: u32,
 
+    /// The referenced page files, this should be placed in meta.
+    referenced_files: HashSet<u32>,
+
     meta: Arc<MapFileMeta>,
 }
 
 impl MapFileInfo {
-    pub(crate) fn new(up1: u32, up2: u32, meta: Arc<MapFileMeta>) -> Self {
-        MapFileInfo { up1, up2, meta }
+    pub(crate) fn new(
+        up1: u32,
+        up2: u32,
+        referenced_files: HashSet<u32>,
+        meta: Arc<MapFileMeta>,
+    ) -> Self {
+        MapFileInfo {
+            up1,
+            up2,
+            referenced_files,
+            meta,
+        }
+    }
+
+    pub(crate) fn get_referenced_files(&self) -> &HashSet<u32> {
+        &self.referenced_files
     }
 
     pub(crate) fn on_update(&mut self, now: u32) {

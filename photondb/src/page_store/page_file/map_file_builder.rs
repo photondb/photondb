@@ -1,12 +1,14 @@
 #![allow(unused)]
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
 use super::{
-    compression::Compression, constant::*, types::MapFileMeta, BlockHandler, BufferedWriter,
-    ChecksumType, CommonFileBuilder, FileInfo, MapFileInfo,
+    compression::Compression,
+    constant::*,
+    types::{split_page_addr, MapFileMeta},
+    BlockHandler, BufferedWriter, ChecksumType, CommonFileBuilder, FileInfo, MapFileInfo,
 };
 use crate::{
     env::Env,
@@ -18,7 +20,7 @@ use crate::{
 ///
 /// File format:
 ///
-/// File = [{page file}] {page block index} {footer}
+/// File = [{page file}] {page block index} {dealloc pages block} {footer}
 /// page file = {data blocks} {meta blocks} {index blocks}
 /// data blocks = [{data block}] --- one block per tree page
 /// meta blocks = {page table block}
@@ -27,10 +29,12 @@ use crate::{
 /// data block index = {page_addr[low 32bit], file_offset}
 /// meta block index = {file_offset}
 /// page block index = [(page_id, {data block index}, {meta block index})]
+/// dealloc pages block = [dealloc_page_addr]
 /// footer = {magic_number} { page block index}
 pub(crate) struct MapFileBuilder<'a, E: Env> {
     file_id: u32,
     writer: BufferedWriter<'a, E>,
+    dealloc_pages: BTreeSet<u64>,
     page_index: PageIndexBuilder,
     file_infos: HashMap<u32, FileInfo>,
     block_size: usize,
@@ -65,6 +69,7 @@ pub(super) struct PageIndex {
 pub(crate) struct Footer {
     pub(super) magic: u64,
     pub(super) page_index_handle: BlockHandler,
+    pub(super) dealloc_pages_handle: BlockHandler,
     pub(super) compression: Compression,
     pub(super) checksum_type: ChecksumType,
 }
@@ -83,6 +88,7 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
         Self {
             file_id,
             writer,
+            dealloc_pages: BTreeSet::default(),
             page_index: PageIndexBuilder::default(),
             file_infos: HashMap::default(),
             file_offset: 0,
@@ -122,24 +128,50 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
             DEFAULT_BLOCK_SIZE,
             page_files,
         ));
-        let file_info = MapFileInfo::new(up2, up2, file_meta);
+        let file_info = MapFileInfo::new(up2, up2, self.get_referenced_files(), file_meta);
         Ok((self.file_infos, file_info))
     }
 
     async fn finish_tail_blocks(&mut self) -> Result<usize> {
-        let page_index_block = self.page_index.finish();
-        let offset = self.writer.write(&page_index_block).await?;
-        let length = page_index_block.len() as u64;
-        let page_index_handle = BlockHandler { offset, length };
+        let page_index_handle = self.finish_page_index_block().await?;
+        let dealloc_pages_handle = self.finish_dealloc_pages_block().await?;
         let footer = Footer {
             magic: MAP_FILE_MAGIC,
             page_index_handle,
+            dealloc_pages_handle,
             compression: self.compression,
             checksum_type: self.checksum,
         };
         let payload = footer.encode();
         let foot_offset = self.writer.write(&payload).await?;
         Ok(foot_offset as usize + payload.len())
+    }
+
+    async fn finish_page_index_block(&mut self) -> Result<BlockHandler> {
+        let page_index_block = self.page_index.finish();
+        let offset = self.writer.write(&page_index_block).await?;
+        let length = page_index_block.len() as u64;
+        Ok(BlockHandler { offset, length })
+    }
+
+    async fn finish_dealloc_pages_block(&mut self) -> Result<BlockHandler> {
+        let estimated_size = core::mem::size_of::<u64>() * self.dealloc_pages.len();
+        let mut buf = Vec::with_capacity(estimated_size);
+        for addr in &self.dealloc_pages {
+            buf.extend_from_slice(&addr.to_le_bytes());
+        }
+        let offset = self.writer.write(&buf).await?;
+        let length = buf.len() as u64;
+        Ok(BlockHandler { offset, length })
+    }
+
+    fn get_referenced_files(&self) -> HashSet<u32> {
+        let mut files = HashSet::new();
+        for page_addr in &self.dealloc_pages {
+            let (file_id, _) = split_page_addr(*page_addr);
+            files.insert(file_id);
+        }
+        files
     }
 }
 
@@ -161,6 +193,11 @@ impl<'a, E: Env> PartialFileBuilder<'a, E> {
                 page_content,
             )
             .await
+    }
+
+    /// Add some dealloc pages to builder.
+    pub(crate) fn add_dealloc_pages(&mut self, dealloc_pages: &[u64]) {
+        self.builder.dealloc_pages.extend(dealloc_pages);
     }
 
     pub(crate) async fn finish(mut self) -> Result<MapFileBuilder<'a, E>> {
@@ -265,7 +302,7 @@ impl PageIndex {
 impl Footer {
     #[inline]
     pub(super) const fn encoded_size() -> usize {
-        core::mem::size_of::<u64>() * 3 + 1 + 1
+        core::mem::size_of::<u64>() + BlockHandler::encoded_size() * 2 + 2
     }
 
     #[inline]
@@ -273,6 +310,7 @@ impl Footer {
         let mut bytes = Vec::with_capacity(Self::encoded_size());
         bytes.extend_from_slice(&self.magic.to_le_bytes());
         self.page_index_handle.encode(&mut bytes);
+        self.dealloc_pages_handle.encode(&mut bytes);
         bytes.push(self.compression.bits());
         bytes.push(self.checksum_type.bits());
         bytes
@@ -289,13 +327,19 @@ impl Footer {
 
         let idx = end;
         let end = idx + BlockHandler::encoded_size();
-        let page_index_handler = BlockHandler::decode(&bytes[idx..end])?;
+        let page_index_handle = BlockHandler::decode(&bytes[idx..end])?;
+
+        let idx = end;
+        let end = idx + BlockHandler::encoded_size();
+        let dealloc_pages_handle = BlockHandler::decode(&bytes[idx..end])?;
+
         let compression = Compression::from_bits(bytes[end]).ok_or(Error::Corrupted)?;
         let checksum_type = ChecksumType::from_bits(bytes[end + 1]).ok_or(Error::Corrupted)?;
 
         Ok(Self {
             magic,
-            page_index_handle: page_index_handler,
+            page_index_handle,
+            dealloc_pages_handle,
             compression,
             checksum_type,
         })
@@ -314,6 +358,10 @@ mod tests {
             page_index_handle: BlockHandler {
                 offset: 1234,
                 length: 64234,
+            },
+            dealloc_pages_handle: BlockHandler {
+                offset: 1231231,
+                length: 123,
             },
             compression: Compression::NONE,
             checksum_type: ChecksumType::NONE,
