@@ -29,6 +29,7 @@ pub(crate) mod constant {
 
     pub(crate) const IO_BUFFER_SIZE: usize = 4096 * 4;
 
+    #[allow(unused)]
     pub(crate) const PAGE_FILE_MAGIC: u64 = 142857;
     pub(crate) const MAP_FILE_MAGIC: u64 = 0x179394;
 }
@@ -96,6 +97,7 @@ pub(crate) mod facade {
         }
 
         /// Create `FileBuilder` to write a new page file.
+        #[allow(unused)]
         pub(crate) async fn new_page_file_builder(
             &self,
             file_id: u32,

@@ -43,14 +43,13 @@ impl<E: Env> PageStore<E> {
         options: &crate::PageStoreOptions,
     ) -> Result<(
         u32, /* next page file id */
-        u32, /* next map file id */
         Manifest<E>,
         PageTable,
         PageFiles<E>,
         DeltaVersion,
         HashSet<u32>, /* orphan page files */
     )> {
-        let manifest = Manifest::open(env.to_owned(), path.as_ref()).await?;
+        let mut manifest = Manifest::open(env.to_owned(), path.as_ref()).await?;
         let versions = manifest.list_versions().await?;
         let summary = Self::apply_version_edits(versions);
         debug!("Recover with file summary {summary:?}");
@@ -65,8 +64,8 @@ impl<E: Env> PageStore<E> {
 
         Self::delete_unreferenced_page_files(&page_files, &summary).await?;
 
-        let next_page_file_id = summary.next_page_file_id();
-        let next_map_file_id = summary.next_map_file_id();
+        let next_page_file_id = summary.next_map_file_id();
+        manifest.reset_next_map_file_id(summary.next_map_file_id());
         let delta = DeltaVersion {
             page_files: file_infos,
             map_files,
@@ -74,7 +73,6 @@ impl<E: Env> PageStore<E> {
         };
         Ok((
             next_page_file_id,
-            next_map_file_id,
             manifest,
             page_table,
             page_files,
@@ -221,9 +219,21 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
         }
 
         // 2. recover map file info.
+
+        let mut referenced_files = HashSet::new();
+        if !meta_reader.dealloc_pages.is_empty() {
+            for page_addr in &meta_reader.dealloc_pages {
+                referenced_files.insert((page_addr >> 32) as u32);
+            }
+            self.dealloc_pages
+                .insert(file.id, meta_reader.dealloc_pages);
+        }
+
         let file_meta = meta_reader.file_meta;
-        self.map_files
-            .insert(file.id, MapFileInfo::new(file.up1, file.up2, file_meta));
+        self.map_files.insert(
+            file.id,
+            MapFileInfo::new(file.up1, file.up2, referenced_files, file_meta),
+        );
 
         // 3. recover page table.
         for (_, page_table) in meta_reader.page_tables {
@@ -328,6 +338,7 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
 }
 
 impl FilesSummary {
+    #[allow(unused)]
     fn next_page_file_id(&self) -> u32 {
         let val = std::cmp::max(
             self.active_page_files.keys().cloned().max().unwrap_or(0),

@@ -34,6 +34,8 @@ use crate::{
 ///
 /// `page_addr`'s high 32 bit always be `file-id`(`PageAddr = {file id} {write
 /// buffer index}`), so it only store lower 32 bit.
+
+#[allow(unused)]
 pub(crate) struct FileBuilder<'a, E: Env> {
     writer: BufferedWriter<'a, E>,
     inner: CommonFileBuilder,
@@ -58,6 +60,8 @@ impl<'a, E: Env> FileBuilder<'a, E> {
     }
 
     /// Add a new page to builder.
+
+    #[allow(unused)]
     pub(crate) async fn add_page(
         &mut self,
         page_id: u64,
@@ -77,11 +81,13 @@ impl<'a, E: Env> FileBuilder<'a, E> {
     }
 
     /// Add delete page to builder.
+    #[allow(unused)]
     pub(crate) fn add_delete_pages(&mut self, page_addrs: &[u64]) {
         self.inner.add_delete_pages(page_addrs)
     }
 
     // Finish build page file.
+    #[allow(unused)]
     pub(crate) async fn finish(&mut self) -> Result<FileInfo> {
         self.inner.finish_meta_block(&mut self.writer).await?;
         let info = self.finish_file_footer().await?;
@@ -235,6 +241,7 @@ impl CommonFileBuilder {
         ))
     }
 
+    #[allow(unused)]
     pub(super) fn as_page_file_meta(
         &self,
         file_size: usize,
@@ -287,6 +294,7 @@ impl BlockHandler {
     }
 }
 
+#[allow(unused)]
 pub(crate) struct Footer {
     magic: u64,
     pub(crate) data_handle: BlockHandler,
@@ -301,6 +309,7 @@ impl Footer {
         (core::mem::size_of::<u64>() * 5 + 1 + 1) as u32
     }
 
+    #[allow(unused)]
     fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(core::mem::size_of::<u64>() * 5);
         bytes.extend_from_slice(&self.magic.to_le_bytes());
@@ -350,6 +359,7 @@ impl MetaBlockBuilder {
         self.page_table.0.insert(page_addr, page_id);
     }
 
+    #[allow(unused)]
     pub(crate) fn delete_pages(&mut self, page_addrs: &[u64]) {
         for page_addr in page_addrs {
             self.delete_page_addrs.0.insert(*page_addr);
