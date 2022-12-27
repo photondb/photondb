@@ -7,8 +7,9 @@ use std::{
 use super::{
     compression::Compression,
     constant::*,
-    types::{split_page_addr, MapFileMeta},
-    BlockHandler, BufferedWriter, ChecksumType, CommonFileBuilder, FileInfo, MapFileInfo,
+    file_builder::CommonFileBuilder,
+    types::{split_page_addr, FileMeta},
+    BlockHandle, BufferedWriter, ChecksumType, FileInfo, PageGroup,
 };
 use crate::{
     env::Env,
@@ -16,12 +17,12 @@ use crate::{
     page_store::{Error, Result},
 };
 
-/// Builder for map file.
+/// Builder for file.
 ///
 /// File format:
 ///
-/// File = [{page file}] {page block index} {dealloc pages block} {footer}
-/// page file = {data blocks} {meta blocks} {index blocks}
+/// File = [{page group}] {page block index} {dealloc pages block} {footer}
+/// page group = {data blocks} {meta blocks} {index blocks}
 /// data blocks = [{data block}] --- one block per tree page
 /// meta blocks = {page table block}
 /// page table block = [(page_id, page_addr[low 32bit])]
@@ -36,16 +37,16 @@ pub(crate) struct MapFileBuilder<'a, E: Env> {
     writer: BufferedWriter<'a, E>,
     dealloc_pages: BTreeSet<u64>,
     page_index: PageIndexBuilder,
-    file_infos: HashMap<u32, FileInfo>,
+    page_groups: HashMap<u32, PageGroup>,
     block_size: usize,
     file_offset: usize,
     compression: Compression,
     checksum: ChecksumType,
 }
 
-/// File builder for partial of map file.
-pub(crate) struct PartialFileBuilder<'a, E: Env> {
-    file_id: u32,
+/// A builder for page group.
+pub(crate) struct PageGroupBuilder<'a, E: Env> {
+    group_id: u32,
     base_offset: u64,
     builder: MapFileBuilder<'a, E>,
     inner: CommonFileBuilder,
@@ -61,15 +62,15 @@ pub(crate) struct PageIndexBuilder {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct PageIndex {
     pub(super) file_id: u32,
-    pub(super) data_handle: BlockHandler,
-    pub(super) meta_handle: BlockHandler,
+    pub(super) data_handle: BlockHandle,
+    pub(super) meta_handle: BlockHandle,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Footer {
     pub(super) magic: u64,
-    pub(super) page_index_handle: BlockHandler,
-    pub(super) dealloc_pages_handle: BlockHandler,
+    pub(super) page_index_handle: BlockHandle,
+    pub(super) dealloc_pages_handle: BlockHandle,
     pub(super) compression: Compression,
     pub(super) checksum_type: ChecksumType,
 }
@@ -90,7 +91,7 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
             writer,
             dealloc_pages: BTreeSet::default(),
             page_index: PageIndexBuilder::default(),
-            file_infos: HashMap::default(),
+            page_groups: HashMap::default(),
             file_offset: 0,
             block_size,
             compression,
@@ -98,45 +99,48 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
         }
     }
 
-    pub(crate) fn add_file(self, file_id: u32) -> PartialFileBuilder<'a, E> {
-        let block_size = self.block_size;
+    pub(crate) fn add_page_group(self, group_id: u32) -> PageGroupBuilder<'a, E> {
         let compression = self.compression;
         let checksum_type = self.checksum;
         let base_offset = self.writer.next_offset();
-        PartialFileBuilder {
-            file_id,
+        PageGroupBuilder {
+            group_id,
             base_offset,
             builder: self,
-            inner: CommonFileBuilder::new(file_id, block_size, compression, checksum_type),
+            inner: CommonFileBuilder::new(group_id, compression, checksum_type),
         }
     }
 
-    pub(crate) async fn finish(
-        mut self,
-        up2: u32,
-    ) -> Result<(HashMap<u32, FileInfo>, MapFileInfo)> {
+    pub(crate) fn add_dealloc_pages(&mut self, dealloc_pages: &[u64]) {
+        self.dealloc_pages.extend(dealloc_pages);
+    }
+
+    pub(crate) async fn finish(mut self, up2: u32) -> Result<(HashMap<u32, PageGroup>, FileInfo)> {
         let file_size = self.finish_tail_blocks().await?;
         self.writer.flush_and_sync().await?;
-        let page_files = self
-            .file_infos
+        let page_groups = self
+            .page_groups
             .iter()
-            .map(|(&id, info)| (id, info.meta()))
+            .map(|(&id, info)| (id, info.meta().clone()))
             .collect::<HashMap<_, _>>();
-        let file_meta = Arc::new(MapFileMeta::new(
+        let file_meta = Arc::new(FileMeta::new(
             self.file_id,
             file_size,
             DEFAULT_BLOCK_SIZE,
-            page_files,
+            self.checksum,
+            self.compression,
+            self.get_referenced_groups(),
+            page_groups,
         ));
-        let file_info = MapFileInfo::new(up2, up2, self.get_referenced_files(), file_meta);
-        Ok((self.file_infos, file_info))
+        let file_info = FileInfo::new(up2, up2, file_meta);
+        Ok((self.page_groups, file_info))
     }
 
     async fn finish_tail_blocks(&mut self) -> Result<usize> {
         let page_index_handle = self.finish_page_index_block().await?;
         let dealloc_pages_handle = self.finish_dealloc_pages_block().await?;
         let footer = Footer {
-            magic: MAP_FILE_MAGIC,
+            magic: FILE_MAGIC,
             page_index_handle,
             dealloc_pages_handle,
             compression: self.compression,
@@ -147,14 +151,14 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
         Ok(foot_offset as usize + payload.len())
     }
 
-    async fn finish_page_index_block(&mut self) -> Result<BlockHandler> {
+    async fn finish_page_index_block(&mut self) -> Result<BlockHandle> {
         let page_index_block = self.page_index.finish();
         let offset = self.writer.write(&page_index_block).await?;
         let length = page_index_block.len() as u64;
-        Ok(BlockHandler { offset, length })
+        Ok(BlockHandle { offset, length })
     }
 
-    async fn finish_dealloc_pages_block(&mut self) -> Result<BlockHandler> {
+    async fn finish_dealloc_pages_block(&mut self) -> Result<BlockHandle> {
         let estimated_size = core::mem::size_of::<u64>() * self.dealloc_pages.len();
         let mut buf = Vec::with_capacity(estimated_size);
         for addr in &self.dealloc_pages {
@@ -162,20 +166,20 @@ impl<'a, E: Env> MapFileBuilder<'a, E> {
         }
         let offset = self.writer.write(&buf).await?;
         let length = buf.len() as u64;
-        Ok(BlockHandler { offset, length })
+        Ok(BlockHandle { offset, length })
     }
 
-    fn get_referenced_files(&self) -> HashSet<u32> {
-        let mut files = HashSet::new();
+    fn get_referenced_groups(&self) -> HashSet<u32> {
+        let mut groups = HashSet::new();
         for page_addr in &self.dealloc_pages {
             let (file_id, _) = split_page_addr(*page_addr);
-            files.insert(file_id);
+            groups.insert(file_id);
         }
-        files
+        groups
     }
 }
 
-impl<'a, E: Env> PartialFileBuilder<'a, E> {
+impl<'a, E: Env> PageGroupBuilder<'a, E> {
     /// Add a new page to builder.
     pub(crate) async fn add_page(
         &mut self,
@@ -210,23 +214,14 @@ impl<'a, E: Env> PartialFileBuilder<'a, E> {
             .await?;
         self.builder
             .page_index
-            .add_page_file(self.file_id, data, meta);
+            .add_page_file(self.group_id, data, meta);
 
-        let file_meta =
-            self.inner
-                .as_partial_file_meta(self.builder.file_id, self.base_offset, data);
-        let staled_pages = file_meta.dealloc_pages_bitmap();
-        let active_size = file_meta.total_page_size();
+        let file_meta = self
+            .inner
+            .as_page_group_meta(self.builder.file_id, self.base_offset, data);
         self.builder.file_offset = self.builder.writer.next_offset() as usize;
-        let file_info = FileInfo::new(
-            staled_pages,
-            active_size,
-            self.file_id,
-            self.file_id,
-            self.inner.get_referenced_files(),
-            file_meta,
-        );
-        self.builder.file_infos.insert(self.file_id, file_info);
+        let page_group = PageGroup::new(file_meta);
+        self.builder.page_groups.insert(self.group_id, page_group);
         Ok(self.builder)
     }
 }
@@ -235,8 +230,8 @@ impl PageIndexBuilder {
     fn add_page_file(
         &mut self,
         file_id: u32,
-        data_handler: BlockHandler,
-        meta_handler: BlockHandler,
+        data_handler: BlockHandle,
+        meta_handler: BlockHandle,
     ) {
         self.pages.push(PageIndex {
             file_id,
@@ -257,7 +252,7 @@ impl PageIndexBuilder {
 impl PageIndex {
     #[inline]
     pub(super) const fn encoded_size() -> usize {
-        core::mem::size_of::<u32>() + BlockHandler::encoded_size() * 2
+        core::mem::size_of::<u32>() + BlockHandle::encoded_size() * 2
     }
 
     #[inline]
@@ -284,12 +279,12 @@ impl PageIndex {
         let file_id = u32::from_le_bytes(bytes[idx..end].try_into().map_err(|_| Error::Corrupted)?);
 
         let idx = end;
-        let end = idx + BlockHandler::encoded_size();
-        let data_handler = BlockHandler::decode(&bytes[idx..end])?;
+        let end = idx + BlockHandle::encoded_size();
+        let data_handler = BlockHandle::decode(&bytes[idx..end])?;
 
         let idx = end;
-        let end = idx + BlockHandler::encoded_size();
-        let meta_handler = BlockHandler::decode(&bytes[idx..end])?;
+        let end = idx + BlockHandle::encoded_size();
+        let meta_handler = BlockHandle::decode(&bytes[idx..end])?;
 
         Ok(PageIndex {
             file_id,
@@ -302,7 +297,7 @@ impl PageIndex {
 impl Footer {
     #[inline]
     pub(super) const fn encoded_size() -> usize {
-        core::mem::size_of::<u64>() + BlockHandler::encoded_size() * 2 + 2
+        core::mem::size_of::<u64>() + BlockHandle::encoded_size() * 2 + 2
     }
 
     #[inline]
@@ -326,12 +321,12 @@ impl Footer {
         let magic = u64::from_le_bytes(bytes[idx..end].try_into().map_err(|_| Error::Corrupted)?);
 
         let idx = end;
-        let end = idx + BlockHandler::encoded_size();
-        let page_index_handle = BlockHandler::decode(&bytes[idx..end])?;
+        let end = idx + BlockHandle::encoded_size();
+        let page_index_handle = BlockHandle::decode(&bytes[idx..end])?;
 
         let idx = end;
-        let end = idx + BlockHandler::encoded_size();
-        let dealloc_pages_handle = BlockHandler::decode(&bytes[idx..end])?;
+        let end = idx + BlockHandle::encoded_size();
+        let dealloc_pages_handle = BlockHandle::decode(&bytes[idx..end])?;
 
         let compression = Compression::from_bits(bytes[end]).ok_or(Error::Corrupted)?;
         let checksum_type = ChecksumType::from_bits(bytes[end + 1]).ok_or(Error::Corrupted)?;
@@ -355,11 +350,11 @@ mod tests {
     fn footer_encode_and_decode() {
         let footer = Footer {
             magic: 123,
-            page_index_handle: BlockHandler {
+            page_index_handle: BlockHandle {
                 offset: 1234,
                 length: 64234,
             },
-            dealloc_pages_handle: BlockHandler {
+            dealloc_pages_handle: BlockHandle {
                 offset: 1231231,
                 length: 123,
             },
@@ -376,11 +371,11 @@ mod tests {
     fn page_index_encode_and_decode() {
         let page_index = PageIndex {
             file_id: 123,
-            data_handle: BlockHandler {
+            data_handle: BlockHandle {
                 offset: 5632,
                 length: 123,
             },
-            meta_handle: BlockHandler {
+            meta_handle: BlockHandle {
                 offset: 999,
                 length: 123,
             },
@@ -419,7 +414,7 @@ mod tests {
         );
 
         // Add page file 1.
-        let mut file_builder = builder.add_file(1);
+        let mut file_builder = builder.add_page_group(1);
         file_builder
             .add_page(1, 1, empty_page_info(), &[])
             .await
@@ -428,7 +423,7 @@ mod tests {
         let builder = file_builder.finish().await.unwrap();
 
         // Add page file 2.
-        let mut file_builder = builder.add_file(2);
+        let mut file_builder = builder.add_page_group(2);
         file_builder
             .add_page(1, 1, empty_page_info(), &[])
             .await
@@ -437,7 +432,7 @@ mod tests {
         let builder = file_builder.finish().await.unwrap();
 
         // Add page file 3.
-        let mut file_builder = builder.add_file(3);
+        let mut file_builder = builder.add_page_group(3);
         file_builder
             .add_page(1, 1, empty_page_info(), &[])
             .await

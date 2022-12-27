@@ -8,7 +8,7 @@ use log::debug;
 use super::{
     page_table::{PageTable, PageTableBuilder},
     version::DeltaVersion,
-    FileInfo, MapFileInfo, NewFile, PageFiles, PageStore, Result, VersionEdit,
+    FileInfo, NewFile, PageFiles, PageGroup, PageStore, Result, VersionEdit,
 };
 use crate::{env::Env, page_store::Manifest};
 
@@ -18,21 +18,18 @@ struct FileInfoBuilder<'a, E: Env> {
     /// The virtual page file set.
     virtual_files: HashSet<u32>,
     /// The [`FileInfo`] for page files, includes virtual page files.
-    page_files: HashMap<u32, FileInfo>,
+    page_groups: HashMap<u32, PageGroup>,
     /// The [`MapFileInfo`] for map files.
-    map_files: HashMap<u32, MapFileInfo>,
+    map_files: HashMap<u32, FileInfo>,
     /// The page table builder.
     page_table_builder: PageTableBuilder,
 
     /// Records the dealloc pages.
-    orphan_page_files: HashSet<u32>,
     dealloc_pages: HashMap<u32, Vec<u64>>,
 }
 
 struct FilesSummary {
-    active_page_files: HashMap<u32, NewFile>,
     active_map_files: HashMap<u32, NewFile>,
-    obsoleted_page_files: HashSet<u32>,
     obsoleted_map_files: HashSet<u32>,
 }
 
@@ -47,7 +44,6 @@ impl<E: Env> PageStore<E> {
         PageTable,
         PageFiles<E>,
         DeltaVersion,
-        HashSet<u32>, /* orphan page files */
     )> {
         let mut manifest = Manifest::open(env.to_owned(), path.as_ref()).await?;
         let versions = manifest.list_versions().await?;
@@ -56,47 +52,27 @@ impl<E: Env> PageStore<E> {
 
         let page_files = PageFiles::new(env, path.as_ref(), options).await;
 
-        // WARNING: recover map files before page files.
         let mut builder = FileInfoBuilder::new(&page_files);
-        Self::recover_map_file_infos(&mut builder, &summary.active_map_files).await?;
-        Self::recover_page_file_infos(&mut builder, &summary.active_page_files).await?;
-        let (file_infos, map_files, orphan_page_files, page_table) = builder.build();
+        Self::recover_page_groups(&mut builder, &summary.active_map_files).await?;
+        let (file_infos, map_files, page_table) = builder.build();
 
         Self::delete_unreferenced_page_files(&page_files, &summary).await?;
 
         let next_page_file_id = summary.next_map_file_id();
         manifest.reset_next_map_file_id(summary.next_map_file_id());
         let delta = DeltaVersion {
-            page_files: file_infos,
-            map_files,
+            page_groups: file_infos,
+            file_infos: map_files,
             ..Default::default()
         };
-        Ok((
-            next_page_file_id,
-            manifest,
-            page_table,
-            page_files,
-            delta,
-            orphan_page_files,
-        ))
+        Ok((next_page_file_id, manifest, page_table, page_files, delta))
     }
 
     fn apply_version_edits(versions: Vec<VersionEdit>) -> FilesSummary {
-        let mut active_page_files = HashMap::new();
         let mut active_map_files = HashMap::new();
-        let mut obsoleted_page_files = HashSet::new();
         let mut obsoleted_map_files = HashSet::new();
         for edit in versions {
-            if let Some(edit) = edit.page_stream {
-                for file in edit.new_files {
-                    active_page_files.insert(file.id, file);
-                }
-                for file in edit.deleted_files {
-                    active_page_files.remove(&file);
-                    obsoleted_page_files.insert(file);
-                }
-            }
-            if let Some(edit) = edit.map_stream {
+            if let Some(edit) = edit.file_stream {
                 for file in edit.new_files {
                     active_map_files.insert(file.id, file);
                 }
@@ -108,14 +84,12 @@ impl<E: Env> PageStore<E> {
         }
 
         FilesSummary {
-            active_page_files,
             active_map_files,
-            obsoleted_page_files,
             obsoleted_map_files,
         }
     }
 
-    async fn recover_page_file_infos(
+    async fn recover_page_groups(
         builder: &mut FileInfoBuilder<'_, E>,
         active_files: &HashMap<u32, NewFile>,
     ) -> Result<()> {
@@ -123,20 +97,7 @@ impl<E: Env> PageStore<E> {
         let mut files = active_files.values().cloned().collect::<Vec<_>>();
         files.sort_unstable();
         for file in files {
-            builder.recover_page_file(file).await?;
-        }
-        Ok(())
-    }
-
-    async fn recover_map_file_infos(
-        builder: &mut FileInfoBuilder<'_, E>,
-        active_files: &HashMap<u32, NewFile>,
-    ) -> Result<()> {
-        // ensure recover files in order.
-        let mut files = active_files.values().cloned().collect::<Vec<_>>();
-        files.sort_unstable();
-        for file in files {
-            builder.recover_map_file(file).await?;
+            builder.recover_file(file).await?;
         }
         Ok(())
     }
@@ -145,21 +106,13 @@ impl<E: Env> PageStore<E> {
         page_files: &PageFiles<E>,
         summary: &FilesSummary,
     ) -> Result<()> {
-        let exist_files = page_files.list_page_files()?;
-        let deleted_files = Self::filter_obsoleted_files(
-            exist_files,
-            &summary.active_page_files,
-            summary.obsoleted_page_files.clone(),
-        );
-        page_files.remove_page_files(deleted_files).await?;
-
-        let exist_files = page_files.list_map_files()?;
+        let exist_files = page_files.list_files()?;
         let deleted_files = Self::filter_obsoleted_files(
             exist_files,
             &summary.active_map_files,
             summary.obsoleted_map_files.clone(),
         );
-        page_files.remove_map_files(deleted_files).await?;
+        page_files.remove_files(deleted_files).await?;
         Ok(())
     }
 
@@ -185,55 +138,33 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
         FileInfoBuilder {
             facade,
             virtual_files: HashSet::default(),
-            page_files: HashMap::default(),
+            page_groups: HashMap::default(),
             map_files: HashMap::default(),
             page_table_builder: PageTableBuilder::default(),
-            orphan_page_files: HashSet::default(),
             dealloc_pages: HashMap::default(),
         }
     }
 
-    /// Recover a map file, the specified file id must be monotonically
-    /// increasing.
-    ///
-    /// NOTE: Since the map file doesn't contains any dealloc pages record, so
-    /// it should be recovered before page files, in order to maintain active
-    /// pages.
-    async fn recover_map_file(&mut self, file: NewFile) -> Result<()> {
-        let meta_reader = self.facade.read_map_file_meta(file.id).await?;
+    /// Recover a file, the specified file id must be monotonically increasing.
+    async fn recover_file(&mut self, file: NewFile) -> Result<()> {
+        let meta_reader = self.facade.read_file_meta(file.id).await?;
 
-        // 1. recover virtual file infos.
-        for (&file_id, file_meta) in &meta_reader.file_meta_map {
-            let dealloc_pages = file_meta.dealloc_pages_bitmap();
-            let active_size = file_meta.total_page_size();
-            let file_info = FileInfo::new(
-                dealloc_pages,
-                active_size,
-                file.up1,
-                file.up2,
-                HashSet::default(),
-                file_meta.clone(),
-            );
+        // 1. recover page groups
+        for (&file_id, file_meta) in &meta_reader.page_groups {
+            let file_info = PageGroup::new(file_meta.clone());
             self.virtual_files.insert(file_id);
-            self.page_files.insert(file_id, file_info);
+            self.page_groups.insert(file_id, file_info);
         }
 
         // 2. recover map file info.
-
-        let mut referenced_files = HashSet::new();
         if !meta_reader.dealloc_pages.is_empty() {
-            for page_addr in &meta_reader.dealloc_pages {
-                referenced_files.insert((page_addr >> 32) as u32);
-            }
             self.dealloc_pages
                 .insert(file.id, meta_reader.dealloc_pages);
         }
 
         let file_meta = meta_reader.file_meta;
-        self.map_files.insert(
-            file.id,
-            MapFileInfo::new(file.up1, file.up2, referenced_files, file_meta),
-        );
+        self.map_files
+            .insert(file.id, FileInfo::new(file.up1, file.up2, file_meta));
 
         // 3. recover page table.
         for (_, page_table) in meta_reader.page_tables {
@@ -247,73 +178,11 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
         Ok(())
     }
 
-    /// Recover a page file, the specified file id must be monotonically
-    /// increasing.
-    async fn recover_page_file(&mut self, file: NewFile) -> Result<()> {
-        let file_id = file.id;
-        let meta_reader = self.facade.open_page_file_meta_reader(file_id).await?;
-        let file_meta = meta_reader.file_metadata();
-
-        // 1. read dealloc pages.
-        let delete_pages = meta_reader.read_delete_pages().await?;
-        let mut referenced_files = HashSet::new();
-        if !delete_pages.is_empty() {
-            for page_addr in &delete_pages {
-                referenced_files.insert((page_addr >> 32) as u32);
-            }
-            self.dealloc_pages.insert(file_id, delete_pages);
-        }
-
-        if self.virtual_files.contains(&file_id) {
-            // This page file has compounded into a map file, which has been recovered
-            // early.
-            debug!("ignore page file {file_id} in recovery, since it has been compounded");
-            if !self.dealloc_pages.is_empty() {
-                self.orphan_page_files.insert(file_id);
-            }
-            return Ok(());
-        }
-
-        // 2. recover file info
-        let dealloc_pages = file_meta.dealloc_pages_bitmap();
-        let active_size = file_meta.total_page_size();
-        let info = FileInfo::new(
-            dealloc_pages,
-            active_size,
-            file.up1,
-            file.up2,
-            referenced_files,
-            file_meta,
-        );
-        self.page_files.insert(file_id, info);
-
-        // 3. recover page table
-        for (page_addr, page_id) in meta_reader.read_page_table().await? {
-            if self.page_table_builder.get(page_id) < page_addr {
-                self.page_table_builder.set(page_id, page_addr);
-            }
-        }
-
-        Ok(())
-    }
-
     /// Build page files, map files, orphan page files, and page table.
-    fn build(
-        mut self,
-    ) -> (
-        HashMap<u32, FileInfo>,
-        HashMap<u32, MapFileInfo>,
-        HashSet<u32>,
-        PageTable,
-    ) {
+    fn build(mut self) -> (HashMap<u32, PageGroup>, HashMap<u32, FileInfo>, PageTable) {
         self.maintain_active_pages();
         let page_table = self.page_table_builder.build();
-        (
-            self.page_files,
-            self.map_files,
-            self.orphan_page_files,
-            page_table,
-        )
+        (self.page_groups, self.map_files, page_table)
     }
 
     fn maintain_active_pages(&mut self) {
@@ -322,15 +191,14 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
         for updated_at in updates {
             let delete_pages = self.dealloc_pages.get(&updated_at).expect("Always exists");
             for &page_addr in delete_pages {
-                let file_id = (page_addr >> 32) as u32;
-                if let Some(info) = self.page_files.get_mut(&file_id) {
-                    info.deactivate_page(updated_at, page_addr);
-                    if let Some(map_file_id) = info.get_map_file_id() {
-                        self.map_files
-                            .get_mut(&map_file_id)
-                            .expect("The map file must exists")
-                            .on_update(updated_at);
-                    }
+                let group_id = (page_addr >> 32) as u32;
+                if let Some(info) = self.page_groups.get_mut(&group_id) {
+                    info.deactivate_page(page_addr);
+                    let physical_id = info.meta().file_id;
+                    self.map_files
+                        .get_mut(&physical_id)
+                        .expect("The map file must exists")
+                        .on_update(updated_at);
                 }
             }
         }
@@ -338,15 +206,6 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
 }
 
 impl FilesSummary {
-    #[allow(unused)]
-    fn next_page_file_id(&self) -> u32 {
-        let val = std::cmp::max(
-            self.active_page_files.keys().cloned().max().unwrap_or(0),
-            self.obsoleted_page_files.iter().cloned().max().unwrap_or(0),
-        );
-        val + 1
-    }
-
     fn next_map_file_id(&self) -> u32 {
         let val = std::cmp::max(
             self.active_map_files.keys().cloned().max().unwrap_or(0),
@@ -359,10 +218,8 @@ impl FilesSummary {
 impl std::fmt::Debug for FilesSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FilesSummary")
-            .field("page_files", &self.active_page_files.keys())
             .field("map_files", &self.active_map_files.keys())
             .field("obsoleted_map_files", &self.obsoleted_map_files)
-            .field("obsoleted_page_files", &self.obsoleted_page_files)
             .finish()
     }
 }

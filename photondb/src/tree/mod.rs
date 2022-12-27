@@ -1,10 +1,6 @@
 use std::{
     fmt,
-    future::Future,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use log::trace;
@@ -73,19 +69,6 @@ impl fmt::Debug for Tree {
             .field("options", &self.options)
             .field("safe_lsn", &self.safe_lsn())
             .finish()
-    }
-}
-
-impl<E: Env> RewritePage<E> for Arc<Tree> {
-    type Rewrite<'a> = impl Future<Output = Result<usize, Error>> + Send + 'a
-        where
-            Self: 'a;
-
-    fn rewrite(&self, id: u64, guard: Guard<E>) -> Self::Rewrite<'_> {
-        async move {
-            let txn = self.begin(guard);
-            txn.rewrite_page(id).await
-        }
     }
 }
 
@@ -736,114 +719,6 @@ impl<'a, E: Env> TreeTxn<'a, E> {
             let _ = self.split_page(view).await;
         }
         Ok(())
-    }
-
-    /// Rewrites the page to reclaim its space.
-    async fn rewrite_page(&self, id: u64) -> Result<usize> {
-        loop {
-            match self.try_rewrite_page(id).await {
-                Ok(size) => return Ok(size),
-                Err(Error::Again) => continue,
-                Err(err) => return Err(err),
-            }
-        }
-    }
-
-    async fn try_rewrite_page<'g>(&'g self, id: u64) -> Result<usize> {
-        let view = self.page_view(id, None).await?;
-        match view.page.tier() {
-            PageTier::Leaf => {
-                let safe_lsn = self.tree.safe_lsn();
-                self.rewrite_page_impl(view, |iter| MergingLeafPageIter::new(iter, safe_lsn))
-                    .await
-            }
-            PageTier::Inner => {
-                self.rewrite_page_impl(view, MergingInnerPageIter::new)
-                    .await
-            }
-        }
-    }
-
-    async fn rewrite_page_impl<'g, F, I, K, V>(&'g self, view: PageView<'g>, f: F) -> Result<usize>
-    where
-        F: Fn(MergingPageIter<'g, K, V>) -> I,
-        I: RewindableIterator<Item = (K, V)>,
-        K: SortedPageKey,
-        V: SortedPageValue,
-    {
-        // Skip the first page if it is a split delta.
-        let (old_addr, old_page) = if view.page.kind() != PageKind::Split {
-            (view.addr, view.page.clone())
-        } else {
-            let addr = view.page.chain_next();
-            assert!(addr != 0);
-            let page = self.guard.read_page_info(addr)?;
-            (addr, page)
-        };
-
-        // Collect delta pages.
-        let chain_len = old_page.chain_len() as usize;
-        let mut builder = MergingIterBuilder::with_capacity(chain_len);
-        let mut page_addrs = Vec::with_capacity(chain_len);
-        let mut range_limit = None;
-        self.walk_page(
-            old_addr,
-            |addr, page, ctoken| {
-                match page.kind() {
-                    PageKind::Data => {
-                        if let Some(ctoken) = ctoken {
-                            ctoken.return_cache_as_cold();
-                        }
-                        builder.add(SortedPageIter::<K, V>::from(page));
-                    }
-                    PageKind::Split => {
-                        if range_limit.is_none() {
-                            let (split_key, _) = split_delta_from_page(page);
-                            range_limit = Some(split_key);
-                        }
-                    }
-                }
-                page_addrs.push(addr);
-                false
-            },
-            CacheOption::REFILL_COLD_WHEN_NOT_FULL,
-        )
-        .await?;
-
-        // Merge the delta pages.
-        let iter = f(MergingPageIter::new(builder.build(), range_limit));
-        let builder = SortedPageBuilder::new(old_page.tier(), PageKind::Data).with_iter(iter);
-        let rewrite_size = builder.size();
-        let mut txn = self.guard.begin().await;
-        let (mut new_addr, mut new_page) = txn.alloc_page_with_id(view.id, rewrite_size).await?;
-        builder.build(&mut new_page);
-        new_page.set_epoch(old_page.epoch());
-        // Relocate the first page if it is skipped.
-        if view.addr != old_addr {
-            let (split_delta_page, _) = self
-                .guard
-                .read_page(view.addr, CacheOption::default())
-                .await?;
-            let (addr, mut page) = txn.alloc_page(view.page.size()).await?;
-            page.copy_from(split_delta_page);
-            page.set_chain_len(new_page.chain_len() + 1);
-            page.set_chain_next(new_addr);
-            new_addr = addr;
-            page_addrs.push(view.addr);
-        }
-
-        // Replace the old delta chain with the new one.
-        txn.replace_page(view.id, view.addr, new_addr, &page_addrs)
-            .await
-            .map(|_| {
-                trace!("rewrite page {:?}", view);
-                self.tree.stats.success.rewrite_page.inc();
-                rewrite_size
-            })
-            .map_err(|_| {
-                self.tree.stats.conflict.rewrite_page.inc();
-                Error::Again
-            })
     }
 
     // Returns true if the page should be split.

@@ -22,7 +22,7 @@ impl<E: Env> Table<E> {
     /// Opens a table in the path with the given options.
     pub async fn open<P: AsRef<Path>>(env: E, path: P, options: Options) -> Result<Self> {
         let tree = Arc::new(Tree::new(options.clone()));
-        let store = PageStore::open(env, path, options.page_store, tree.clone()).await?;
+        let store = PageStore::open(env, path, options.page_store).await?;
         let txn = tree.begin(store.guard());
         txn.init().await?;
         Ok(Self {

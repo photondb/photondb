@@ -1,57 +1,47 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
 use super::{
     file_builder::IndexBlock,
-    file_reader::CommonFileReader,
+    file_reader::FileReader,
     map_file_builder::{Footer, PageIndex},
-    types::MapFileMeta,
-    BlockHandler, FileMeta,
+    types::FileMeta,
+    PageGroupMeta,
 };
 use crate::{
     env::PositionalReader,
     page_store::{Error, Result},
 };
 
-pub(crate) type MapFileReader<R> = CommonFileReader<R>;
-
-pub(crate) struct MapFileMetaHolder {
-    /// The file meta of map file.
-    pub(crate) file_meta: Arc<MapFileMeta>,
-    /// The meta of page files.
-    pub(crate) file_meta_map: HashMap<u32, Arc<FileMeta>>,
-    /// The page tables of page files.
+pub(crate) struct FileMetaHolder {
+    /// The file meta of file.
+    pub(crate) file_meta: Arc<FileMeta>,
+    /// The meta of page groups.
+    pub(crate) page_groups: HashMap<u32, Arc<PageGroupMeta>>,
+    /// The page tables of page groups.
     pub(crate) page_tables: HashMap<u32, BTreeMap<u64, u64>>,
-    /// The dealloc pages
+    /// The dealloc pages.
     pub(crate) dealloc_pages: Vec<u64>,
 }
 
-impl MapFileMetaHolder {
-    /// Open a meta reader with the specified map file id.
+impl FileMetaHolder {
+    /// Open a meta reader with the specified file id.
     pub(crate) async fn read<R: PositionalReader>(
         file_id: u32,
-        reader: Arc<MapFileReader<R>>,
+        reader: Arc<FileReader<R>>,
     ) -> Result<Self> {
         let footer = Self::read_footer(&reader).await?;
-        let file_indexes = Self::read_file_indexes(&reader, &footer).await?;
+        let page_indexes = Self::read_page_indexes(&reader, &footer).await?;
         let mut file_meta_map = HashMap::default();
         let mut page_tables = HashMap::default();
         let mut offset = 0;
-        for page_index in &file_indexes {
-            let index_block = Self::read_partial_file_index_block(&reader, page_index).await?;
+        for page_index in &page_indexes {
+            let index_block = Self::read_page_group_index_block(&reader, page_index).await?;
             let (indexes, offsets) = index_block.as_meta_file_cached(page_index.data_handle);
-            let file_meta = FileMeta::new_partial(
-                page_index.file_id,
-                file_id,
-                offset,
-                reader.align_size,
-                indexes,
-                offsets,
-                footer.compression,
-                footer.checksum_type,
-            );
+            let file_meta =
+                PageGroupMeta::new(page_index.file_id, file_id, offset, indexes, offsets);
             let page_table = Self::read_page_table(&reader, &file_meta).await?;
             file_meta_map.insert(page_index.file_id, Arc::new(file_meta));
             page_tables.insert(page_index.file_id, page_table);
@@ -59,38 +49,45 @@ impl MapFileMetaHolder {
         }
         let dealloc_pages = Self::read_dealloc_pages(&reader, &footer).await?;
 
-        let file_meta = Arc::new(MapFileMeta::new(
+        let mut referenced_groups = HashSet::new();
+        if !dealloc_pages.is_empty() {
+            for page_addr in &dealloc_pages {
+                referenced_groups.insert((page_addr >> 32) as u32);
+            }
+        }
+        let file_meta = Arc::new(FileMeta::new(
             file_id,
             reader.file_size,
             reader.align_size,
+            footer.checksum_type,
+            footer.compression,
+            referenced_groups,
             file_meta_map.clone(),
         ));
-        Ok(MapFileMetaHolder {
-            file_meta_map,
+        Ok(FileMetaHolder {
+            page_groups: file_meta_map,
             file_meta,
             page_tables,
             dealloc_pages,
         })
     }
 
-    /// Read the page table of the specified partial file.
+    /// Read the page table of the specified page group.
     async fn read_page_table<R: PositionalReader>(
-        reader: &MapFileReader<R>,
-        file_meta: &FileMeta,
+        reader: &FileReader<R>,
+        group_meta: &PageGroupMeta,
     ) -> Result<BTreeMap<u64, u64>> {
         use super::file_builder::PageTable;
 
-        let (offset, length) = file_meta.get_page_table_meta_page()?;
-        let length = length as u64;
-        let block_handle = BlockHandler { offset, length };
+        let block_handle = group_meta.get_page_table_meta_page();
         let buf = reader.read_block(block_handle).await?;
         let table = PageTable::decode(&buf)?;
         Ok(table.into())
     }
 
-    /// Read the [`IndexBlock`] of the specified partial file.
-    async fn read_partial_file_index_block<R: PositionalReader>(
-        reader: &MapFileReader<R>,
+    /// Read the [`IndexBlock`] of the specified page group.
+    async fn read_page_group_index_block<R: PositionalReader>(
+        reader: &FileReader<R>,
         page_index: &PageIndex,
     ) -> Result<IndexBlock> {
         let data_block = reader.read_block(page_index.data_handle).await?;
@@ -99,7 +96,7 @@ impl MapFileMetaHolder {
     }
 
     /// Read [`Footer`] according to file reader.
-    async fn read_footer<R: PositionalReader>(reader: &MapFileReader<R>) -> Result<Footer> {
+    async fn read_footer<R: PositionalReader>(reader: &FileReader<R>) -> Result<Footer> {
         let file_size = reader.file_size;
         if file_size < Footer::encoded_size() {
             return Err(Error::Corrupted);
@@ -111,10 +108,10 @@ impl MapFileMetaHolder {
         Footer::decode(&buf)
     }
 
-    /// Read [`PageIndex`] of the corresponding map file, according to the file
+    /// Read [`PageIndex`] of the corresponding file, according to the file
     /// reader.
-    async fn read_file_indexes<R: PositionalReader>(
-        reader: &MapFileReader<R>,
+    async fn read_page_indexes<R: PositionalReader>(
+        reader: &FileReader<R>,
         footer: &Footer,
     ) -> Result<Vec<PageIndex>> {
         const RECORD_SIZE: usize = PageIndex::encoded_size();
@@ -134,7 +131,7 @@ impl MapFileMetaHolder {
 
     /// Read the dealloc pages block.
     async fn read_dealloc_pages<R: PositionalReader>(
-        reader: &MapFileReader<R>,
+        reader: &FileReader<R>,
         footer: &Footer,
     ) -> Result<Vec<u64>> {
         let handle = footer.dealloc_pages_handle;

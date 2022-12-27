@@ -18,7 +18,7 @@ pub(crate) struct WriteBuffer
 where
     Self: Send,
 {
-    file_id: u32,
+    group_id: u32,
 
     buf: NonNull<u8>,
     buf_size: usize,
@@ -80,7 +80,7 @@ pub(crate) enum ReleaseState {
 }
 
 impl WriteBuffer {
-    pub(crate) fn with_capacity(file_id: u32, size: u32) -> Self {
+    pub(crate) fn with_capacity(group_id: u32, size: u32) -> Self {
         use std::alloc::{alloc, Layout};
 
         let buf_size = size as usize;
@@ -100,7 +100,7 @@ impl WriteBuffer {
         };
         let default_state = BufferState::default();
         WriteBuffer {
-            file_id,
+            group_id,
             buf,
             buf_size,
             buffer_state: AtomicU64::new(default_state.apply()),
@@ -109,8 +109,8 @@ impl WriteBuffer {
     }
 
     #[inline]
-    pub(crate) fn file_id(&self) -> u32 {
-        self.file_id
+    pub(crate) fn group_id(&self) -> u32 {
+        self.group_id
     }
 
     #[inline]
@@ -276,7 +276,7 @@ impl WriteBuffer {
                 Ok(_) => {
                     info!(
                         "Seal write buffer {}, allocated {} bytes, usage {:.4}",
-                        self.file_id,
+                        self.group_id,
                         buffer_state.allocated,
                         buffer_state.allocated as f64 / self.buf_size as f64
                     );
@@ -325,7 +325,7 @@ impl WriteBuffer {
         let file_id = (page_addr >> 32) as u32;
         let offset = (page_addr & ((1 << 32) - 1)) as u32;
 
-        if file_id != self.file_id {
+        if file_id != self.group_id {
             panic!("The specified addr is not belongs to the buffer");
         }
 
@@ -474,7 +474,7 @@ impl WriteBuffer {
 
         // Compute page addr.
         let page_offset = offset + core::mem::size_of::<RecordHeader>() as u32;
-        let page_addr = ((self.file_id as u64) << 32) | (page_offset as u64);
+        let page_addr = ((self.group_id as u64) << 32) | (page_offset as u64);
 
         // Construct `PageBuf`.
         let buf = unsafe {
@@ -520,7 +520,7 @@ impl std::fmt::Debug for WriteBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let buffer_state = BufferState::load(self.buffer_state.load(Ordering::Relaxed));
         f.debug_struct("WriteBuffer")
-            .field("file_id", &self.file_id)
+            .field("file_id", &self.group_id)
             .field("buf_size", &self.buf_size)
             .field("buffer_state", &buffer_state)
             .finish()
@@ -657,13 +657,6 @@ impl RecordHeader {
         self.data
     }
 
-    #[allow(dead_code)]
-    #[inline]
-    pub(crate) fn former_file_id(&self) -> u32 {
-        debug_assert_eq!(self.flags, RecordFlags::DELETED_PAGES.bits());
-        self.data as u32
-    }
-
     #[inline]
     pub(crate) fn page_size(&self) -> usize {
         self.page_size as usize
@@ -673,12 +666,6 @@ impl RecordHeader {
     pub(crate) fn set_page_id(&mut self, page_id: u64) {
         debug_assert_eq!(self.flags, RecordFlags::NORMAL_PAGE.bits());
         self.data = page_id;
-    }
-
-    #[inline]
-    pub(crate) fn set_former_file_id(&mut self, file_id: u32) {
-        debug_assert_eq!(self.flags, RecordFlags::DELETED_PAGES.bits());
-        self.data = file_id as u64;
     }
 
     fn record_ref<'a>(&self) -> Option<RecordRef<'a>> {
@@ -730,7 +717,7 @@ impl<'a> Iterator for RecordIterator<'a> {
             self.offset += record_header.record_size();
             let page_offset = record_offset + core::mem::size_of::<RecordHeader>() as u32;
             if let Some(record_ref) = record_header.record_ref() {
-                let page_addr = ((self.write_buffer.file_id as u64) << 32) | (page_offset as u64);
+                let page_addr = ((self.write_buffer.group_id as u64) << 32) | (page_offset as u64);
                 return Some((page_addr, record_header, record_ref));
             }
         }
@@ -1003,16 +990,5 @@ mod tests {
             unsafe { buf.alloc_page(1, 4 << 10, true) },
             Err(Error::TooLargeSize)
         ));
-    }
-
-    #[test]
-    fn write_buffer_dealloc_pages_with_former_file_id() {
-        let buf = WriteBuffer::with_capacity(1, 1 << 10);
-        let header = unsafe { buf.dealloc_pages(&[1, 2], false) }.unwrap();
-        header.set_former_file_id(123123);
-        buf.seal().unwrap();
-        for (_, header, _) in buf.iter() {
-            assert_eq!(header.former_file_id(), 123123);
-        }
     }
 }

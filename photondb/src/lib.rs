@@ -78,7 +78,6 @@ mod tests {
             cache_file_reader_capacity: 1000,
             cache_strict_capacity_limit: false,
             prepopulate_cache_on_flush: true,
-            separate_hot_cold_files: false,
             compression_on_flush: Compression::SNAPPY,
             compression_on_cold_compact: Compression::ZSTD,
             page_checksum_type: ChecksumType::CRC32,

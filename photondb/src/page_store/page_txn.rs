@@ -15,7 +15,6 @@ use super::{
 use crate::{
     env::Env,
     page::{PageBuf, PageInfo, PageRef},
-    page_store::page_file::FileId,
 };
 
 bitflags! {
@@ -24,7 +23,7 @@ pub struct CacheOption: u8 {
     /// Default: read from cache first, read disk and refill cache as recent used when cache miss.
     const DEFAULT = 0;
     /// RefillColdWhenNotFull: read from cache first and read disk when cache miss.
-    /// It will refil cache as cold when cache has space after cache miss and Not refill cache when cache already full.
+    /// It will refill cache as cold when cache has space after cache miss and Not refill cache when cache already full.
     /// It's normally be used when read some cold data(not in cache) and discard them soon(i.g. consolidate)
     const REFILL_COLD_WHEN_NOT_FULL = 1;
 }
@@ -100,19 +99,12 @@ impl<E: Env> Guard<E> {
             return Ok(page.info());
         }
 
-        let Some(file_info) = self.version.page_files().get(&logical_id) else {
+        let Some(file_info) = self.version.page_groups().get(&logical_id) else {
             panic!("File {logical_id} (addr {addr}) is not exists");
         };
-        assert_eq!(file_info.get_file_id(), logical_id);
 
         let Some(page_info) = file_info.get_page_info(addr) else {
-            let physical_id = if let Some(id) = file_info.get_map_file_id() {
-                // This is partial page file, read page from the corresponding map file.
-                FileId::Map(id)
-            } else {
-                FileId::Page(logical_id)
-            };
-            panic!("The addr {addr} is not belongs to the target file {physical_id:?}");
+            panic!("The addr {addr} is not belongs to the target file");
         };
 
         Ok(page_info)
@@ -131,25 +123,21 @@ impl<E: Env> Guard<E> {
         }
         self.writebuf_stats.read_in_file.inc();
 
-        let Some(file_info) = self.version.page_files().get(&logical_id) else {
+        let Some(page_group) = self.version.page_groups().get(&logical_id) else {
             panic!("File {logical_id} (addr {addr}) is not exists");
         };
-        assert_eq!(file_info.get_file_id(), logical_id);
 
-        let physical_id = if let Some(id) = file_info.get_map_file_id() {
-            // This is partial page file, read page from the corresponding map file.
-            FileId::Map(id)
-        } else {
-            FileId::Page(logical_id)
+        let physical_id = page_group.meta().file_id;
+        let Some(file_info) = self.version.file_infos().get(&physical_id) else {
+            panic!("TODO:")
         };
-
-        let Some(handle) = file_info.get_page_handle(addr) else {
+        let Some(handle) = page_group.get_page_handle(addr) else {
             panic!("The addr {addr} is not belongs to the target file {physical_id:?}");
         };
 
         let (entry, hit) = self
             .page_files
-            .read_page(physical_id, file_info, addr, handle, hint)
+            .read_page(physical_id, file_info.meta(), addr, handle, hint)
             .await?;
 
         let mut owned_pages = self.cache_guards.lock().expect("Poisoned");
@@ -168,7 +156,7 @@ impl<E: Env> Guard<E> {
         });
 
         if !hit && !page.tier().is_leaf() {
-            self.writebuf_stats.miss_innner.inc();
+            self.writebuf_stats.miss_inner.inc();
         }
 
         Ok((page, Some(cache_token)))
@@ -210,20 +198,6 @@ impl<'a, E: Env> PageTxn<'a, E> {
     pub(crate) async fn alloc_page(&mut self, size: usize) -> Result<(u64, PageBuf<'a>)> {
         let page_size = size as u32;
         let (addr, header, buf) = self.alloc_page_impl(page_size).await?;
-        self.records.insert(addr, header);
-        Ok((addr, buf))
-    }
-
-    /// Similar to `alloc_page`, but also set the page id for the allocated page
-    /// buffer.
-    pub(crate) async fn alloc_page_with_id(
-        &mut self,
-        id: u64,
-        size: usize,
-    ) -> Result<(u64, PageBuf<'a>)> {
-        let page_size = size as u32;
-        let (addr, header, buf) = self.alloc_page_impl(page_size).await?;
-        header.set_page_id(id);
         self.records.insert(addr, header);
         Ok((addr, buf))
     }
@@ -311,23 +285,6 @@ impl<'a, E: Env> PageTxn<'a, E> {
             dealloc_pages.set_tombstone();
             Error::Again
         })?;
-        Ok(())
-    }
-
-    /// Deallocates some pages.
-    ///
-    /// The `former_file_id` indicates that the corresponding file could be
-    /// deleted if the dealloc pages record is persistent.
-    pub(crate) async fn dealloc_pages(
-        mut self,
-        former_file_id: Option<u32>,
-        dealloc_addrs: &[u64],
-    ) -> Result<()> {
-        let header = self.dealloc_pages_impl(dealloc_addrs).await?;
-        if let Some(file_id) = former_file_id {
-            header.set_former_file_id(file_id);
-        }
-        self.commit();
         Ok(())
     }
 

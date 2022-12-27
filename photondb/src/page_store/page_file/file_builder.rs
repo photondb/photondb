@@ -1,16 +1,9 @@
-use std::{
-    alloc::Layout,
-    collections::{BTreeMap, BTreeSet, HashSet},
-    marker::PhantomData,
-    sync::Arc,
-};
+use std::{alloc::Layout, collections::BTreeMap, marker::PhantomData, sync::Arc};
 
 use super::{
     checksum,
     compression::{compress_max_len, compress_page, Compression},
-    constant::*,
-    types::split_page_addr,
-    ChecksumType, FileInfo, FileMeta,
+    ChecksumType, PageGroupMeta,
 };
 use crate::{
     env::{Directory, Env, SequentialWriter, SequentialWriterExt},
@@ -18,137 +11,23 @@ use crate::{
     page_store::{Error, Result},
 };
 
-/// Builder for a page file.
-///
-/// File format:
-///
-/// File = {data blocks} {meta blocks} {index blocks} {footer}
-/// data blocks = [{data block}] --- one block per tree page
-/// meta blocks = {page table block} {delete pages block}
-/// page table block = [(page_id, page_addr[low 32bit])]
-/// delete pages block = [delete-page-addr]
-/// index_blocks = {data block index} {meta block index}
-/// data block index = {page_addr[low 32bit], file_offset}
-/// meta block index = {file_offset}
-/// footer = {magic_number} {data block index} {meta block index}
-///
-/// `page_addr`'s high 32 bit always be `file-id`(`PageAddr = {file id} {write
-/// buffer index}`), so it only store lower 32 bit.
-
-#[allow(unused)]
-pub(crate) struct FileBuilder<'a, E: Env> {
-    writer: BufferedWriter<'a, E>,
-    inner: CommonFileBuilder,
-}
-
-impl<'a, E: Env> FileBuilder<'a, E> {
-    /// Create new file builder for given writer.
-    pub(crate) fn new(
-        file_id: u32,
-        base_dir: &'a E::Directory,
-        file: E::SequentialWriter,
-        use_direct: bool,
-        block_size: usize,
-        comperssion: Compression,
-        checksum: ChecksumType,
-    ) -> Self {
-        let writer = BufferedWriter::new(file, IO_BUFFER_SIZE, use_direct, block_size, base_dir);
-        Self {
-            writer,
-            inner: CommonFileBuilder::new(file_id, block_size, comperssion, checksum),
-        }
-    }
-
-    /// Add a new page to builder.
-
-    #[allow(unused)]
-    pub(crate) async fn add_page(
-        &mut self,
-        page_id: u64,
-        page_addr: u64,
-        page_info: PageInfo,
-        page_content: &[u8],
-    ) -> Result<()> {
-        self.inner
-            .add_page(
-                &mut self.writer,
-                page_id,
-                page_addr,
-                page_info,
-                page_content,
-            )
-            .await
-    }
-
-    /// Add delete page to builder.
-    #[allow(unused)]
-    pub(crate) fn add_delete_pages(&mut self, page_addrs: &[u64]) {
-        self.inner.add_delete_pages(page_addrs)
-    }
-
-    // Finish build page file.
-    #[allow(unused)]
-    pub(crate) async fn finish(&mut self) -> Result<FileInfo> {
-        self.inner.finish_meta_block(&mut self.writer).await?;
-        let info = self.finish_file_footer().await?;
-        self.writer.flush_and_sync().await?;
-        Ok(info)
-    }
-}
-
-impl<'a, E: Env> FileBuilder<'a, E> {
-    async fn finish_file_footer(&mut self) -> Result<FileInfo> {
-        let (data_handle, meta_handle) = self.inner.finish_index_block(&mut self.writer).await?;
-        let footer = Footer {
-            magic: PAGE_FILE_MAGIC,
-            data_handle,
-            meta_handle,
-            compression: self.inner.compression,
-            checksum_type: self.inner.checksum,
-        };
-
-        let footer_dat = footer.encode();
-        let foot_offset = self.writer.write(&footer_dat).await?;
-        let file_size = foot_offset as usize + footer_dat.len();
-
-        let meta = self.inner.as_page_file_meta(file_size, footer.data_handle);
-        let staled_pages = meta.dealloc_pages_bitmap();
-        let active_size = meta.total_page_size();
-        Ok(FileInfo::new(
-            staled_pages,
-            active_size,
-            self.inner.file_id,
-            self.inner.file_id,
-            self.inner.get_referenced_files(),
-            meta,
-        ))
-    }
-}
-
 pub(crate) struct CommonFileBuilder {
-    file_id: u32,
-    block_size: usize,
+    group_id: u32,
     compression: Compression,
     checksum: ChecksumType,
 
     index: IndexBlockBuilder,
-    meta: MetaBlockBuilder,
+    page_table: PageTable,
 }
 
 impl CommonFileBuilder {
-    pub(super) fn new(
-        file_id: u32,
-        block_size: usize,
-        compression: Compression,
-        checksum: ChecksumType,
-    ) -> Self {
+    pub(super) fn new(group_id: u32, compression: Compression, checksum: ChecksumType) -> Self {
         CommonFileBuilder {
-            file_id,
-            block_size,
+            group_id,
             compression,
             checksum,
             index: IndexBlockBuilder::default(),
-            meta: MetaBlockBuilder::default(),
+            page_table: PageTable::default(),
         }
     }
 
@@ -166,29 +45,17 @@ impl CommonFileBuilder {
         let checksum = checksum::checksum(self.checksum, page_content);
         let file_offset = writer.write_with_checksum(page_content, checksum).await?;
         self.index.add_data_block(page_addr, file_offset, page_info);
-        self.meta.add_page(page_addr, page_id);
+        self.page_table.0.insert(page_addr, page_id);
         Ok(())
-    }
-
-    /// Add delete page to builder.
-    pub(super) fn add_delete_pages(&mut self, page_addrs: &[u64]) {
-        self.meta.delete_pages(page_addrs)
     }
 
     pub(super) async fn finish_meta_block<'a, E: Env>(
         &mut self,
         writer: &mut BufferedWriter<'a, E>,
     ) -> Result<()> {
-        {
-            let page_tables = self.meta.finish_page_table_block();
-            let file_offset = writer.write(&page_tables).await?;
-            self.index.add_page_table_meta_block(file_offset)
-        }
-        {
-            let delete_pages = self.meta.finish_delete_pages_block();
-            let file_offset = writer.write(&delete_pages).await?;
-            self.index.add_delete_pages_meta_block(file_offset)
-        };
+        let page_tables = self.page_table.encode();
+        let file_offset = writer.write(&page_tables).await?;
+        self.index.add_page_table_meta_block(file_offset);
         Ok(())
     }
 
@@ -196,77 +63,47 @@ impl CommonFileBuilder {
         &mut self,
         writer: &mut BufferedWriter<'a, E>,
     ) -> Result<(
-        BlockHandler, /* data index */
-        BlockHandler, /* meta index */
+        BlockHandle, /* data index */
+        BlockHandle, /* meta index */
     )> {
         let (data_index, meta_index) = self.index.finish_index_block();
         let data_offset = writer.write(&data_index).await?;
         let meta_offset = writer.write(&meta_index).await?;
-        let data_handle = BlockHandler {
+        let data_handle = BlockHandle {
             offset: data_offset,
             length: data_index.len() as u64,
         };
-        let meta_handle = BlockHandler {
+        let meta_handle = BlockHandle {
             offset: meta_offset,
             length: meta_index.len() as u64,
         };
         Ok((data_handle, meta_handle))
     }
 
-    pub(crate) fn get_referenced_files(&self) -> HashSet<u32> {
-        let mut files = HashSet::new();
-        for page_addr in self.meta.get_deleted_pages() {
-            let (file_id, _) = split_page_addr(page_addr);
-            files.insert(file_id);
-        }
-        files
-    }
-
-    pub(crate) fn as_partial_file_meta(
+    pub(crate) fn as_page_group_meta(
         &self,
-        map_file_id: u32,
+        file_id: u32,
         base_offset: u64,
-        data_handle: BlockHandler,
-    ) -> Arc<FileMeta> {
+        data_handle: BlockHandle,
+    ) -> Arc<PageGroupMeta> {
         let (indexes, offsets) = self.index.index_block.as_meta_file_cached(data_handle);
-        Arc::new(FileMeta::new_partial(
-            self.file_id,
-            map_file_id,
+        Arc::new(PageGroupMeta::new(
+            self.group_id,
+            file_id,
             base_offset,
-            self.block_size,
             indexes,
             offsets,
-            self.compression,
-            self.checksum,
-        ))
-    }
-
-    #[allow(unused)]
-    pub(super) fn as_page_file_meta(
-        &self,
-        file_size: usize,
-        data_handle: BlockHandler,
-    ) -> Arc<FileMeta> {
-        let (indexes, offsets) = self.index.index_block.as_meta_file_cached(data_handle);
-        Arc::new(FileMeta::new(
-            self.file_id,
-            file_size as usize,
-            self.block_size,
-            indexes,
-            offsets,
-            self.compression,
-            self.checksum,
         ))
     }
 }
 
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
-pub(crate) struct BlockHandler {
+pub(crate) struct BlockHandle {
     pub(crate) offset: u64,
     pub(crate) length: u64,
 }
 
-impl BlockHandler {
+impl BlockHandle {
     pub(super) const fn encoded_size() -> usize {
         core::mem::size_of::<u64>() * 2
     }
@@ -291,92 +128,6 @@ impl BlockHandler {
                 .map_err(|_| Error::Corrupted)?,
         );
         Ok(Self { offset, length })
-    }
-}
-
-#[allow(unused)]
-pub(crate) struct Footer {
-    magic: u64,
-    pub(crate) data_handle: BlockHandler,
-    pub(crate) meta_handle: BlockHandler,
-    pub(crate) compression: Compression,
-    pub(crate) checksum_type: ChecksumType,
-}
-
-impl Footer {
-    #[inline]
-    pub(crate) fn size() -> u32 {
-        (core::mem::size_of::<u64>() * 5 + 1 + 1) as u32
-    }
-
-    #[allow(unused)]
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(core::mem::size_of::<u64>() * 5);
-        bytes.extend_from_slice(&self.magic.to_le_bytes());
-        self.data_handle.encode(&mut bytes);
-        self.meta_handle.encode(&mut bytes);
-        bytes.push(self.compression.bits());
-        bytes.push(self.checksum_type.bits());
-        bytes
-    }
-
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
-        if bytes.len() != Self::size() as usize {
-            return Err(Error::Corrupted);
-        }
-        let mut idx = 0;
-        let magic = u64::from_le_bytes(
-            bytes[idx..idx + core::mem::size_of::<u64>()]
-                .try_into()
-                .map_err(|_| Error::Corrupted)?,
-        );
-        idx += core::mem::size_of::<u64>();
-        let data_handle = BlockHandler::decode(&bytes[idx..idx + core::mem::size_of::<u64>() * 2])?;
-        idx += core::mem::size_of::<u64>() * 2;
-        let meta_handle = BlockHandler::decode(&bytes[idx..idx + core::mem::size_of::<u64>() * 2])?;
-        idx += core::mem::size_of::<u64>() * 2;
-        let compression = Compression::from_bits(bytes[idx]).ok_or(Error::Corrupted)?;
-        idx += 1;
-        let checksum_type = ChecksumType::from_bits(bytes[idx]).ok_or(Error::Corrupted)?;
-        Ok(Self {
-            magic,
-            data_handle,
-            meta_handle,
-            compression,
-            checksum_type,
-        })
-    }
-}
-
-#[derive(Default)]
-struct MetaBlockBuilder {
-    delete_page_addrs: DeletePages,
-    page_table: PageTable,
-}
-
-impl MetaBlockBuilder {
-    pub(crate) fn add_page(&mut self, page_addr: u64, page_id: u64) {
-        self.page_table.0.insert(page_addr, page_id);
-    }
-
-    #[allow(unused)]
-    pub(crate) fn delete_pages(&mut self, page_addrs: &[u64]) {
-        for page_addr in page_addrs {
-            self.delete_page_addrs.0.insert(*page_addr);
-        }
-    }
-
-    pub(crate) fn finish_page_table_block(&self) -> Vec<u8> {
-        self.page_table.encode()
-    }
-
-    pub(crate) fn finish_delete_pages_block(&self) -> Vec<u8> {
-        self.delete_page_addrs.encode()
-    }
-
-    #[inline]
-    pub(crate) fn get_deleted_pages(&self) -> HashSet<u64> {
-        self.delete_page_addrs.0.iter().cloned().collect()
     }
 }
 
@@ -425,41 +176,6 @@ impl From<PageTable> for BTreeMap<u64, u64> {
 }
 
 #[derive(Default)]
-pub(crate) struct DeletePages(BTreeSet<u64>);
-
-impl DeletePages {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.0.len() * core::mem::size_of::<u64>());
-        for delete_page_addr in &self.0 {
-            bytes.extend_from_slice(&delete_page_addr.to_le_bytes());
-        }
-        bytes
-    }
-
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
-        let mut pages = BTreeSet::new();
-        let mut idx = 0;
-        while idx < bytes.len() {
-            let end = idx + core::mem::size_of::<u64>();
-            if end > bytes.len() {
-                return Err(Error::Corrupted);
-            }
-            let del_page =
-                u64::from_le_bytes(bytes[idx..end].try_into().map_err(|_| Error::Corrupted)?);
-            pages.insert(del_page);
-            idx = end;
-        }
-        Ok(DeletePages(pages))
-    }
-}
-
-impl From<DeletePages> for Vec<u64> {
-    fn from(d: DeletePages) -> Self {
-        d.0.iter().cloned().collect::<Vec<u64>>()
-    }
-}
-
-#[derive(Default)]
 struct IndexBlockBuilder {
     index_block: IndexBlock,
 }
@@ -477,11 +193,6 @@ impl IndexBlockBuilder {
         self.index_block.meta_page_table = Some(file_offset);
     }
 
-    #[inline]
-    pub(crate) fn add_delete_pages_meta_block(&mut self, file_offset: u64) {
-        self.index_block.meta_delete_pages = Some(file_offset);
-    }
-
     pub(crate) fn finish_index_block(
         &self,
     ) -> (Vec<u8> /* data index */, Vec<u8> /* meta index */) {
@@ -496,7 +207,6 @@ impl IndexBlockBuilder {
 pub(crate) struct IndexBlock {
     pub(crate) page_offsets: BTreeMap<u64, (u64, PageInfo)>,
     pub(crate) meta_page_table: Option<u64>,
-    pub(crate) meta_delete_pages: Option<u64>,
 }
 
 impl IndexBlock {
@@ -516,7 +226,6 @@ impl IndexBlock {
     fn encode_meta_block_index(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(core::mem::size_of::<u64>() * 2);
         bytes.extend_from_slice(&self.meta_page_table.as_ref().unwrap().to_le_bytes());
-        bytes.extend_from_slice(&self.meta_delete_pages.as_ref().unwrap().to_le_bytes());
         bytes
     }
 
@@ -568,16 +277,11 @@ impl IndexBlock {
             idx = end;
         }
 
-        if meta_index_bytes.len() != core::mem::size_of::<u64>() * 2 {
+        if meta_index_bytes.len() != core::mem::size_of::<u64>() {
             return Err(Error::Corrupted);
         }
         let meta_page_table = Some(u64::from_le_bytes(
             meta_index_bytes[0..core::mem::size_of::<u64>()]
-                .try_into()
-                .map_err(|_| Error::Corrupted)?,
-        ));
-        let meta_delete_pages = Some(u64::from_le_bytes(
-            meta_index_bytes[core::mem::size_of::<u64>()..core::mem::size_of::<u64>() * 2]
                 .try_into()
                 .map_err(|_| Error::Corrupted)?,
         ));
@@ -588,17 +292,15 @@ impl IndexBlock {
         Ok(Self {
             page_offsets,
             meta_page_table,
-            meta_delete_pages,
         })
     }
 
     pub(crate) fn as_meta_file_cached(
         &self,
-        data_handle: BlockHandler,
+        data_handle: BlockHandle,
     ) -> (Vec<u64>, BTreeMap<u64, (u64, PageInfo)>) {
         let indexes = vec![
             self.meta_page_table.as_ref().unwrap().to_owned(),
-            self.meta_delete_pages.as_ref().unwrap().to_owned(),
             data_handle.offset, // meta block's end is index_block's start.
         ];
         (indexes, self.page_offsets.to_owned())
