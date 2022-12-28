@@ -25,27 +25,14 @@ pub(crate) struct StreamEdit {
 #[allow(unreachable_pub)]
 #[derive(Clone, PartialEq, Message)]
 pub(crate) struct VersionEdit {
-    /// A set of page files.
-    #[prost(message, tag = "1")]
-    pub page_stream: Option<StreamEdit>,
     /// A set of map files.
-    #[prost(message, tag = "2")]
-    pub map_stream: Option<StreamEdit>,
+    #[prost(message, tag = "1")]
+    pub file_stream: Option<StreamEdit>,
 }
 
 mod convert {
     use super::*;
-    use crate::page_store::{FileInfo, MapFileInfo};
-
-    impl From<&FileInfo> for NewFile {
-        fn from(info: &FileInfo) -> Self {
-            NewFile {
-                id: info.get_file_id(),
-                up1: info.up1(),
-                up2: info.up2(),
-            }
-        }
-    }
+    use crate::page_store::FileInfo;
 
     impl From<u32> for NewFile {
         fn from(file_id: u32) -> Self {
@@ -57,10 +44,10 @@ mod convert {
         }
     }
 
-    impl From<&MapFileInfo> for NewFile {
-        fn from(info: &MapFileInfo) -> Self {
+    impl From<&FileInfo> for NewFile {
+        fn from(info: &FileInfo) -> Self {
             NewFile {
-                id: info.file_id(),
+                id: info.meta().file_id,
                 up1: info.up1(),
                 up2: info.up2(),
             }
@@ -76,11 +63,10 @@ mod tests {
     fn version_edit_decode_and_encode() {
         let new_files: Vec<NewFile> = vec![4, 5, 6].into_iter().map(Into::into).collect();
         let edit = VersionEdit {
-            page_stream: Some(StreamEdit {
+            file_stream: Some(StreamEdit {
                 new_files,
                 deleted_files: vec![1, 2, 3],
             }),
-            map_stream: None,
         };
 
         let payload = edit.encode_to_vec();

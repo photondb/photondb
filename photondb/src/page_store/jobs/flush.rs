@@ -115,28 +115,21 @@ impl<E: Env> FlushCtx<E> {
 
     async fn flush_impl(&self, write_buffer: &WriteBuffer, wait: bool) -> Result<()> {
         let start_at = Instant::now();
-        let file_id = write_buffer.file_id();
-        let (dealloc_pages, file_info, map_info, reclaimed_files) =
-            self.build_page_file(write_buffer).await?;
+        let group_id = write_buffer.group_id();
+        let (dealloc_pages, page_group, file_info) = self.build_page_file(write_buffer).await?;
 
+        let file_id = file_info.meta().file_id;
+        let file_size = file_info.meta().file_size;
         info!(
-            "Flush output map file {} with {} bytes, {} active pages, {} dealloc pages, lasted {} microseconds",
-            map_info.file_id(),
-            map_info.file_size(),
-            file_info.num_active_pages(),
+            "Flush page group {group_id} output file {file_id} with {file_size} bytes, \
+                {} active pages, {} dealloc pages, lasted {} microseconds",
+            page_group.num_active_pages(),
             dealloc_pages.len(),
             start_at.elapsed().as_micros()
         );
 
-        self.save_and_install_version(
-            file_id,
-            file_info,
-            map_info,
-            dealloc_pages,
-            reclaimed_files,
-            wait,
-        )
-        .await?;
+        self.save_and_install_version(page_group, file_info, dealloc_pages, wait)
+            .await?;
 
         write_buffer.on_flushed();
 
@@ -145,22 +138,23 @@ impl<E: Env> FlushCtx<E> {
 
     async fn save_and_install_version(
         &self,
-        file_id: u32,
+        page_group: PageGroup,
         file_info: FileInfo,
-        map_file_info: MapFileInfo,
         dealloc_pages: Vec<u64>,
-        reclaimed_files: HashSet<u32>,
         wait_new_buffer: bool,
     ) -> Result<()> {
         let mut manifest = self.manifest.lock().await;
         let version = self.version_owner.current();
 
-        let (mut page_files, mut map_files) =
-            self.apply_dealloc_pages(&version, map_file_info.file_id(), dealloc_pages.to_owned());
-        let obsoleted_page_files = drain_obsoleted_page_files(&mut page_files, reclaimed_files);
-        let obsoleted_map_files = drain_obsoleted_map_files(&mut page_files, &mut map_files);
-        page_files.insert(file_id, file_info);
-        map_files.insert(map_file_info.file_id(), map_file_info);
+        let now = manifest.now();
+        let (mut page_groups, mut file_infos) =
+            self.apply_dealloc_pages(&version, now, dealloc_pages.to_owned());
+        let obsoleted_map_files = drain_obsoleted_files(&mut page_groups, &mut file_infos);
+
+        let group_id = page_group.meta().group_id;
+        let file_id = file_info.meta().file_id;
+        page_groups.insert(group_id, page_group);
+        file_infos.insert(file_id, file_info);
 
         let edit = make_flush_version_edit(file_id, &obsoleted_map_files);
         manifest
@@ -175,10 +169,9 @@ impl<E: Env> FlushCtx<E> {
 
         let delta = DeltaVersion {
             reason: VersionUpdateReason::Flush,
-            page_files,
-            map_files,
-            obsoleted_page_files,
-            obsoleted_map_files,
+            page_groups,
+            file_infos,
+            obsoleted_files: obsoleted_map_files,
         };
         // Safety: the mutable reference of [`Manifest`] is hold.
         unsafe { self.version_owner.install(delta) };
@@ -189,59 +182,56 @@ impl<E: Env> FlushCtx<E> {
     async fn build_page_file(
         &self,
         write_buffer: &WriteBuffer,
-    ) -> Result<(Vec<u64>, FileInfo, MapFileInfo, HashSet<u32>)> {
+    ) -> Result<(Vec<u64>, PageGroup, FileInfo)> {
         assert!(write_buffer.is_flushable());
 
         let mut flush_stats = FlushPageStats::default();
-        let (dealloc_pages, skip_pages, reclaimed_files) =
+        let (dealloc_pages, skip_pages) =
             collect_dealloc_pages_and_stats(write_buffer, &mut flush_stats);
 
-        let file_id = write_buffer.file_id();
-        info!("Flush write buffer {file_id} to page file, {flush_stats}");
+        let group_id = write_buffer.group_id();
+        info!("Flush write buffer {group_id} to file, {flush_stats}");
 
         self.page_files.evict_cached_pages(&dealloc_pages);
 
-        let map_file_id = {
+        let file_id = {
             let mut lock = self.manifest.lock().await;
             lock.next_map_file_id()
         };
         let mut builder = self
             .page_files
-            .new_map_file_builder(
-                map_file_id,
+            .new_file_builder(
+                file_id,
                 self.options.compression_on_flush,
                 self.options.page_checksum_type,
             )
             .await?;
-        let mut partial_builder = builder.add_file(file_id);
+        let mut group_builder = builder.add_page_group(group_id);
         let mut write_bytes = 0;
         let mut discard_bytes = 0;
         for (page_addr, header, record_ref) in write_buffer.iter() {
-            match record_ref {
-                RecordRef::DeallocPages(_) => {}
-                RecordRef::Page(page) => {
-                    if header.is_tombstone() || skip_pages.contains(&page_addr) {
-                        discard_bytes += header.page_size();
-                        continue;
-                    }
-                    let content = page.data();
-                    partial_builder
-                        .add_page(header.page_id(), page_addr, page.info(), content)
-                        .await?;
-                    write_bytes += content.len();
-                    let _ = self.page_files.populate_cache(page_addr, content);
+            if let RecordRef::Page(page) = record_ref {
+                if header.is_tombstone() || skip_pages.contains(&(page_addr as u32)) {
+                    discard_bytes += header.page_size();
+                    continue;
                 }
+                let content = page.data();
+                group_builder
+                    .add_page(header.page_id(), page_addr, page.info(), content)
+                    .await?;
+                write_bytes += content.len();
+                let _ = self.page_files.populate_cache(page_addr, content);
             }
         }
-        partial_builder.add_dealloc_pages(&dealloc_pages);
-        builder = partial_builder.finish().await?;
-        let (virtual_infos, map_info) = builder.finish(map_file_id).await?;
-        let file_info = virtual_infos.get(&file_id).unwrap().clone();
+        group_builder.add_dealloc_pages(&dealloc_pages);
+        builder = group_builder.finish().await?;
+        let (page_groups, file_info) = builder.finish(file_id).await?;
+        let page_group = page_groups.get(&group_id).unwrap().clone();
 
         self.job_stats.flush_write_bytes.add(write_bytes as u64);
         self.job_stats.flush_discard_bytes.add(discard_bytes as u64);
 
-        Ok((dealloc_pages, file_info, map_info, reclaimed_files))
+        Ok((dealloc_pages, page_group, file_info))
     }
 
     fn apply_dealloc_pages(
@@ -249,24 +239,27 @@ impl<E: Env> FlushCtx<E> {
         version: &Version,
         now: u32,
         dealloc_pages: Vec<u64>,
-    ) -> (HashMap<u32, FileInfo>, HashMap<u32, MapFileInfo>) {
-        let mut files = version.page_files().clone();
-        let mut map_files = version.map_files().clone();
+    ) -> (HashMap<u32, PageGroup>, HashMap<u32, FileInfo>) {
+        let mut page_groups = version.page_groups().clone();
+        let mut file_infos = version.file_infos().clone();
+        let mut updated_files = HashSet::new();
         for page_addr in dealloc_pages {
-            let file_id = (page_addr >> 32) as u32;
-            if let Some(file_info) = files.get_mut(&file_id) {
-                if !file_info.deactivate_page(now, page_addr) {
+            let group_id = (page_addr >> 32) as u32;
+            if let Some(page_group) = page_groups.get_mut(&group_id) {
+                if !page_group.deactivate_page(page_addr) {
                     continue;
                 }
-                if let Some(map_file_id) = file_info.get_map_file_id() {
-                    let Some(map_file) = map_files.get_mut(&map_file_id) else {
-                        panic!("dealloc page {page_addr} with virtual file {file_id}, but map file {map_file_id} not exists");
-                    };
-                    map_file.on_update(now);
-                }
+
+                updated_files.insert(page_group.meta().file_id);
             };
         }
-        (files, map_files)
+        for file_id in updated_files {
+            if let Some(map_file) = file_infos.get_mut(&file_id) {
+                map_file.on_update(now);
+            }
+        }
+
+        (page_groups, file_infos)
     }
 }
 
@@ -280,94 +273,49 @@ impl std::fmt::Display for FlushPageStats {
     }
 }
 
-/// Drain and return the obsoleted files from active files.
-///
-/// There exists two obsoleted sources:
-/// 1. file is reclaimed (no active pages and dealloc pages has been rewritten).
-/// 2. all referenced files (dealloc pages referenced to) is not belongs to
-/// active files.
-fn drain_obsoleted_page_files(
-    files: &mut HashMap<u32, FileInfo>,
-    reclaimed_files: HashSet<u32>,
+fn drain_obsoleted_files(
+    page_groups: &mut HashMap<u32, PageGroup>,
+    file_infos: &mut HashMap<u32, FileInfo>,
 ) -> HashSet<u32> {
-    assert_files_are_deletable(files, &reclaimed_files);
-    let active_files = files
-        .iter()
-        // Virtual file could ignore reclaimed info.
-        .filter(|(id, info)| info.get_map_file_id().is_some() || !reclaimed_files.contains(id))
-        .map(|(&id, _)| id)
-        .collect::<HashSet<_>>();
-    let mut obsoleted_files = reclaimed_files;
-    // Some reclaimed files has been cleaned by normal dealloc page operations.
-    obsoleted_files.retain(|id| files.contains_key(id));
-    for (id, info) in &mut *files {
-        if info.get_map_file_id().is_none() && info.is_obsoleted(&active_files) {
-            obsoleted_files.insert(*id);
-        }
-    }
-    // Ignore virtual file.
-    files.drain_filter(|id, info| info.get_map_file_id().is_none() && obsoleted_files.contains(id));
-    obsoleted_files
-}
+    // remove empty page groups.
+    page_groups.retain(|_, g| !g.is_empty());
 
-fn drain_obsoleted_map_files(
-    files: &mut HashMap<u32, FileInfo>,
-    map_files: &mut HashMap<u32, MapFileInfo>,
-) -> HashSet<u32> {
-    let mut empty_map_files = HashSet::new();
-    'OUTER: for (map_id, info) in &mut *map_files {
-        for file_id in info.meta().page_files().keys() {
-            if let Some(file_info) = files.get(file_id) {
-                if !file_info.is_empty() {
+    let mut empty_files = HashSet::new();
+    'OUTER: for (file_id, info) in &mut *file_infos {
+        for group_id in info.meta().page_groups.keys() {
+            if let Some(page_group) = page_groups.get(group_id) {
+                if !page_group.is_empty() {
+                    // page group exists and not empty.
                     continue 'OUTER;
                 }
             }
         }
-        empty_map_files.insert(*map_id);
+        empty_files.insert(*file_id);
     }
 
-    let mut obsoleted_map_files = HashSet::new();
-    'OUTER: for map_id in empty_map_files {
-        let map_info = map_files.get_mut(&map_id).unwrap();
-        for file_id in map_info.get_referenced_files() {
-            // virtual file is not empty.
-            if files
-                .get(file_id)
-                .map(|i| !i.is_empty())
-                .unwrap_or_default()
-            {
+    let mut obsoleted_files = HashSet::new();
+    'OUTER: for file_id in empty_files {
+        let file_info = file_infos.get_mut(&file_id).unwrap();
+        for group_id in &file_info.meta().referenced_groups {
+            // Is the referenced group empty? (empty group are removed in above)
+            if page_groups.contains_key(group_id) {
                 continue 'OUTER;
             }
         }
 
-        // This map file is obsoleted.
-        for file_id in map_info.get_referenced_files() {
-            files.remove(file_id);
-        }
-        map_files.remove(&map_id);
-        obsoleted_map_files.insert(map_id);
+        file_infos.remove(&file_id);
+        obsoleted_files.insert(file_id);
     }
-    obsoleted_map_files
-}
-
-fn assert_files_are_deletable(files: &HashMap<u32, FileInfo>, reclaimed_files: &HashSet<u32>) {
-    for file_id in reclaimed_files {
-        if let Some(info) = files.get(file_id) {
-            if !info.is_empty() && info.get_map_file_id().is_none() {
-                panic!("The reclaimed page file {file_id} has active pages");
-            }
-        }
-    }
+    obsoleted_files
 }
 
 fn collect_dealloc_pages_and_stats(
     write_buffer: &WriteBuffer,
     flush_stats: &mut FlushPageStats,
-) -> (Vec<u64>, HashSet<u64>, HashSet<u32>) {
-    let file_id = write_buffer.file_id();
+) -> (Vec<u64>, HashSet<u32>) {
+    let file_id = write_buffer.group_id();
     let mut dealloc_pages = Vec::new();
     let mut skip_pages = HashSet::new();
-    let mut reclaimed_files = HashSet::new();
     for (_, header, record_ref) in write_buffer.iter() {
         flush_stats.num_records += 1;
         if header.is_tombstone() {
@@ -376,9 +324,6 @@ fn collect_dealloc_pages_and_stats(
 
         flush_stats.data_size += header.page_size();
         if let RecordRef::DeallocPages(pages) = record_ref {
-            if header.former_file_id() as u64 != NAN_ID {
-                assert!(reclaimed_files.insert(header.former_file_id()));
-            }
             dealloc_pages.extend(
                 pages
                     .as_slice()
@@ -389,7 +334,8 @@ fn collect_dealloc_pages_and_stats(
                 pages
                     .as_slice()
                     .iter()
-                    .filter(|&&v| (v >> 32) as u32 == file_id),
+                    .filter(|&&v| (v >> 32) as u32 == file_id)
+                    .map(|&v| v as u32),
             );
         }
     }
@@ -397,27 +343,12 @@ fn collect_dealloc_pages_and_stats(
     flush_stats.num_skip_pages = skip_pages.len();
     flush_stats.num_dealloc_pages = dealloc_pages.len();
 
-    (dealloc_pages, skip_pages, reclaimed_files)
+    (dealloc_pages, skip_pages)
 }
 
 pub(super) fn version_snapshot(version: &Version) -> VersionEdit {
     let new_files: Vec<NewFile> = version
-        .page_files()
-        .values()
-        .filter(|info| info.get_map_file_id().is_none())
-        .map(Into::into)
-        .collect::<Vec<_>>();
-
-    // NOTE: Only the deleted files of the current version are recorded here, and
-    // the files of previous versions are not recorded here.
-    let deleted_files = version.obsoleted_page_files();
-    let page_stream = StreamEdit {
-        new_files,
-        deleted_files,
-    };
-
-    let new_files: Vec<NewFile> = version
-        .map_files()
+        .file_infos()
         .values()
         .map(Into::into)
         .collect::<Vec<_>>();
@@ -425,48 +356,39 @@ pub(super) fn version_snapshot(version: &Version) -> VersionEdit {
     // NOTE: Only the deleted files of the current version are recorded here, and
     // the files of previous versions are not recorded here.
     let deleted_files = version.obsoleted_map_files();
-    let map_stream = StreamEdit {
-        new_files,
-        deleted_files,
-    };
-    VersionEdit {
-        page_stream: Some(page_stream),
-        map_stream: Some(map_stream),
-    }
-}
-
-fn make_flush_version_edit(map_file_id: u32, obsoleted_files: &HashSet<u32>) -> VersionEdit {
-    let deleted_files = obsoleted_files.iter().cloned().collect();
-    let new_files = vec![NewFile::from(map_file_id)];
     let stream = StreamEdit {
         new_files,
         deleted_files,
     };
     VersionEdit {
-        page_stream: None,
-        map_stream: Some(stream),
+        file_stream: Some(stream),
+    }
+}
+
+fn make_flush_version_edit(file_id: u32, obsoleted_files: &HashSet<u32>) -> VersionEdit {
+    let deleted_files = obsoleted_files.iter().cloned().collect();
+    let new_files = vec![NewFile::from(file_id)];
+    let stream = StreamEdit {
+        new_files,
+        deleted_files,
+    };
+    VersionEdit {
+        file_stream: Some(stream),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{BTreeMap, HashMap, HashSet},
-        path::Path,
-        sync::Arc,
-    };
+    use std::{path::Path, sync::Arc};
 
-    use tempdir::TempDir;
-
-    use super::{drain_obsoleted_page_files, FlushCtx};
+    use super::FlushCtx;
     use crate::{
         env::Photon,
         page_store::{
-            page_file::{Compression, FileMeta},
             version::{DeltaVersion, Version, VersionOwner},
-            ChecksumType, FileInfo, Manifest, PageFiles, WriteBuffer,
+            Manifest, PageFiles, WriteBuffer,
         },
-        util::{bitmap::FixedBitmap, shutdown::ShutdownNotifier},
+        util::shutdown::ShutdownNotifier,
         PageStoreOptions,
     };
 
@@ -501,7 +423,7 @@ mod tests {
             let (addr, _, _) = wb.alloc_page(1, 123, false).unwrap();
             wb.dealloc_pages(&[addr], false).unwrap();
             wb.seal().unwrap();
-            let (deleted_pages, file_info, _, _) = ctx.build_page_file(&wb).await.unwrap();
+            let (deleted_pages, file_info, _) = ctx.build_page_file(&wb).await.unwrap();
             assert!(deleted_pages.is_empty());
             assert!(!file_info.is_page_active(addr));
             assert!(file_info.get_page_handle(addr).is_none())
@@ -517,188 +439,10 @@ mod tests {
             let (addr, header, _) = wb.alloc_page(1, 123, false).unwrap();
             header.set_tombstone();
             wb.seal().unwrap();
-            let (deleted_pages, file_info, _, _) = ctx.build_page_file(&wb).await.unwrap();
+            let (deleted_pages, file_info, _) = ctx.build_page_file(&wb).await.unwrap();
             assert!(deleted_pages.is_empty());
             assert!(!file_info.is_page_active(addr));
             assert!(file_info.get_page_handle(addr).is_none());
         }
-    }
-
-    #[test]
-    fn flush_obsoleted_files_drain() {
-        // It drains all obsoleted files.
-        let mut files = HashMap::new();
-        files.insert(1, make_obsoleted_file(1));
-        files.insert(2, make_active_file(2, 32));
-        let obsoleted_files = drain_obsoleted_page_files(&mut files, HashSet::default());
-        assert!(obsoleted_files.contains(&1));
-        assert!(!obsoleted_files.contains(&2));
-        assert!(files.contains_key(&2));
-        assert!(!files.contains_key(&1));
-    }
-
-    fn make_obsoleted_file(id: u32) -> FileInfo {
-        let meta = FileMeta::new(
-            id,
-            0,
-            4096,
-            Vec::default(),
-            BTreeMap::default(),
-            Compression::NONE,
-            ChecksumType::CRC32,
-        );
-        FileInfo::new(
-            FixedBitmap::new(0),
-            0,
-            id,
-            id,
-            HashSet::default(),
-            Arc::new(meta),
-        )
-    }
-
-    fn make_active_file(id: u32, _page_addr: u32) -> FileInfo {
-        let meta = FileMeta::new(
-            id,
-            1,
-            4096,
-            Vec::default(),
-            BTreeMap::default(),
-            Compression::NONE,
-            ChecksumType::CRC32,
-        );
-        FileInfo::new(
-            FixedBitmap::new(1),
-            1,
-            id,
-            id,
-            HashSet::default(),
-            Arc::new(meta),
-        )
-    }
-
-    #[test]
-    fn flush_obsoleted_files_skip_refering_files() {
-        let mut files = HashMap::new();
-        files.insert(1, make_active_file(1, 32));
-        files.insert(2, make_obsoleted_file_but_refer_others(2, 1));
-        let obsoleted_files = drain_obsoleted_page_files(&mut files, HashSet::default());
-        assert!(obsoleted_files.is_empty());
-        assert!(files.contains_key(&1));
-        assert!(files.contains_key(&2));
-    }
-
-    fn make_obsoleted_file_but_refer_others(id: u32, refer: u32) -> FileInfo {
-        let meta = FileMeta::new(
-            id,
-            0,
-            4096,
-            Vec::default(),
-            BTreeMap::default(),
-            Compression::NONE,
-            ChecksumType::CRC32,
-        );
-        let mut refers = HashSet::default();
-        refers.insert(refer);
-        FileInfo::new(FixedBitmap::new(0), 0, id, id, refers, Arc::new(meta))
-    }
-
-    #[test]
-    fn flush_obsoleted_files_drain_reclaimed() {
-        let mut files = HashMap::new();
-        files.insert(1, make_obsoleted_file(1));
-        files.insert(2, make_obsoleted_file_but_refer_others(2, 1));
-        files.insert(3, make_active_file(2, 32));
-
-        let mut reclaimed_files = HashSet::new();
-        reclaimed_files.insert(2);
-        let obsoleted_files = drain_obsoleted_page_files(&mut files, reclaimed_files);
-        assert!(obsoleted_files.contains(&1));
-        assert!(obsoleted_files.contains(&2));
-        assert!(!obsoleted_files.contains(&3));
-        assert!(!files.contains_key(&1));
-        assert!(!files.contains_key(&2));
-        assert!(files.contains_key(&3));
-    }
-
-    #[photonio::test]
-    #[ignore]
-    async fn flush_dealloc_pages_rewritten_pointer_obsoleted_file() {
-        let root = TempDir::new("flush_apply_dealloc_pages").unwrap();
-        let ctx = new_flush_ctx(root.path()).await;
-
-        // Insert two pages in current buffer.
-        let (addr1, addr2, file_1) = {
-            let version = ctx.version_owner.current();
-            let buf = version.min_write_buffer();
-            let (addr1, _, _) = unsafe { buf.alloc_page(1, 32, false) }.unwrap();
-            let (addr2, _, _) = unsafe { buf.alloc_page(2, 32, false) }.unwrap();
-            seal_and_install_new_buffer(&version, &buf);
-            ctx.flush(&buf).await.unwrap();
-            (addr1, addr2, buf.file_id())
-        };
-        println!("Alloc two pages {addr1} {addr2} at file {file_1}");
-
-        // Dealloc page with addr1, install new buffer.
-        let file_2 = {
-            let version = ctx.version_owner.current();
-            let buf = version.min_write_buffer();
-            unsafe { buf.dealloc_pages(&[addr1], false) }.unwrap();
-            seal_and_install_new_buffer(&version, &buf);
-            ctx.flush(&buf).await.unwrap();
-            buf.file_id()
-        };
-        println!("Dealloc page {addr1} at file {file_2}");
-
-        // Dealloc page with addr2, install new buffer without flush.
-        let buffer_2 = {
-            let version = ctx.version_owner.current();
-            let buf = version.min_write_buffer();
-            unsafe { buf.dealloc_pages(&[addr2], false) }.unwrap();
-            seal_and_install_new_buffer(&version, &buf);
-            buf.file_id()
-        };
-        println!("Dealloc page {addr2} at file {buffer_2}");
-
-        // Rewrite file 2, likes reclaiming, and install new buffer without flush.
-        let buffer_3 = {
-            let version = ctx.version_owner.current();
-            let buffer_3 = version.buffer_set.current().next_buffer_id() - 1;
-            let buf = version.get(buffer_3).unwrap(); // in last buffer.
-            let header = unsafe { buf.dealloc_pages(&[addr1], false) }.unwrap();
-            header.set_former_file_id(file_1);
-            seal_and_install_new_buffer(&version, &buf);
-            buffer_3
-        };
-        println!("Rewrite file {file_2}, so it will re-dealloc page {addr1}");
-
-        // Flush buffer_2, so file_1 is empty.
-        {
-            let version = ctx.version_owner.current();
-            let buf = version.get(buffer_2).unwrap().clone();
-            ctx.flush(&buf).await.unwrap();
-        }
-        println!("Flush write buffer {buffer_2}, it make file {file_1} become empty");
-
-        // Flush buffer_3, it will dealloc pages 2 but file_1 is already cleaned.
-        {
-            let version = ctx.version_owner.current();
-            let buf = version.get(buffer_3).unwrap().clone();
-            ctx.flush(&buf).await.unwrap();
-        }
-
-        // file_1 must not contained in obsoleted files.
-        {
-            let version = ctx.version_owner.current();
-            let obsoleted_files = version.obsoleted_page_files();
-            assert!(!obsoleted_files.contains(&file_1));
-        }
-    }
-
-    fn seal_and_install_new_buffer(version: &Version, buf: &WriteBuffer) {
-        buf.seal().unwrap();
-        let file_id = buf.file_id() + 1;
-        let buf = WriteBuffer::with_capacity(file_id, 1 << 16);
-        version.buffer_set.install(Arc::new(buf));
     }
 }

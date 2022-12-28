@@ -51,13 +51,13 @@ pub(crate) struct BufferRef<'a> {
 
 impl BufferSet {
     pub(crate) fn new(
-        next_file_id: u32,
+        next_group_id: u32,
         buffer_capacity: u32,
         max_sealed_buffers: usize,
     ) -> BufferSet {
-        let buf = WriteBuffer::with_capacity(next_file_id, buffer_capacity);
+        let buf = WriteBuffer::with_capacity(next_group_id, buffer_capacity);
         let version = Box::new(BufferSetVersion {
-            buffers_range: next_file_id..(next_file_id + 1),
+            buffers_range: next_group_id..(next_group_id + 1),
             sealed_buffers: Vec::default(),
             current_buffer: Arc::new(buf),
         });
@@ -92,12 +92,12 @@ impl BufferSet {
         }
     }
 
-    /// Returns a reference to the write buffer corresponding to the `file_id`.
-    pub(crate) fn get<'a>(&self, file_id: u32) -> Option<BufferRef<'a>> {
+    /// Returns a reference to the write buffer corresponding to the `group_id`.
+    pub(crate) fn get<'a>(&self, group_id: u32) -> Option<BufferRef<'a>> {
         let guard = buffer_set_guard::pin();
         // Safety: guard by `buffer_set_guard::pin`.
         let current = unsafe { self.current_without_guard() };
-        let buffer = current.get(file_id)?;
+        let buffer = current.get(group_id)?;
         Some(BufferRef {
             buffer,
             _guard: guard,
@@ -119,22 +119,22 @@ impl BufferSet {
         // Safety: guard by `buffer_set_guard::pin`.
         let mut current = unsafe { self.current_without_guard() };
         loop {
-            let next_file_id = current.buffers_range.end;
-            let new_file_id = write_buffer.file_id();
-            if new_file_id != next_file_id {
-                panic!("the buffer {new_file_id} to be installed is not a successor of the previous buffers, expect {next_file_id}.");
+            let next_group_id = current.buffers_range.end;
+            let group_id = write_buffer.group_id();
+            if group_id != next_group_id {
+                panic!("the buffer {group_id} to be installed is not a successor of the previous buffers, expect {next_group_id}.");
             }
 
             let sealed_buffers = current.snapshot();
             let new = Box::new(BufferSetVersion {
-                buffers_range: current.buffers_range.start..(next_file_id + 1),
+                buffers_range: current.buffers_range.start..(next_group_id + 1),
                 sealed_buffers,
                 current_buffer: write_buffer.clone(),
             });
 
             debug!(
                 "Install new buffer {}, buffer set range {:?}",
-                new_file_id, new.buffers_range
+                group_id, new.buffers_range
             );
 
             match self.switch_version(guard, current, new) {
@@ -163,7 +163,7 @@ impl BufferSet {
             let sealed_buffers = current
                 .sealed_buffers
                 .iter()
-                .filter(|v| v.file_id() >= first_buffer_id)
+                .filter(|v| v.group_id() >= first_buffer_id)
                 .cloned()
                 .collect::<Vec<_>>();
             let current_buffer = current.current_buffer.clone();
@@ -184,7 +184,7 @@ impl BufferSet {
     /// Release a permit of write buffer, and wait new buffer to be installed.
     ///
     /// NOTE: This function is only called by flush job.
-    pub(crate) async fn release_permit_and_wait(&self, file_id: u32) {
+    pub(crate) async fn release_permit_and_wait(&self, group_id: u32) {
         self.write_buffer_permits.release();
         self.write_buffer_permits
             .wait(buffer_permits::WaitKind::NoWaiter)
@@ -195,7 +195,7 @@ impl BufferSet {
         loop {
             {
                 let buffer_set = self.current();
-                if buffer_set.current_buffer.file_id() > file_id {
+                if buffer_set.current_buffer.group_id() > group_id {
                     return;
                 }
             }
@@ -283,7 +283,7 @@ impl BufferSet {
         for _ in 0..16 {
             let buffer_set = self.current();
             if !buffer_set.current_buffer.is_sealed() {
-                return Some(buffer_set.current_buffer.file_id());
+                return Some(buffer_set.current_buffer.group_id());
             }
         }
         None
@@ -294,7 +294,7 @@ impl BufferSet {
             {
                 let buffer_set = self.current();
                 if !buffer_set.current_buffer.is_sealed() {
-                    return buffer_set.current_buffer.file_id();
+                    return buffer_set.current_buffer.group_id();
                 }
             }
 
@@ -310,27 +310,27 @@ impl BufferSet {
     }
 
     /// Like `switch_buffer` but no write stalling will occurs.
-    pub(crate) async fn switch_buffer_without_stalling(&self, file_id: u32) {
+    pub(crate) async fn switch_buffer_without_stalling(&self, group_id: u32) {
         // Since a buffer can only be sealed once, if a buffer is sealed and has
         // available permits before sealing, then the switch buffer will not trigger
         // write stalling.
         self.write_buffer_permits
             .wait(buffer_permits::WaitKind::HasPermits)
             .await;
-        self.switch_buffer(file_id).await;
+        self.switch_buffer(group_id).await;
     }
 
     /// Seal the corresponding write buffer and switch active buffer to new one.
-    pub(crate) async fn switch_buffer(&self, file_id: u32) {
-        let Some(release_state) = self.seal_buffer(file_id) else { return };
-        self.install_successor(file_id).await;
+    pub(crate) async fn switch_buffer(&self, group_id: u32) {
+        let Some(release_state) = self.seal_buffer(group_id) else { return };
+        self.install_successor(group_id).await;
         if matches!(release_state, ReleaseState::Flush) {
             self.notify_flush_job();
         }
     }
 
-    /// Install the corresponding successor of `file_id`.
-    async fn install_successor(&self, file_id: u32) {
+    /// Install the corresponding successor of `group_id`.
+    async fn install_successor(&self, group_id: u32) {
         if self.write_buffer_permits.try_acquire().is_none() {
             info!(
                 "Stalling writes because we have {} sealed write buffers (wait for flush)",
@@ -344,15 +344,15 @@ impl BufferSet {
                 .add(start_at.elapsed().as_millis() as u64);
         }
 
-        let write_buffer = WriteBuffer::with_capacity(file_id + 1, self.buffer_capacity);
+        let write_buffer = WriteBuffer::with_capacity(group_id + 1, self.buffer_capacity);
         self.install(Arc::new(write_buffer));
     }
 
     /// Seal the corresponding buffer.
-    fn seal_buffer(&self, file_id: u32) -> Option<ReleaseState> {
+    fn seal_buffer(&self, group_id: u32) -> Option<ReleaseState> {
         let buffer_set = self.current();
         let write_buffer = buffer_set
-            .get(file_id)
+            .get(group_id)
             .expect("The write buffer should exists");
 
         write_buffer.seal().ok()
@@ -369,11 +369,11 @@ impl BufferSet {
             current.current_buffer.clone()
         };
 
-        let file_id = buffer.file_id();
+        let group_id = buffer.group_id();
         if opts.allow_write_stall {
-            self.switch_buffer(file_id).await;
+            self.switch_buffer(group_id).await;
         } else {
-            self.switch_buffer_without_stalling(file_id).await;
+            self.switch_buffer_without_stalling(group_id).await;
         }
 
         if opts.wait {
@@ -397,18 +397,18 @@ impl Drop for BufferSet {
 }
 
 impl BufferSetVersion {
-    /// Read [`WriteBuffer`] of the specified `file_id`.
+    /// Read [`WriteBuffer`] of the specified `group_id`.
     ///
     /// If the user needs to access the [`WriteBuffer`] for a long time, use
     /// `clone` to make a copy.
-    pub(crate) fn get(&self, file_id: u32) -> Option<&Arc<WriteBuffer>> {
+    pub(crate) fn get(&self, group_id: u32) -> Option<&Arc<WriteBuffer>> {
         use std::cmp::Ordering;
 
-        if !self.buffers_range.contains(&file_id) {
+        if !self.buffers_range.contains(&group_id) {
             return None;
         }
 
-        let index = (file_id - self.buffers_range.start) as usize;
+        let index = (group_id - self.buffers_range.start) as usize;
         match index.cmp(&self.sealed_buffers.len()) {
             Ordering::Less => Some(&self.sealed_buffers[index]),
             Ordering::Equal => Some(&self.current_buffer),
@@ -653,7 +653,7 @@ mod tests {
     #[test]
     fn buffer_set_write_buffer_install_and_release() {
         let buffer_set = BufferSet::new(1, 1 << 10, 8);
-        let file_id = buffer_set.current().last_writer_buffer().file_id();
+        let file_id = buffer_set.current().last_writer_buffer().group_id();
 
         // 1. seal current.
         {
@@ -681,7 +681,7 @@ mod tests {
     #[photonio::test]
     async fn buffer_set_concurrent_update() {
         let buffer_set = Arc::new(BufferSet::new(1, 32, 8));
-        let file_id = buffer_set.current().last_writer_buffer().file_id();
+        let file_id = buffer_set.current().last_writer_buffer().group_id();
         let first_active_buffer_id = Arc::new(AtomicU32::new(file_id));
         let cloned_first_active_buffer_id = first_active_buffer_id.clone();
         let cloned_buffer_set = buffer_set.clone();
@@ -753,7 +753,7 @@ mod tests {
         let (file_id, buf) = {
             let current = buffer_set.current();
             let buf = current.last_writer_buffer();
-            let file_id = buf.file_id();
+            let file_id = buf.group_id();
             (file_id, current.get(file_id).unwrap().clone())
         };
         assert_eq!(Arc::strong_count(&buf), 2);

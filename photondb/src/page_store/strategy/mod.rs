@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::{page_file::FileId, FileInfo, MapFileInfo};
+use super::{FileInfo, PageGroup};
 
 pub(crate) trait StrategyBuilder: Send + Sync {
     fn build(&self, now: u32) -> Box<dyn ReclaimPickStrategy>;
@@ -8,14 +8,11 @@ pub(crate) trait StrategyBuilder: Send + Sync {
 
 /// An abstraction describes the strategy of page files reclaiming.
 pub(crate) trait ReclaimPickStrategy: Send + Sync {
-    /// Collect file info and compute reclamation score.
-    fn collect_page_file(&mut self, file_info: &FileInfo);
-
     /// Collect map file info and compute reclamation score.
-    fn collect_map_file(&mut self, virtual_infos: &HashMap<u32, FileInfo>, file_info: &MapFileInfo);
+    fn collect_file(&mut self, page_groups: &HashMap<u32, PageGroup>, file_info: &FileInfo);
 
     /// Return the most suitable files for reclaiming under the strategy.
-    fn apply(&mut self) -> Option<(FileId, usize /* active size */)>;
+    fn apply(&mut self) -> Option<(u32, usize /* active size */)>;
 }
 
 pub(crate) struct MinDeclineRateStrategy {
@@ -33,7 +30,7 @@ struct FileScore {
     effective_rate: f64,
     write_amplify: f64,
     active_size: usize,
-    file_id: FileId,
+    file_id: u32,
 }
 
 #[derive(Debug)]
@@ -55,7 +52,7 @@ impl MinDeclineRateStrategy {
         }
     }
 
-    fn collect(&mut self, file_id: FileId, summary: &FileSummary) {
+    fn collect(&mut self, file_id: u32, summary: &FileSummary) {
         let score = decline_rate(summary, self.now);
         let effective_rate = summary.effective_rate;
         let write_amplify = write_amplification(summary.empty_pages_rate);
@@ -73,23 +70,13 @@ impl MinDeclineRateStrategy {
 }
 
 impl ReclaimPickStrategy for MinDeclineRateStrategy {
-    fn collect_page_file(&mut self, file_info: &FileInfo) {
-        let file_id = file_info.get_file_id();
-        let summary = FileSummary::from(file_info);
-        self.collect(FileId::Page(file_id), &summary);
+    fn collect_file(&mut self, page_groups: &HashMap<u32, PageGroup>, file_info: &FileInfo) {
+        let file_id = file_info.meta().file_id;
+        let summary = FileSummary::from((page_groups, file_info));
+        self.collect(file_id, &summary);
     }
 
-    fn collect_map_file(
-        &mut self,
-        virtual_infos: &HashMap<u32, FileInfo>,
-        file_info: &MapFileInfo,
-    ) {
-        let file_id = file_info.file_id();
-        let summary = FileSummary::from((virtual_infos, file_info));
-        self.collect(FileId::Map(file_id), &summary);
-    }
-
-    fn apply(&mut self) -> Option<(FileId, usize)> {
+    fn apply(&mut self) -> Option<(u32, usize)> {
         if !self.sorted {
             self.sorted = true;
             self.scores.sort_unstable_by(|a, b| {
@@ -113,36 +100,23 @@ impl StrategyBuilder for MinDeclineRateStrategyBuilder {
     }
 }
 
-impl From<&FileInfo> for FileSummary {
-    fn from(info: &FileInfo) -> Self {
-        FileSummary {
-            num_active_pages: info.num_active_pages(),
-            total_page_size: info.total_page_size(),
-            effective_size: info.effective_size(),
-            effective_rate: info.effective_rate(),
-            empty_pages_rate: info.empty_pages_rate(),
-            up2: info.up2(),
-        }
-    }
-}
-
-impl From<(&HashMap<u32, FileInfo>, &MapFileInfo)> for FileSummary {
-    fn from((file_infos, info): (&HashMap<u32, FileInfo>, &MapFileInfo)) -> Self {
+impl From<(&HashMap<u32, PageGroup>, &FileInfo)> for FileSummary {
+    fn from((file_infos, info): (&HashMap<u32, PageGroup>, &FileInfo)) -> Self {
         let meta = info.meta();
         let up2 = info.up2();
-        let page_files = meta.page_files();
+        let page_groups = &meta.page_groups;
         let mut num_active_pages = 0;
         let mut effective_size = 0;
         let mut total_pages = 0;
         let mut total_page_size = 0;
-        for page_file in page_files.keys() {
-            let partial_info = file_infos
-                .get(page_file)
+        for page_group in page_groups.keys() {
+            let page_group = file_infos
+                .get(page_group)
                 .expect("Virtual page file must exists");
-            num_active_pages += partial_info.num_active_pages();
-            effective_size += partial_info.effective_size();
-            total_pages += partial_info.total_pages();
-            total_page_size += partial_info.total_page_size();
+            num_active_pages += page_group.num_active_pages();
+            effective_size += page_group.effective_size();
+            total_pages += page_group.meta().total_pages();
+            total_page_size += page_group.meta().total_page_size();
         }
         let effective_rate = effective_size as f64 / (total_page_size as f64);
         let empty_pages_rate = if total_pages > 0 {
@@ -186,7 +160,7 @@ fn decline_rate(summary: &FileSummary, now: u32) -> f64 {
 }
 
 #[allow(unused)]
-pub(crate) fn total_write_amplification(file_infos: &HashMap<u32, FileInfo>) -> f64 {
+pub(crate) fn total_write_amplification(file_infos: &HashMap<u32, PageGroup>) -> f64 {
     let empty_rate: f64 = file_infos
         .values()
         .filter(|i| !i.is_empty())

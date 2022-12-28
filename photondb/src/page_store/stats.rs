@@ -137,7 +137,7 @@ pub(crate) struct AtomicWritebufStats {
     pub(super) read_in_buf: Counter,
     pub(super) read_in_file: Counter,
     pub(super) read_file_bytes: Counter,
-    pub(super) miss_innner: Counter,
+    pub(super) miss_inner: Counter,
 }
 
 impl AtomicWritebufStats {
@@ -146,7 +146,7 @@ impl AtomicWritebufStats {
             read_in_buf: self.read_in_buf.get(),
             read_in_file: self.read_in_file.get(),
             read_file_bytes: self.read_file_bytes.get(),
-            miss_inner: self.miss_innner.get(),
+            miss_inner: self.miss_inner.get(),
         }
     }
 }
@@ -157,10 +157,6 @@ pub struct JobStats {
     pub flush_write_bytes: u64,
     /// The total discard bytes during flush.
     pub flush_discard_bytes: u64,
-    /// The total rewrite bytes.
-    pub rewrite_bytes: u64,
-    /// The total rewrite input bytes.
-    pub rewrite_input_bytes: u64,
     /// The total bytes write during compaction.
     pub compact_write_bytes: u64,
     /// The total bytes input during compaction.
@@ -173,8 +169,6 @@ pub struct JobStats {
 pub(crate) struct AtomicJobStats {
     pub(super) flush_write_bytes: Counter,
     pub(super) flush_discard_bytes: Counter,
-    pub(super) rewrite_bytes: Counter,
-    pub(super) rewrite_input_bytes: Counter,
     pub(super) compact_write_bytes: Counter,
     pub(super) compact_input_bytes: Counter,
     pub(super) read_file_bytes: Counter,
@@ -185,8 +179,6 @@ impl JobStats {
         JobStats {
             flush_write_bytes: self.flush_write_bytes.wrapping_sub(o.flush_write_bytes),
             flush_discard_bytes: self.flush_discard_bytes.wrapping_sub(o.flush_discard_bytes),
-            rewrite_bytes: self.rewrite_bytes.wrapping_sub(o.rewrite_bytes),
-            rewrite_input_bytes: self.rewrite_input_bytes.wrapping_sub(o.rewrite_input_bytes),
             compact_write_bytes: self.compact_write_bytes.wrapping_sub(o.compact_write_bytes),
             compact_input_bytes: self.compact_input_bytes.wrapping_sub(o.compact_input_bytes),
             read_file_bytes: self.read_file_bytes.wrapping_sub(o.read_file_bytes),
@@ -196,8 +188,8 @@ impl JobStats {
 
 impl Display for JobStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let input_bytes = self.rewrite_input_bytes + self.compact_input_bytes;
-        let write_bytes = self.rewrite_bytes + self.compact_write_bytes;
+        let input_bytes = self.compact_input_bytes;
+        let write_bytes = self.compact_write_bytes;
         let write_amp = if input_bytes == 0 {
             0.0
         } else {
@@ -207,16 +199,12 @@ impl Display for JobStats {
             f,
             "JobStats: flush_write_bytes: {}, \
             flush_discard_bytes: {}, \
-            rewrite_input_bytes: {}, \
-            rewrite_bytes: {}, \
             compact_input_bytes: {}, \
             compact_write_bytes: {}, \
             read_file_bytes: {}, \
             write_amp: {:.2}",
             self.flush_write_bytes,
             self.flush_discard_bytes,
-            self.rewrite_input_bytes,
-            self.rewrite_bytes,
             self.compact_input_bytes,
             self.compact_write_bytes,
             self.read_file_bytes,
@@ -230,8 +218,6 @@ impl AtomicJobStats {
         JobStats {
             flush_write_bytes: self.flush_write_bytes.get(),
             flush_discard_bytes: self.flush_discard_bytes.get(),
-            rewrite_bytes: self.rewrite_bytes.get(),
-            rewrite_input_bytes: self.rewrite_input_bytes.get(),
             compact_write_bytes: self.compact_write_bytes.get(),
             compact_input_bytes: self.compact_input_bytes.get(),
             read_file_bytes: self.read_file_bytes.get(),

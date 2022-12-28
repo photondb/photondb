@@ -90,6 +90,10 @@ impl<E: Env> Manifest<E> {
         id
     }
 
+    pub(crate) fn now(&self) -> u32 {
+        self.next_map_file_id
+    }
+
     // Record a new version_edit to manifest file.
     // it will rolling file when the file size over `max_file_size`.
     // so it need pass-in a `version_snapshot` to get current snapshot when it
@@ -392,11 +396,10 @@ mod tests {
             manifest
                 .record_version_edit(
                     VersionEdit {
-                        page_stream: Some(StreamEdit {
+                        file_stream: Some(StreamEdit {
                             new_files: new_files(vec![2, 3]),
                             deleted_files: vec![1],
                         }),
-                        map_stream: None,
                     },
                     version_snapshot,
                 )
@@ -406,11 +409,10 @@ mod tests {
             manifest
                 .record_version_edit(
                     VersionEdit {
-                        page_stream: Some(StreamEdit {
+                        file_stream: Some(StreamEdit {
                             new_files: new_files(vec![2, 3]),
                             deleted_files: vec![1],
                         }),
-                        map_stream: None,
                     },
                     version_snapshot,
                 )
@@ -419,11 +421,10 @@ mod tests {
             manifest
                 .record_version_edit(
                     VersionEdit {
-                        page_stream: Some(StreamEdit {
+                        file_stream: Some(StreamEdit {
                             new_files: new_files(vec![2, 3]),
                             deleted_files: vec![1],
                         }),
-                        map_stream: None,
                     },
                     version_snapshot,
                 )
@@ -461,11 +462,10 @@ mod tests {
         let base = tempdir::TempDir::new("curr_test_roll").unwrap();
 
         let ver = std::sync::Arc::new(std::sync::Mutex::new(VersionEdit {
-            page_stream: Some(StreamEdit {
+            file_stream: Some(StreamEdit {
                 new_files: vec![],
                 deleted_files: vec![],
             }),
-            map_stream: None,
         }));
 
         let ve_snapshot = || {
@@ -475,11 +475,11 @@ mod tests {
 
         let mock_apply = |ve: &VersionEdit| {
             let mut ver = ver.lock().unwrap();
-            let edit = ver.page_stream.as_mut().unwrap();
+            let edit = ver.file_stream.as_mut().unwrap();
             edit.new_files
-                .extend_from_slice(&ve.page_stream.as_ref().unwrap().new_files);
+                .extend_from_slice(&ve.file_stream.as_ref().unwrap().new_files);
             edit.new_files.retain(|f| {
-                !ve.page_stream
+                !ve.file_stream
                     .as_ref()
                     .unwrap()
                     .deleted_files
@@ -494,11 +494,10 @@ mod tests {
             assert_eq!(manifest.current_file_num, None);
 
             let ve = VersionEdit {
-                page_stream: Some(StreamEdit {
+                file_stream: Some(StreamEdit {
                     new_files: new_files(vec![0]),
                     deleted_files: vec![],
                 }),
-                map_stream: None,
             };
             manifest
                 .record_version_edit(ve.to_owned(), ve_snapshot)
@@ -510,11 +509,10 @@ mod tests {
             for i in 1..43u32 {
                 let r = i.saturating_sub(10u32);
                 let ve = VersionEdit {
-                    page_stream: Some(StreamEdit {
+                    file_stream: Some(StreamEdit {
                         new_files: new_files(vec![i]),
                         deleted_files: vec![r],
                     }),
-                    map_stream: None,
                 };
                 manifest
                     .record_version_edit(ve.to_owned(), ve_snapshot)
@@ -531,29 +529,27 @@ mod tests {
             assert_eq!(manifest2.current_file_num, Some(36));
 
             let mut recover_ver = VersionEdit {
-                page_stream: Some(StreamEdit::default()),
-                map_stream: None,
+                file_stream: Some(StreamEdit::default()),
             };
             for ve in versions {
-                let recover_ver = recover_ver.page_stream.as_mut().unwrap();
-                let ve = ve.page_stream.as_ref().unwrap();
+                let recover_ver = recover_ver.file_stream.as_mut().unwrap();
+                let ve = ve.file_stream.as_ref().unwrap();
                 recover_ver.new_files.extend_from_slice(&ve.new_files);
                 recover_ver
                     .new_files
                     .retain(|f| !ve.deleted_files.iter().any(|d| *d == f.id));
             }
 
-            assert_eq!(recover_ver.page_stream.as_ref().unwrap().new_files, {
+            assert_eq!(recover_ver.file_stream.as_ref().unwrap().new_files, {
                 let ver = ver.lock().unwrap();
-                ver.to_owned().page_stream.unwrap().new_files
+                ver.to_owned().file_stream.unwrap().new_files
             });
 
             let ve = VersionEdit {
-                page_stream: Some(StreamEdit {
+                file_stream: Some(StreamEdit {
                     new_files: new_files(vec![1]),
                     deleted_files: vec![],
                 }),
-                map_stream: None,
             };
             manifest2
                 .record_version_edit(ve.to_owned(), ve_snapshot)
@@ -576,11 +572,10 @@ mod tests {
             manifest
                 .record_version_edit(
                     VersionEdit {
-                        page_stream: Some(StreamEdit {
+                        file_stream: Some(StreamEdit {
                             new_files: new_files(vec![2, 3]),
                             deleted_files: vec![1],
                         }),
-                        map_stream: None,
                     },
                     version_snapshot,
                 )
@@ -589,11 +584,10 @@ mod tests {
             manifest
                 .record_version_edit(
                     VersionEdit {
-                        page_stream: Some(StreamEdit {
+                        file_stream: Some(StreamEdit {
                             new_files: new_files(vec![4]),
                             deleted_files: vec![],
                         }),
-                        map_stream: None,
                     },
                     version_snapshot,
                 )
@@ -602,11 +596,10 @@ mod tests {
             manifest
                 .record_version_edit(
                     VersionEdit {
-                        page_stream: Some(StreamEdit {
+                        file_stream: Some(StreamEdit {
                             new_files: new_files(vec![5]),
                             deleted_files: vec![],
                         }),
-                        map_stream: None,
                     },
                     version_snapshot,
                 )

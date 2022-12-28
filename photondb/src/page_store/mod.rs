@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fmt, mem, path::Path, sync::Arc};
+use std::{fmt, mem, path::Path, sync::Arc};
 
 use crate::{env::Env, util::shutdown::ShutdownNotifier};
 
@@ -20,7 +20,6 @@ mod version;
 use version::{DeltaVersion, Version, VersionOwner, VersionUpdateReason};
 
 mod jobs;
-pub(crate) use jobs::RewritePage;
 use jobs::{cleanup::CleanupCtx, flush::FlushCtx, reclaim::ReclaimCtx};
 
 mod write_buffer;
@@ -32,7 +31,7 @@ mod manifest;
 pub(crate) use manifest::Manifest;
 
 mod page_file;
-pub(crate) use page_file::{FileInfo, MapFileInfo, PageFiles};
+pub(crate) use page_file::{FileInfo, PageFiles, PageGroup};
 
 mod recover;
 mod strategy;
@@ -138,13 +137,6 @@ pub struct Options {
     /// Default: true
     pub prepopulate_cache_on_flush: bool,
 
-    /// Separate page files into hot/cold parts.
-    ///
-    /// This is temproray options for validating.
-    ///
-    /// Default: false
-    pub separate_hot_cold_files: bool,
-
     /// Compression method during flush new file.
     /// include hot rewrite.
     ///
@@ -184,7 +176,6 @@ impl Default for Options {
             cache_file_reader_capacity: 5000,
             cache_strict_capacity_limit: false,
             prepopulate_cache_on_flush: true,
-            separate_hot_cold_files: true,
             compression_on_flush: Compression::SNAPPY,
             compression_on_cold_compact: Compression::ZSTD,
             page_checksum_type: ChecksumType::NONE,
@@ -235,12 +226,11 @@ pub(crate) struct PageStore<E: Env> {
 }
 
 impl<E: Env> PageStore<E> {
-    pub(crate) async fn open<P, R>(env: E, path: P, options: Options, rewriter: R) -> Result<Self>
+    pub(crate) async fn open<P>(env: E, path: P, options: Options) -> Result<Self>
     where
         P: AsRef<Path>,
-        R: RewritePage<E>,
     {
-        let (next_page_file_id, manifest, table, page_files, delta, orphan_page_files) =
+        let (next_page_file_id, manifest, table, page_files, delta) =
             Self::recover(env.to_owned(), path, &options).await?;
 
         let version = Version::new(
@@ -273,7 +263,7 @@ impl<E: Env> PageStore<E> {
         // Spawn background jobs.
         store.spawn_flush_job();
         store.spawn_cleanup_job();
-        store.spawn_reclaim_job(rewriter, orphan_page_files);
+        store.spawn_reclaim_job();
 
         Ok(store)
     }
@@ -346,23 +336,16 @@ impl<E: Env> PageStore<E> {
         self.jobs.push(handle);
     }
 
-    fn spawn_reclaim_job<R>(&mut self, rewriter: R, orphan_page_files: HashSet<u32>)
-    where
-        R: RewritePage<E>,
-    {
+    fn spawn_reclaim_job(&mut self) {
         let strategy_builder = Box::new(MinDeclineRateStrategyBuilder);
         let job = ReclaimCtx::new(
             self.options.clone(),
             self.shutdown.subscribe(),
-            rewriter,
             strategy_builder,
-            self.table.clone(),
             self.page_files.clone(),
             self.version_owner.clone(),
             self.manifest.clone(),
-            orphan_page_files,
             self.job_stats.clone(),
-            self.writebuf_stats.clone(),
         );
         let handle = self.env.spawn_background(job.run(self.version()));
         self.jobs.push(handle);

@@ -3,64 +3,90 @@ use std::{
     sync::Arc,
 };
 
-use super::{compression::Compression, ChecksumType};
-use crate::{
-    page::PageInfo,
-    page_store::{Error, Result},
-    util::bitmap::FixedBitmap,
-};
+use super::{compression::Compression, BlockHandle, ChecksumType};
+use crate::{page::PageInfo, util::bitmap::FixedBitmap};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum FileId {
-    Page(u32),
-    Map(u32),
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) struct PageHandle {
     pub(crate) offset: u32,
     pub(crate) size: u32,
 }
 
-/// The volatile info for page file, also include the partial page files
-/// (partial of map file).
-#[derive(Clone)]
-pub(crate) struct FileInfo {
-    dealloc_pages: FixedBitmap,
+struct PageMeta {
+    index: u32,
+    info: PageInfo,
+    handle: PageHandle,
+}
 
-    up1: u32,
-    up2: u32,
+/// A group of pages has same id.
+#[derive(Clone)]
+pub(crate) struct PageGroup {
+    /// The bitmap of deallocated pages.
+    dealloc_pages: FixedBitmap,
 
     active_size: usize,
 
-    /// Records the files referenced by dealloc pages saved in the file.
-    referenced_files: HashSet<u32>,
+    meta: Arc<PageGroupMeta>,
+}
+
+/// [`PageGroupIterator`] is used to traverse [`PageGroup`] to get the addr of
+/// all active pages.
+pub(crate) struct PageGroupIterator {
+    file_id: u32,
+    index: usize,
+    active_pages: Vec<(u32, u32)>,
+}
+
+/// The immutable metadata for a page group.
+pub(crate) struct PageGroupMeta {
+    /// The id of the group pages.
+    pub(crate) group_id: u32,
+
+    /// The id of file this page group belongs to.
+    pub(crate) file_id: u32,
+
+    /// The first offset of page group in file.
+    base_offset: u64,
+    /// The offset of page table.
+    page_table_offset: u64,
+    /// The last offset.
+    meta_block_end: u64,
+
+    page_meta_map: HashMap<u32, PageMeta>,
+}
+
+/// The volatile info of a file.
+#[derive(Clone)]
+pub(crate) struct FileInfo {
+    up1: u32,
+    up2: u32,
 
     meta: Arc<FileMeta>,
 }
 
-impl FileInfo {
-    pub(crate) fn new(
-        dealloc_pages: FixedBitmap,
-        active_size: usize,
-        up1: u32,
-        up2: u32,
-        referenced_files: HashSet<u32>,
-        meta: Arc<FileMeta>,
-    ) -> Self {
-        Self {
+/// The meta of files.
+pub(crate) struct FileMeta {
+    pub(crate) file_id: u32,
+    pub(crate) file_size: usize,
+    pub(crate) block_size: usize,
+
+    /// The dealloc pages referenced page groups.
+    pub(crate) referenced_groups: HashSet<u32>,
+
+    pub(crate) checksum_type: ChecksumType,
+    pub(crate) compression: Compression,
+    pub(crate) page_groups: HashMap<u32, Arc<PageGroupMeta>>,
+}
+
+impl PageGroup {
+    pub(crate) fn new(meta: Arc<PageGroupMeta>) -> Self {
+        let dealloc_pages = FixedBitmap::new(meta.page_meta_map.len() as u32);
+        let active_size = meta.total_page_size();
+        PageGroup {
             dealloc_pages,
             active_size,
-            up1,
-            up2,
-            referenced_files,
             meta,
         }
-    }
-
-    #[inline]
-    pub(crate) fn get_file_id(&self) -> u32 {
-        self.meta.get_file_id()
     }
 
     #[inline]
@@ -68,26 +94,13 @@ impl FileInfo {
         self.dealloc_pages.is_full()
     }
 
-    #[inline]
-    pub(crate) fn is_obsoleted(&self, active_files: &HashSet<u32>) -> bool {
-        self.is_empty()
-            && self
-                .referenced_files
-                .iter()
-                .all(|id| !active_files.contains(id))
-    }
-
-    pub(crate) fn deactivate_page(&mut self, now: u32, page_addr: u64) -> bool {
-        let Some((index, _, page_size)) = self.meta.get_page_handle(page_addr) else {
+    pub(crate) fn deactivate_page(&mut self, page_addr: u64) -> bool {
+        let Some((index, handle)) = self.meta.get_page_handle(page_addr) else {
             return false;
         };
 
         if self.dealloc_pages.set(index as u32) {
-            self.active_size -= page_size;
-            if self.up1 < now {
-                self.up2 = self.up1;
-                self.up1 = now;
-            }
+            self.active_size -= handle.size as usize;
             return true;
         }
 
@@ -97,15 +110,12 @@ impl FileInfo {
     /// Get the [`PageHandle`] of the corresponding page. Returns `None` if no
     /// such active page exists.
     pub(crate) fn get_page_handle(&self, page_addr: u64) -> Option<PageHandle> {
-        let (index, offset, size) = self.meta.get_page_handle(page_addr)?;
+        let (index, handle) = self.meta.get_page_handle(page_addr)?;
         if self.dealloc_pages.test(index as u32) {
             return None;
         }
 
-        Some(PageHandle {
-            offset: offset as u32,
-            size: size as u32,
-        })
+        Some(handle)
     }
 
     /// Get the [`PageInfo`] of the specified page.
@@ -115,42 +125,22 @@ impl FileInfo {
     }
 
     #[inline]
-    pub(crate) fn meta(&self) -> Arc<FileMeta> {
-        self.meta.clone()
+    pub(crate) fn meta(&self) -> &Arc<PageGroupMeta> {
+        &self.meta
     }
 
     #[cfg(test)]
     pub(crate) fn is_page_active(&self, page_addr: u64) -> bool {
         self.meta
             .get_page_handle(page_addr)
-            .map(|(index, _, _)| index as u32)
+            .map(|(index, _)| index as u32)
             .map(|index| !self.dealloc_pages.test(index))
             .unwrap_or_default()
     }
 
     #[inline]
-    pub(crate) fn up1(&self) -> u32 {
-        self.up1
-    }
-
-    #[inline]
-    pub(crate) fn up2(&self) -> u32 {
-        self.up2
-    }
-
-    #[inline]
     pub(crate) fn num_active_pages(&self) -> usize {
         self.dealloc_pages.free() as usize
-    }
-
-    #[inline]
-    pub(crate) fn total_pages(&self) -> usize {
-        self.meta.total_pages()
-    }
-
-    #[inline]
-    pub(crate) fn total_page_size(&self) -> usize {
-        self.meta.total_page_size()
     }
 
     #[inline]
@@ -167,133 +157,40 @@ impl FileInfo {
     }
 
     #[inline]
-    pub(crate) fn effective_rate(&self) -> f64 {
-        let active_size = self.active_size as f64;
-        let file_size = self.meta.total_page_size() as f64;
-        active_size / file_size
-    }
-
-    #[inline]
-    pub(crate) fn file_size(&self) -> usize {
-        self.meta.file_size()
-    }
-
-    /// Return the id of the map file this file belongs to. `None` is returned
-    /// if this file is not a partial page file.
-    #[inline]
-    pub(crate) fn get_map_file_id(&self) -> Option<u32> {
-        self.meta.belong_to
-    }
-
-    #[inline]
-    pub(crate) fn iter(&self) -> FileInfoIterator {
-        FileInfoIterator::new(self)
+    pub(crate) fn iter(&self) -> PageGroupIterator {
+        PageGroupIterator::new(self)
     }
 }
 
-/// The immutable metadata for page file.
-pub(crate) struct FileMeta {
-    file_id: u32,
-    /// The offset in map files.
-    base_offset: u64,
-    file_size: usize,
-    block_size: usize,
-
-    /// The id of map file which contains the page file.
-    belong_to: Option<u32>,
-
-    page_meta_map: HashMap<u32, PageMeta>,
-
-    // [0] -> page_table, [1] ->  delete page, [2], meta_block_end
-    meta_indexes: Vec<u64>,
-
-    compression: Compression,
-    checksum_type: ChecksumType,
-}
-
-struct PageMeta {
-    info: PageInfo,
-    index: u32,
-    offset: u32,
-    /// The disk size of page
-    size: u32,
-}
-
-impl FileMeta {
+impl PageGroupMeta {
     pub(crate) fn new(
+        group_id: u32,
         file_id: u32,
-        file_size: usize,
-        block_size: usize,
-        meta_indexes: Vec<u64>,
-        data_offsets: BTreeMap<u64, (u64, PageInfo)>,
-        compression: Compression,
-        checksum_type: ChecksumType,
-    ) -> Self {
-        let page_meta_map = Self::build_page_meta_map(data_offsets, &meta_indexes);
-        Self {
-            file_id,
-            file_size,
-            base_offset: 0,
-            belong_to: None,
-            meta_indexes,
-            page_meta_map,
-            block_size,
-            compression,
-            checksum_type,
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_partial(
-        file_id: u32,
-        map_file_id: u32,
         base_offset: u64,
-        block_size: usize,
         meta_indexes: Vec<u64>,
         data_offsets: BTreeMap<u64, (u64, PageInfo)>,
-        compression: Compression,
-        checksum_type: ChecksumType,
     ) -> Self {
-        let page_metas = Self::build_page_meta_map(data_offsets, &meta_indexes);
-        FileMeta {
+        let page_table_offset = meta_indexes[0];
+        let meta_block_end = meta_indexes[1];
+        let page_meta_map = Self::build_page_meta_map(data_offsets, &meta_indexes);
+        PageGroupMeta {
+            group_id,
             file_id,
-            file_size: 0,
             base_offset,
-            block_size,
-            belong_to: Some(map_file_id),
-            meta_indexes,
-            page_meta_map: page_metas,
-            compression,
-            checksum_type,
+            page_table_offset,
+            meta_block_end,
+            page_meta_map,
         }
-    }
-
-    #[inline]
-    pub(crate) fn get_file_id(&self) -> u32 {
-        self.file_id
-    }
-
-    #[inline]
-    pub(crate) fn file_size(&self) -> usize {
-        self.file_size
     }
 
     /// Returns the page size for the page specified by `page_addr`.
     pub(crate) fn get_page_handle(
         &self,
         page_addr: u64,
-    ) -> Option<(
-        usize, /* index */
-        u64,   /* offset */
-        usize, /* size */
-    )> {
+    ) -> Option<(usize /* index */, PageHandle)> {
         let addr = page_addr as u32;
         if let Some(page_meta) = self.page_meta_map.get(&addr) {
-            return Some((
-                page_meta.index as usize,
-                page_meta.offset as u64,
-                page_meta.size as usize,
-            ));
+            return Some((page_meta.index as usize, page_meta.handle));
         }
         None
     }
@@ -316,7 +213,7 @@ impl FileMeta {
     /// zero.
     #[inline]
     pub(crate) fn total_page_size(&self) -> usize {
-        let size = self.page_table_offset().saturating_sub(self.base_offset);
+        let size = self.page_table_offset.saturating_sub(self.base_offset);
         if size == 0 {
             1
         } else {
@@ -324,123 +221,60 @@ impl FileMeta {
         }
     }
 
-    fn page_table_offset(&self) -> u64 {
-        **self.meta_indexes.first().as_ref().unwrap()
-    }
-
-    /// Return the block_size for the file's device.
     #[inline]
-    pub(crate) fn block_size(&self) -> usize {
-        self.block_size
-    }
-
-    #[inline]
-    pub(crate) fn compression(&self) -> Compression {
-        self.compression
-    }
-
-    #[inline]
-    pub(crate) fn checksum_type(&self) -> ChecksumType {
-        self.checksum_type
-    }
-
-    pub(crate) fn get_page_table_meta_page(
-        &self,
-    ) -> Result<(u64 /* offset */, usize /* length */)> {
-        if let &[start, end, ..] = self.meta_indexes.as_slice() {
-            Ok((start, (end - start) as usize))
-        } else {
-            Err(Error::Corrupted)
+    pub(crate) fn get_page_table_meta_page(&self) -> BlockHandle {
+        BlockHandle {
+            offset: self.page_table_offset,
+            length: self.meta_block_end - self.page_table_offset,
         }
-    }
-
-    pub(crate) fn get_delete_pages_meta_page(
-        &self,
-    ) -> Result<(u64 /* offset */, usize /* length */)> {
-        if let &[_, start, end] = self.meta_indexes.as_slice() {
-            Ok((start, (end - start) as usize))
-        } else {
-            Err(Error::Corrupted)
-        }
-    }
-
-    #[inline]
-    pub(crate) fn dealloc_pages_bitmap(&self) -> FixedBitmap {
-        FixedBitmap::new(self.page_meta_map.len() as u32)
     }
 
     fn build_page_meta_map(
         data_offsets: BTreeMap<u64, (u64, PageInfo)>,
         meta_indexes: &[u64],
     ) -> HashMap<u32, PageMeta> {
-        let mut page_metas = HashMap::with_capacity(data_offsets.len());
+        let mut page_meta_map = HashMap::with_capacity(data_offsets.len());
         let mut last_addr = None;
         for (index, (addr, (offset, info))) in data_offsets.into_iter().enumerate() {
             let addr = addr as u32;
             let offset = offset as u32;
             let index = index as u32;
-            page_metas.insert(
+            page_meta_map.insert(
                 addr,
                 PageMeta {
                     info,
                     index,
-                    offset,
-                    size: 0,
+                    handle: PageHandle { offset, size: 0 },
                 },
             );
             if let Some(last_addr) = last_addr {
-                let meta = page_metas
+                let meta = page_meta_map
                     .get_mut(&last_addr)
                     .expect("The last one is existed");
-                meta.size = offset
-                    .checked_sub(meta.offset)
+                meta.handle.size = offset
+                    .checked_sub(meta.handle.offset)
                     .expect("The offset is increasing");
             }
             last_addr = Some(addr);
         }
         if let Some(last_addr) = last_addr {
-            let meta = page_metas
+            let meta = page_meta_map
                 .get_mut(&last_addr)
                 .expect("The last one is existed");
 
             // it's the last page use total-page-size as end val.
             let page_table_offset = meta_indexes[0] as u32;
-            meta.size = page_table_offset
-                .checked_sub(meta.offset)
+            meta.handle.size = page_table_offset
+                .checked_sub(meta.handle.offset)
                 .expect("The offset is increasing");
         }
-        page_metas
+        page_meta_map
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct MapFileInfo {
-    up1: u32,
-    up2: u32,
-
-    /// The referenced page files, this should be placed in meta.
-    referenced_files: HashSet<u32>,
-
-    meta: Arc<MapFileMeta>,
-}
-
-impl MapFileInfo {
-    pub(crate) fn new(
-        up1: u32,
-        up2: u32,
-        referenced_files: HashSet<u32>,
-        meta: Arc<MapFileMeta>,
-    ) -> Self {
-        MapFileInfo {
-            up1,
-            up2,
-            referenced_files,
-            meta,
-        }
-    }
-
-    pub(crate) fn get_referenced_files(&self) -> &HashSet<u32> {
-        &self.referenced_files
+impl FileInfo {
+    pub(crate) fn new(up1: u32, up2: u32, meta: Arc<FileMeta>) -> Self {
+        FileInfo { up1, up2, meta }
     }
 
     pub(crate) fn on_update(&mut self, now: u32) {
@@ -451,17 +285,7 @@ impl MapFileInfo {
     }
 
     #[inline]
-    pub(crate) fn file_id(&self) -> u32 {
-        self.meta.file_id
-    }
-
-    #[inline]
-    pub(crate) fn file_size(&self) -> usize {
-        self.meta.file_size
-    }
-
-    #[inline]
-    pub(crate) fn meta(&self) -> &Arc<MapFileMeta> {
+    pub(crate) fn meta(&self) -> &Arc<FileMeta> {
         &self.meta
     }
 
@@ -476,71 +300,30 @@ impl MapFileInfo {
     }
 }
 
-#[allow(unused)]
-pub(crate) struct MapFileMeta {
-    file_id: u32,
-    file_size: usize,
-    block_size: usize,
-    page_files: HashMap<u32, Arc<FileMeta>>,
-}
-
-#[allow(unused)]
-impl MapFileMeta {
+impl FileMeta {
     pub(crate) fn new(
         file_id: u32,
         file_size: usize,
         block_size: usize,
-        page_files: HashMap<u32, Arc<FileMeta>>,
+        checksum_type: ChecksumType,
+        compression: Compression,
+        referenced_groups: HashSet<u32>,
+        page_groups: HashMap<u32, Arc<PageGroupMeta>>,
     ) -> Self {
-        MapFileMeta {
+        FileMeta {
             file_id,
             file_size,
             block_size,
-            page_files,
+            checksum_type,
+            compression,
+            referenced_groups,
+            page_groups,
         }
     }
-
-    #[inline]
-    pub(crate) fn file_id(&self) -> u32 {
-        self.file_id
-    }
-
-    #[inline]
-    pub(crate) fn file_size(&self) -> usize {
-        self.file_size
-    }
-
-    #[inline]
-    pub(crate) fn block_size(&self) -> usize {
-        self.block_size
-    }
-
-    #[inline]
-    pub(crate) fn contains(&self, file_id: u32) -> bool {
-        self.page_files.contains_key(&file_id)
-    }
-
-    #[inline]
-    pub(crate) fn num_page_files(&self) -> usize {
-        self.page_files.len()
-    }
-
-    #[inline]
-    pub(crate) fn page_files(&self) -> &HashMap<u32, Arc<FileMeta>> {
-        &self.page_files
-    }
 }
 
-/// [`FileInfoIterator`] is used to traverse [`FileInfo`] to get the addr of all
-/// active pages.
-pub(crate) struct FileInfoIterator {
-    file_id: u32,
-    index: usize,
-    active_pages: Vec<(u32, u32)>,
-}
-
-impl FileInfoIterator {
-    fn new(info: &FileInfo) -> Self {
+impl PageGroupIterator {
+    fn new(info: &PageGroup) -> Self {
         let mut active_pages = info
             .meta
             .page_meta_map
@@ -549,8 +332,8 @@ impl FileInfoIterator {
             .map(|(&addr, meta)| (addr, meta.index))
             .collect::<Vec<_>>();
         active_pages.sort_by_key(|(_, index)| *index);
-        let file_id = info.meta.file_id;
-        FileInfoIterator {
+        let file_id = info.meta.group_id;
+        PageGroupIterator {
             file_id,
             index: 0,
             active_pages,
@@ -558,7 +341,7 @@ impl FileInfoIterator {
     }
 }
 
-impl Iterator for FileInfoIterator {
+impl Iterator for PageGroupIterator {
     type Item = u64;
 
     fn next(&mut self) -> Option<Self::Item> {

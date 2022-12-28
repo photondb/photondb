@@ -28,8 +28,7 @@ impl<E: Env> CleanupCtx<E> {
                 break;
             };
 
-            let page_files = next_version.obsoleted_page_files();
-            let map_files = next_version.obsoleted_map_files();
+            let files = next_version.obsoleted_map_files();
             std::mem::swap(&mut next_version, &mut version);
             if with_shutdown(&mut self.shutdown, next_version.wait_version_released())
                 .await
@@ -43,50 +42,24 @@ impl<E: Env> CleanupCtx<E> {
             version.release_previous_buffers();
 
             // Now it is safety to cleanup the version.
-            self.clean_obsoleted_files(&version, page_files, map_files)
-                .await;
+            self.clean_obsoleted_files(&version, files).await;
         }
     }
 
     #[inline]
-    async fn clean_obsoleted_files(
-        &self,
-        version: &Version,
-        obsoleted_page_files: Vec<u32>,
-        obsoleted_map_files: Vec<u32>,
-    ) {
+    async fn clean_obsoleted_files(&self, version: &Version, obsoleted_files: Vec<u32>) {
         {
-            let page_files = version.page_files();
-            for &id in &obsoleted_page_files {
-                if page_files
-                    .get(&id)
-                    .map(|info| info.get_map_file_id().is_none())
-                    .unwrap_or_default()
-                {
-                    panic!("A obsoleted page file {id} still exists in a visible version");
-                }
-            }
-            let map_files = version.map_files();
-            for &id in &obsoleted_map_files {
-                if map_files.contains_key(&id) {
+            let file_infos = version.file_infos();
+            for &id in &obsoleted_files {
+                if file_infos.contains_key(&id) {
                     panic!("A obsoleted map file {id} still exists in a visible version");
                 }
             }
         }
 
-        if !obsoleted_page_files.is_empty() {
-            info!("Clean obsoleted page files {obsoleted_page_files:?}");
-            if let Err(err) = self
-                .page_files
-                .remove_page_files(obsoleted_page_files)
-                .await
-            {
-                todo!("{err}");
-            }
-        }
-        if !obsoleted_map_files.is_empty() {
-            info!("Clean obsoleted map files {obsoleted_map_files:?}");
-            if let Err(err) = self.page_files.remove_map_files(obsoleted_map_files).await {
+        if !obsoleted_files.is_empty() {
+            info!("Clean obsoleted files {obsoleted_files:?}");
+            if let Err(err) = self.page_files.remove_files(obsoleted_files).await {
                 todo!("{err}");
             }
         }

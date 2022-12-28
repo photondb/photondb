@@ -10,7 +10,7 @@ use crossbeam_epoch::Guard;
 use futures::channel::oneshot;
 use log::debug;
 
-use super::{buffer_set::*, FileInfo, MapFileInfo, WriteBuffer};
+use super::{buffer_set::*, FileInfo, PageGroup, WriteBuffer};
 use crate::util::latch::Latch;
 
 pub(crate) struct VersionOwner {
@@ -21,14 +21,13 @@ pub(crate) struct Version {
     pub(crate) buffer_set: Arc<BufferSet>,
 
     reason: VersionUpdateReason,
-    page_files: HashMap<u32, FileInfo>,
-    map_files: HashMap<u32, MapFileInfo>,
+    page_groups: HashMap<u32, PageGroup>,
+    files: HashMap<u32, FileInfo>,
 
     // The id of the first buffer this version could access.
     first_buffer_id: u32,
 
     /// Records the ID of the file that can be deleted.
-    obsoleted_page_files: HashSet<u32>,
     obsoleted_map_files: HashSet<u32>,
 
     next_version: AtomicPtr<Arc<Version>>,
@@ -42,10 +41,9 @@ pub(crate) struct Version {
 #[derive(Default)]
 pub(crate) struct DeltaVersion {
     pub(crate) reason: VersionUpdateReason,
-    pub(crate) page_files: HashMap<u32, FileInfo>,
-    pub(crate) map_files: HashMap<u32, MapFileInfo>,
-    pub(crate) obsoleted_page_files: HashSet<u32>,
-    pub(crate) obsoleted_map_files: HashSet<u32>,
+    pub(crate) page_groups: HashMap<u32, PageGroup>,
+    pub(crate) file_infos: HashMap<u32, FileInfo>,
+    pub(crate) obsoleted_files: HashSet<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -165,16 +163,16 @@ impl Drop for VersionOwner {
 impl Version {
     pub(crate) fn new(
         buffer_capacity: u32,
-        next_file_id: u32,
+        next_group_id: u32,
         max_sealed_buffers: usize,
         delta: DeltaVersion,
     ) -> Self {
         let buffer_set = Arc::new(BufferSet::new(
-            next_file_id,
+            next_group_id,
             buffer_capacity,
             max_sealed_buffers,
         ));
-        Self::with_buffer_set(next_file_id, buffer_set, delta)
+        Self::with_buffer_set(next_group_id, buffer_set, delta)
     }
 
     pub(crate) fn with_buffer_set(
@@ -186,10 +184,9 @@ impl Version {
         Version {
             first_buffer_id,
             reason: delta.reason,
-            page_files: delta.page_files,
-            map_files: delta.map_files,
-            obsoleted_page_files: delta.obsoleted_page_files,
-            obsoleted_map_files: delta.obsoleted_map_files,
+            page_groups: delta.page_groups,
+            files: delta.file_infos,
+            obsoleted_map_files: delta.obsoleted_files,
             buffer_set,
 
             next_version: AtomicPtr::default(),
@@ -223,24 +220,18 @@ impl Version {
 
     /// Fetch the files which obsoleted but referenced by former [`Version`]s.
     #[inline]
-    pub(crate) fn obsoleted_page_files(&self) -> Vec<u32> {
-        self.obsoleted_page_files.iter().cloned().collect()
-    }
-
-    /// Fetch the files which obsoleted but referenced by former [`Version`]s.
-    #[inline]
     pub(crate) fn obsoleted_map_files(&self) -> Vec<u32> {
         self.obsoleted_map_files.iter().cloned().collect()
     }
 
     #[inline]
-    pub(crate) fn page_files(&self) -> &HashMap<u32, FileInfo> {
-        &self.page_files
+    pub(crate) fn page_groups(&self) -> &HashMap<u32, PageGroup> {
+        &self.page_groups
     }
 
     #[inline]
-    pub(crate) fn map_files(&self) -> &HashMap<u32, MapFileInfo> {
-        &self.map_files
+    pub(crate) fn file_infos(&self) -> &HashMap<u32, FileInfo> {
+        &self.files
     }
 
     #[inline]
@@ -250,9 +241,9 @@ impl Version {
     }
 
     #[inline]
-    pub(crate) fn get(&self, file_id: u32) -> Option<BufferRef> {
-        if self.first_buffer_id <= file_id {
-            self.buffer_set.get(file_id)
+    pub(crate) fn get(&self, group_id: u32) -> Option<BufferRef> {
+        if self.first_buffer_id <= group_id {
+            self.buffer_set.get(group_id)
         } else {
             None
         }
@@ -264,10 +255,6 @@ impl Version {
             .get(self.first_buffer_id)
             .expect("The buffer of first buffer id must exists")
             .clone()
-    }
-
-    pub(crate) fn now(&self) -> u32 {
-        self.first_buffer_id
     }
 
     /// Mark this version as reclaimed.
@@ -339,8 +326,8 @@ impl Drop for Version {
 impl From<&Version> for DeltaVersion {
     fn from(version: &Version) -> Self {
         DeltaVersion {
-            page_files: version.page_files().clone(),
-            map_files: version.map_files().clone(),
+            page_groups: version.page_groups().clone(),
+            file_infos: version.file_infos().clone(),
             ..DeltaVersion::default()
         }
     }
@@ -350,10 +337,9 @@ impl std::fmt::Debug for DeltaVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeltaVersion")
             .field("reason", &self.reason)
-            .field("map_files", &self.map_files.keys())
-            .field("page_files", &self.page_files.keys())
-            .field("obsoleted_map_files", &self.obsoleted_map_files)
-            .field("obsoleted_page_files", &self.obsoleted_page_files)
+            .field("map_files", &self.file_infos.keys())
+            .field("page_files", &self.page_groups.keys())
+            .field("obsoleted_map_files", &self.obsoleted_files)
             .finish()
     }
 }
@@ -453,7 +439,7 @@ mod tests {
             let current = version.buffer_set.current();
             let buf = current.last_writer_buffer();
             buf.seal().unwrap();
-            buf.file_id()
+            buf.group_id()
         };
 
         // install new buffer.
