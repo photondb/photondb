@@ -153,7 +153,9 @@ impl<E: Env> FlushCtx<E> {
 
         let group_id = page_group.meta().group_id;
         let file_id = file_info.meta().file_id;
-        page_groups.insert(group_id, page_group);
+        if !page_group.is_empty() {
+            page_groups.insert(group_id, page_group);
+        }
         file_infos.insert(file_id, file_info);
 
         let edit = make_flush_version_edit(file_id, &obsoleted_files);

@@ -181,6 +181,7 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
     /// Build page groups, file infos, orphan page files, and page table.
     fn build(mut self) -> (HashMap<u32, PageGroup>, HashMap<u32, FileInfo>, PageTable) {
         self.maintain_active_pages();
+        self.page_groups.retain(|_, g| !g.is_empty());
         let page_table = self.page_table_builder.build();
         (self.page_groups, self.file_infos, page_table)
     }
