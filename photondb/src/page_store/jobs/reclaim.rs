@@ -1,10 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Instant,
-};
+use std::{sync::Arc, time::Instant};
 
 use log::{debug, info, trace};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     env::Env,
@@ -33,7 +30,7 @@ where
     version_owner: Arc<VersionOwner>,
     manifest: Arc<futures::lock::Mutex<Manifest<E>>>,
 
-    cleaned_files: HashSet<u32>,
+    cleaned_files: FxHashSet<u32>,
 
     job_stats: Arc<AtomicJobStats>,
 }
@@ -42,14 +39,14 @@ where
 struct ReclaimJobBuilder {
     target_file_base: usize,
 
-    compact_files: HashSet<u32>,
+    compact_files: FxHashSet<u32>,
     compact_size: usize,
 }
 
 #[derive(Debug)]
 enum ReclaimJob {
     /// Compact a set of files into a new file.
-    Compact(HashSet<u32>),
+    Compact(FxHashSet<u32>),
 }
 
 #[derive(Debug, Default)]
@@ -100,7 +97,7 @@ where
             page_files,
             version_owner,
             manifest,
-            cleaned_files: HashSet::default(),
+            cleaned_files: FxHashSet::default(),
             job_stats,
         }
     }
@@ -135,7 +132,7 @@ where
         &mut self,
         progress: &mut ReclaimProgress,
         version: &Arc<Version>,
-        cleaned_files: &HashSet<u32>,
+        cleaned_files: &FxHashSet<u32>,
     ) {
         let now = {
             let lock = self.manifest.lock().await;
@@ -165,7 +162,7 @@ where
         &mut self,
         progress: &mut ReclaimProgress,
         version: &Arc<Version>,
-        victims: HashSet<u32>,
+        victims: FxHashSet<u32>,
     ) {
         let file_id = {
             let mut lock = self.manifest.lock().await;
@@ -203,7 +200,7 @@ where
         &mut self,
         now: u32,
         version: &Version,
-        cleaned_files: &HashSet<u32>,
+        cleaned_files: &FxHashSet<u32>,
     ) -> Box<dyn ReclaimPickStrategy> {
         let mut strategy = self.strategy_builder.build(now);
         let page_groups = version.page_groups();
@@ -225,10 +222,10 @@ where
         &mut self,
         progress: &mut ReclaimProgress,
         new_file_id: u32,
-        file_infos: &HashMap<u32, FileInfo>,
-        page_groups: &HashMap<u32, PageGroup>,
-        victims: &HashSet<u32>,
-    ) -> Result<(HashMap<u32, PageGroup>, FileInfo)> {
+        file_infos: &FxHashMap<u32, FileInfo>,
+        page_groups: &FxHashMap<u32, PageGroup>,
+        victims: &FxHashSet<u32>,
+    ) -> Result<(FxHashMap<u32, PageGroup>, FileInfo)> {
         let start_at = Instant::now();
         let mut builder = self
             .page_files
@@ -256,7 +253,7 @@ where
         // other segments, the value for up2 for the new segment is the average up2 for
         // all pages written to it.
         let up2 = up2_sum / (victims.len() as u32);
-        let (virtual_infos, file_info) = builder.finish(up2).await?;
+        let (page_groups, file_info) = builder.finish(up2).await?;
 
         let elapsed = start_at.elapsed().as_micros();
         let CompactStats {
@@ -276,7 +273,7 @@ where
                     latest {elapsed} microseconds"
         );
 
-        Ok((virtual_infos, file_info))
+        Ok((page_groups, file_info))
     }
 
     async fn compact_file<'a>(
@@ -284,7 +281,7 @@ where
         mut builder: FileBuilder<'a, E>,
         stats: &mut CompactStats,
         file_info: &FileInfo,
-        page_groups: &HashMap<u32, PageGroup>,
+        page_groups: &FxHashMap<u32, PageGroup>,
     ) -> Result<FileBuilder<'a, E>> {
         let file_id = file_info.meta().file_id;
         debug!("compact file {file_id}");
@@ -362,7 +359,7 @@ impl ReclaimJobBuilder {
         ReclaimJobBuilder {
             target_file_base,
 
-            compact_files: HashSet::default(),
+            compact_files: FxHashSet::default(),
             compact_size: 0,
         }
     }
@@ -379,7 +376,7 @@ impl ReclaimJobBuilder {
 }
 
 impl ReclaimProgress {
-    fn new(option: &Options, version: &Version, cleaned_files: &HashSet<u32>) -> ReclaimProgress {
+    fn new(option: &Options, version: &Version, cleaned_files: &FxHashSet<u32>) -> ReclaimProgress {
         let target_space_amp = option.max_space_amplification_percent as u64;
         let space_used_high = option.space_used_high;
         let file_base_size = option.file_base_size as u64;
@@ -396,7 +393,7 @@ impl ReclaimProgress {
         }
     }
 
-    fn track_file(&mut self, file: &FileInfo, page_files: &HashMap<u32, PageGroup>) {
+    fn track_file(&mut self, file: &FileInfo, page_files: &FxHashMap<u32, PageGroup>) {
         self.used_space = self.used_space.saturating_sub(file.meta().file_size as u64);
         let effective_size = file
             .meta()
@@ -483,7 +480,7 @@ pub(crate) async fn wait_for_reclaiming(options: &Options, mut version: Arc<Vers
     }
 
     loop {
-        let progress = ReclaimProgress::new(options, &version, &HashSet::default());
+        let progress = ReclaimProgress::new(options, &version, &FxHashSet::default());
         progress.trace_log();
         if progress.is_reclaimable() {
             version.wait_for_reclaiming().await;
@@ -496,7 +493,10 @@ pub(crate) async fn wait_for_reclaiming(options: &Options, mut version: Arc<Vers
     }
 }
 
-fn compute_base_size(page_files: &HashMap<u32, PageGroup>, cleaned_files: &HashSet<u32>) -> u64 {
+fn compute_base_size(
+    page_files: &FxHashMap<u32, PageGroup>,
+    cleaned_files: &FxHashSet<u32>,
+) -> u64 {
     // skip files that are already being cleaned.
     let allow_file =
         |info: &&PageGroup| !info.is_empty() && !cleaned_files.contains(&info.meta().file_id);
@@ -507,7 +507,10 @@ fn compute_base_size(page_files: &HashMap<u32, PageGroup>, cleaned_files: &HashS
         .sum::<usize>() as u64
 }
 
-fn compute_used_space(file_infos: &HashMap<u32, FileInfo>, cleaned_files: &HashSet<u32>) -> u64 {
+fn compute_used_space(
+    file_infos: &FxHashMap<u32, FileInfo>,
+    cleaned_files: &FxHashSet<u32>,
+) -> u64 {
     file_infos
         .values()
         .filter(|info| !cleaned_files.contains(&info.meta().file_id))
@@ -515,7 +518,10 @@ fn compute_used_space(file_infos: &HashMap<u32, FileInfo>, cleaned_files: &HashS
         .sum::<usize>() as u64
 }
 
-fn make_compact_version_edit(file_info: &FileInfo, obsoleted_files: &HashSet<u32>) -> VersionEdit {
+fn make_compact_version_edit(
+    file_info: &FileInfo,
+    obsoleted_files: &FxHashSet<u32>,
+) -> VersionEdit {
     let deleted_files = obsoleted_files.iter().cloned().collect::<Vec<_>>();
     let new_files = vec![NewFile::from(file_info)];
     VersionEdit {
@@ -528,10 +534,7 @@ fn make_compact_version_edit(file_info: &FileInfo, obsoleted_files: &HashSet<u32
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::{HashMap, HashSet},
-        path::Path,
-    };
+    use std::{collections::HashSet, path::Path};
 
     use tempdir::TempDir;
 
@@ -583,8 +586,8 @@ mod tests {
     async fn build_file(
         page_files: &PageFiles<Photon>,
         file_id: u32,
-        pages: HashMap<u32, Vec<(u64, u64)>>,
-    ) -> (HashMap<u32, PageGroup>, FileInfo) {
+        pages: FxHashMap<u32, Vec<(u64, u64)>>,
+    ) -> (FxHashMap<u32, PageGroup>, FileInfo) {
         let mut builder = page_files
             .new_file_builder(file_id, Compression::ZSTD, ChecksumType::CRC32)
             .await
@@ -612,19 +615,19 @@ mod tests {
 
         let (f1, f2, f3, f4) = (1, 2, 3, 4);
         let (m1, m2, m3) = (1, 2, 3);
-        let mut pages = HashMap::new();
+        let mut pages = FxHashMap::default();
         pages.insert(f1, vec![(1, pa(f1, 16)), (2, pa(f1, 32)), (3, pa(f1, 64))]);
         pages.insert(f2, vec![(4, pa(f2, 16)), (5, pa(f2, 32)), (6, pa(f2, 64))]);
         let (virtual_infos, m1_info) = build_file(&ctx.page_files, m1, pages).await;
         let mut page_files = virtual_infos;
 
-        let mut pages = HashMap::new();
+        let mut pages = FxHashMap::default();
         pages.insert(f3, vec![(7, pa(f3, 16)), (8, pa(f3, 32)), (9, pa(f3, 64))]);
         pages.insert(f4, vec![(1, pa(f4, 16)), (2, pa(f4, 32)), (3, pa(f4, 64))]);
         let (virtual_infos, m2_info) = build_file(&ctx.page_files, m2, pages).await;
         page_files.extend(virtual_infos.into_iter());
 
-        let mut map_files = HashMap::new();
+        let mut map_files = FxHashMap::default();
         map_files.insert(m1, m1_info);
         map_files.insert(m2, m2_info);
         let victims = HashSet::from_iter(vec![m1, m2].into_iter());
@@ -673,19 +676,19 @@ mod tests {
             let mut lock = ctx.manifest.lock().await;
             lock.reset_next_file_id(m3);
         }
-        let mut pages = HashMap::new();
+        let mut pages = FxHashMap::default();
         pages.insert(f1, vec![(1, pa(f1, 16)), (2, pa(f1, 32)), (3, pa(f1, 64))]);
         pages.insert(f2, vec![(4, pa(f2, 16)), (5, pa(f2, 32)), (6, pa(f2, 64))]);
         let (virtual_infos, m1_info) = build_file(&ctx.page_files, m1, pages).await;
         let mut page_groups = virtual_infos;
 
-        let mut pages = HashMap::new();
+        let mut pages = FxHashMap::default();
         pages.insert(f3, vec![(7, pa(f3, 16)), (8, pa(f3, 32)), (9, pa(f3, 64))]);
         pages.insert(f4, vec![(1, pa(f4, 16)), (2, pa(f4, 32)), (3, pa(f4, 64))]);
         let (virtual_infos, m2_info) = build_file(&ctx.page_files, m2, pages).await;
         page_groups.extend(virtual_infos.into_iter());
 
-        let mut file_infos = HashMap::new();
+        let mut file_infos = FxHashMap::default();
         file_infos.insert(m1, m1_info);
         file_infos.insert(m2, m2_info);
         let victims = HashSet::from_iter(vec![m1, m2].into_iter());

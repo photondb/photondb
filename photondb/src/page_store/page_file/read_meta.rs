@@ -1,7 +1,6 @@
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{
     file_builder::IndexBlock,
@@ -19,9 +18,9 @@ pub(crate) struct FileMetaHolder {
     /// The file meta of file.
     pub(crate) file_meta: Arc<FileMeta>,
     /// The meta of page groups.
-    pub(crate) page_groups: HashMap<u32, Arc<PageGroupMeta>>,
+    pub(crate) page_groups: FxHashMap<u32, Arc<PageGroupMeta>>,
     /// The page tables of page groups.
-    pub(crate) page_tables: HashMap<u32, BTreeMap<u64, u64>>,
+    pub(crate) page_tables: FxHashMap<u32, BTreeMap<u64, u64>>,
     /// The dealloc pages.
     pub(crate) dealloc_pages: Vec<u64>,
 }
@@ -34,8 +33,8 @@ impl FileMetaHolder {
     ) -> Result<Self> {
         let footer = Self::read_footer(&reader).await?;
         let page_indexes = Self::read_page_indexes(&reader, &footer).await?;
-        let mut file_meta_map = HashMap::default();
-        let mut page_tables = HashMap::default();
+        let mut file_meta_map = FxHashMap::default();
+        let mut page_tables = FxHashMap::default();
         let mut offset = 0;
         for page_index in &page_indexes {
             let index_block = Self::read_page_group_index_block(&reader, page_index).await?;
@@ -49,7 +48,7 @@ impl FileMetaHolder {
         }
         let dealloc_pages = Self::read_dealloc_pages(&reader, &footer).await?;
 
-        let mut referenced_groups = HashSet::new();
+        let mut referenced_groups = FxHashSet::default();
         if !dealloc_pages.is_empty() {
             for page_addr in &dealloc_pages {
                 referenced_groups.insert((page_addr >> 32) as u32);

@@ -4,6 +4,8 @@ use std::{
     sync::Arc,
 };
 
+use rustc_hash::{FxHashMap, FxHashSet};
+
 use super::{
     compression::Compression,
     constant::*,
@@ -37,7 +39,7 @@ pub(crate) struct FileBuilder<'a, E: Env> {
     writer: BufferedWriter<'a, E>,
     dealloc_pages: BTreeSet<u64>,
     page_index: PageIndexBuilder,
-    page_groups: HashMap<u32, PageGroup>,
+    page_groups: FxHashMap<u32, PageGroup>,
     block_size: usize,
     file_offset: usize,
     compression: Compression,
@@ -115,14 +117,17 @@ impl<'a, E: Env> FileBuilder<'a, E> {
         self.dealloc_pages.extend(dealloc_pages);
     }
 
-    pub(crate) async fn finish(mut self, up2: u32) -> Result<(HashMap<u32, PageGroup>, FileInfo)> {
+    pub(crate) async fn finish(
+        mut self,
+        up2: u32,
+    ) -> Result<(FxHashMap<u32, PageGroup>, FileInfo)> {
         let file_size = self.finish_tail_blocks().await?;
         self.writer.flush_and_sync().await?;
         let page_groups = self
             .page_groups
             .iter()
             .map(|(&id, info)| (id, info.meta().clone()))
-            .collect::<HashMap<_, _>>();
+            .collect::<FxHashMap<_, _>>();
         let file_meta = Arc::new(FileMeta::new(
             self.file_id,
             file_size,
@@ -169,8 +174,8 @@ impl<'a, E: Env> FileBuilder<'a, E> {
         Ok(BlockHandle { offset, length })
     }
 
-    fn get_referenced_groups(&self) -> HashSet<u32> {
-        let mut groups = HashSet::new();
+    fn get_referenced_groups(&self) -> FxHashSet<u32> {
+        let mut groups = FxHashSet::default();
         for page_addr in &self.dealloc_pages {
             let (file_id, _) = split_page_addr(*page_addr);
             groups.insert(file_id);
