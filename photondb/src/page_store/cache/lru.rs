@@ -7,6 +7,7 @@ use std::{
 };
 
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 
 use super::{
     AtomicCacheStats, Cache, CacheEntry, CacheToken, Handle, LRUHandle, CACHE_AS_COLD,
@@ -32,8 +33,7 @@ struct LRUCacheShard<T: Clone> {
 }
 
 struct LRUCacheHandleTable<T: Clone> {
-    data: Vec<LRUHandlePtr<T>>,
-    len: usize,
+    data: FxHashMap<u64, LRUHandlePtr<T>>,
 }
 
 #[derive(Clone)]
@@ -56,7 +56,6 @@ unsafe impl<T: Clone> Send for LRUHandlePtr<T> {}
 unsafe impl<T: Clone> Sync for LRUHandlePtr<T> {}
 
 impl<T: Clone> LRUCache<T> {
-    #[allow(dead_code)]
     pub(crate) fn new(capacity: usize, num_shard_bits: i32) -> Self {
         assert!(num_shard_bits < 20);
         let num_shard_bits = if num_shard_bits >= 0 {
@@ -159,7 +158,7 @@ impl<T: Clone> Cache<T> for LRUCache<T> {
         let shard = &self.shards[idx as usize];
         let mut shard = shard.lock();
         unsafe {
-            let ptr = shard.lookup(hash, key);
+            let ptr = shard.lookup(key);
             if ptr.is_null() {
                 return None;
             }
@@ -191,7 +190,7 @@ impl<T: Clone> Cache<T> for LRUCache<T> {
             let hash = Self::hash_key(key);
             let idx = self.shard(hash);
             let mut shard = self.shards[idx as usize].lock();
-            shard.erase(hash, key);
+            shard.erase(key);
         }
     }
 
@@ -287,14 +286,14 @@ impl<T: Clone> LRUCacheShard<T> {
             }
 
             // Remove the handle from table.
-            self.table.remove((*h).key, (*h).hash);
+            self.table.remove((*h).key);
         }
 
         self.clear_handle(h)
     }
 
-    unsafe fn lookup(&mut self, hash: u32, key: u64) -> *mut LRUHandle<T> {
-        let e = self.table.lookup(hash, key);
+    unsafe fn lookup(&mut self, key: u64) -> *mut LRUHandle<T> {
+        let e = self.table.lookup(key);
         if !e.is_null() {
             if !(*e).has_refs() {
                 self.lru_remove(e);
@@ -307,8 +306,8 @@ impl<T: Clone> LRUCacheShard<T> {
         e
     }
 
-    unsafe fn erase(&mut self, hash: u32, key: u64) {
-        let h = self.table.remove(key, hash);
+    unsafe fn erase(&mut self, key: u64) {
+        let h = self.table.remove(key);
         if !h.is_null() {
             self.try_remove_cache_handle(h)
         }
@@ -357,7 +356,7 @@ impl<T: Clone> LRUCacheShard<T> {
             && !std::ptr::eq((*self.head.ptr).next_linked, self.head.ptr)
         {
             let old_ptr = (*self.head.ptr).next_linked;
-            self.table.remove((*old_ptr).key, (*old_ptr).hash);
+            self.table.remove((*old_ptr).key);
             self.lru_remove(old_ptr);
             self.clear_handle(old_ptr);
             self.stats.passive_evict.inc();
@@ -377,110 +376,40 @@ impl<T: Clone> LRUCacheShard<T> {
 impl<T: Clone> LRUCacheHandleTable<T> {
     pub(crate) fn new() -> Self {
         Self {
-            data: vec![
-                LRUHandlePtr {
-                    ptr: ptr::null_mut()
-                };
-                16
-            ],
-            len: 0,
+            data: FxHashMap::default(),
         }
-    }
-
-    unsafe fn find_pointer(&self, idx: usize, key: u64) -> (*mut LRUHandle<T>, *mut LRUHandle<T>) {
-        let mut ptr = self.data[idx].mut_ptr();
-        let mut prev = ptr::null_mut();
-        while !ptr.is_null() && (*ptr).key != key {
-            prev = ptr;
-            ptr = (*ptr).next_hash;
-        }
-        (prev, ptr)
     }
 
     unsafe fn insert(&mut self, proto: *mut LRUHandle<T>) -> Result<*mut LRUHandle<T>> {
         assert!(!proto.is_null());
         assert!(!(*proto).is_in_cache());
         (*proto).set_in_cache(true);
-        assert!(self.data.len().is_power_of_two());
-        let idx = ((*proto).hash as usize) & (self.data.len() - 1);
-        let (mut prev, ptr) = self.find_pointer(idx, (*proto).key);
-        if prev.is_null() {
-            self.data[idx] = LRUHandlePtr { ptr: proto };
-        } else {
-            (*prev).next_hash = proto;
-        }
 
-        if !ptr.is_null() {
+        let old = self.data.insert((*proto).key, LRUHandlePtr { ptr: proto });
+        if let Some(LRUHandlePtr { ptr }) = old {
             assert_eq!((*ptr).key, (*proto).key);
             assert!((*ptr).is_in_cache());
             (*ptr).set_in_cache(false);
-            (*proto).next_hash = (*ptr).next_hash;
             return Ok(ptr);
-        }
-
-        (*proto).next_hash = ptr;
-
-        self.len += 1;
-        if self.len > self.data.len() {
-            self.resize();
         }
 
         Ok(ptr::null_mut())
     }
 
-    unsafe fn lookup(&self, hash: u32, key: u64) -> *mut LRUHandle<T> {
-        assert!(self.data.len().is_power_of_two());
-        let idx = (hash as usize) & (self.data.len() - 1);
-        let (_, ptr) = self.find_pointer(idx, key);
-        ptr
+    unsafe fn lookup(&self, key: u64) -> *mut LRUHandle<T> {
+        let h = self.data.get(&key);
+        if let Some(LRUHandlePtr { ptr }) = h {
+            return *ptr;
+        }
+        ptr::null_mut()
     }
 
-    unsafe fn resize(&mut self) {
-        let mut l = std::cmp::max(16, self.data.len());
-        let next_capacity = self.len * 3 / 2;
-        while l < next_capacity {
-            l <<= 1;
+    unsafe fn remove(&mut self, key: u64) -> *mut LRUHandle<T> {
+        let old = self.data.remove(&key);
+        if let Some(LRUHandlePtr { ptr }) = old {
+            (*ptr).set_in_cache(false);
+            return ptr;
         }
-        let mut count = 0;
-        let mut new_list = vec![
-            LRUHandlePtr {
-                ptr: ptr::null_mut()
-            };
-            l
-        ];
-        for head in self.data.drain(..) {
-            let mut handle = head.mut_ptr();
-            while !handle.is_null() {
-                let idx = (*handle).hash as usize & (l - 1);
-                let next = (*handle).next_hash;
-                (*handle).next_hash = new_list[idx].mut_ptr();
-                new_list[idx] = LRUHandlePtr { ptr: handle };
-                handle = next;
-                count += 1;
-            }
-        }
-        assert_eq!(count, self.len);
-        self.data = new_list;
-    }
-
-    unsafe fn remove(&mut self, key: u64, hash: u32) -> *mut LRUHandle<T> {
-        assert!(self.data.len().is_power_of_two());
-        let idx = (hash as usize) & (self.data.len() - 1);
-
-        let (mut prev, ptr) = self.find_pointer(idx, key);
-        if ptr.is_null() {
-            return ptr::null_mut();
-        }
-        assert!((*ptr).is_in_cache());
-        (*ptr).set_in_cache(false);
-        if prev.is_null() {
-            self.data[idx] = LRUHandlePtr {
-                ptr: (*ptr).next_hash,
-            };
-        } else {
-            (*prev).next_hash = (*ptr).next_hash;
-        }
-        self.len -= 1;
-        ptr
+        ptr::null_mut()
     }
 }
