@@ -11,7 +11,7 @@ pub(crate) use facade::PageFiles;
 pub(crate) use types::{FileInfo, PageGroup, PageGroupMeta};
 
 mod map_file_builder;
-pub(crate) use map_file_builder::{MapFileBuilder, PageGroupBuilder};
+pub(crate) use map_file_builder::{FileBuilder, PageGroupBuilder};
 
 mod read_meta;
 pub(crate) use read_meta::FileMetaHolder;
@@ -28,7 +28,7 @@ pub(crate) mod constant {
     // like: https://github.com/DataDog/glommio/issues/7 or https://github.com/facebook/rocksdb/pull/1875
     pub(crate) const DEFAULT_BLOCK_SIZE: usize = 4096;
 
-    pub(crate) const IO_BUFFER_SIZE: usize = 8 << 20;
+    pub(crate) const IO_BUFFER_SIZE: usize = 4096 * 4;
 
     pub(crate) const FILE_MAGIC: u64 = 0x179394;
 }
@@ -98,7 +98,7 @@ pub(crate) mod facade {
             file_id: u32,
             compression: Compression,
             checksum: ChecksumType,
-        ) -> Result<MapFileBuilder<E>> {
+        ) -> Result<FileBuilder<E>> {
             // TODO: switch to env in suitable time.
             let path = self.base.join(format!("{}_{file_id}", FILE_PREFIX));
             let writer = self
@@ -107,7 +107,7 @@ pub(crate) mod facade {
                 .await
                 .expect("open writer for file_id: {file_id} fail");
             let use_direct = self.use_direct && writer.direct_io_ify().is_ok();
-            Ok(MapFileBuilder::new(
+            Ok(FileBuilder::new(
                 file_id,
                 &self.base_dir,
                 writer,
@@ -405,7 +405,7 @@ pub(crate) mod facade {
         }
 
         #[photonio::test]
-        fn test_test_simple_write_reader() {
+        fn test_simple_write_reader() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_simple_rw").unwrap();
             let files = PageFiles::new(env, base.path(), &test_option()).await;

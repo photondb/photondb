@@ -10,7 +10,7 @@ use crate::{
     env::Env,
     page::PageRef,
     page_store::{
-        page_file::{FileMetaHolder, FileReader, MapFileBuilder, PageGroupBuilder},
+        page_file::{FileBuilder, FileMetaHolder, FileReader, PageGroupBuilder},
         stats::AtomicJobStats,
         strategy::ReclaimPickStrategy,
         version::{DeltaVersion, VersionOwner, VersionUpdateReason},
@@ -48,7 +48,7 @@ struct ReclaimJobBuilder {
 
 #[derive(Debug)]
 enum ReclaimJob {
-    /// Compact a set of map files into a new map file.
+    /// Compact a set of files into a new file.
     Compact(HashSet<u32>),
 }
 
@@ -169,13 +169,13 @@ where
     ) {
         let file_id = {
             let mut lock = self.manifest.lock().await;
-            lock.next_map_file_id()
+            lock.next_file_id()
         };
 
-        let map_files = version.file_infos();
-        let page_files = version.page_groups();
+        let file_infos = version.file_infos();
+        let page_groups = version.page_groups();
         let (page_groups, file_info) = self
-            .compact_files(progress, file_id, map_files, page_files, &victims)
+            .compact_files(progress, file_id, file_infos, page_groups, &victims)
             .await
             .unwrap();
 
@@ -269,7 +269,7 @@ where
         let free_size = input_size.saturating_sub(output_size);
         let free_ratio = (free_size as f64) / (input_size as f64);
         info!(
-            "Compact map files {victims:?} into a new map file {new_file_id} \
+            "Compact files {victims:?} into a new file {new_file_id} \
                     with {num_active_pages} active pages, \
                     relocate {output_size} bytes, \
                     free {free_size} bytes, free ratio {free_ratio:.4}, \
@@ -281,11 +281,11 @@ where
 
     async fn compact_file<'a>(
         &self,
-        mut builder: MapFileBuilder<'a, E>,
+        mut builder: FileBuilder<'a, E>,
         stats: &mut CompactStats,
         file_info: &FileInfo,
         page_groups: &HashMap<u32, PageGroup>,
-    ) -> Result<MapFileBuilder<'a, E>> {
+    ) -> Result<FileBuilder<'a, E>> {
         let file_id = file_info.meta().file_id;
         debug!("compact file {file_id}");
         let file_meta = self.page_files.read_file_meta(file_id).await?;
@@ -580,7 +580,7 @@ mod tests {
         ((file_id as u64) << 32) | (offset as u64)
     }
 
-    async fn build_map_file(
+    async fn build_file(
         page_files: &PageFiles<Photon>,
         file_id: u32,
         pages: HashMap<u32, Vec<(u64, u64)>>,
@@ -605,7 +605,7 @@ mod tests {
 
     #[photonio::test]
     async fn files_compacting() {
-        let root = TempDir::new("compact_map_files").unwrap();
+        let root = TempDir::new("compact_files").unwrap();
         let root = root.into_path();
 
         let mut ctx = build_reclaim_ctx(&root).await;
@@ -615,13 +615,13 @@ mod tests {
         let mut pages = HashMap::new();
         pages.insert(f1, vec![(1, pa(f1, 16)), (2, pa(f1, 32)), (3, pa(f1, 64))]);
         pages.insert(f2, vec![(4, pa(f2, 16)), (5, pa(f2, 32)), (6, pa(f2, 64))]);
-        let (virtual_infos, m1_info) = build_map_file(&ctx.page_files, m1, pages).await;
+        let (virtual_infos, m1_info) = build_file(&ctx.page_files, m1, pages).await;
         let mut page_files = virtual_infos;
 
         let mut pages = HashMap::new();
         pages.insert(f3, vec![(7, pa(f3, 16)), (8, pa(f3, 32)), (9, pa(f3, 64))]);
         pages.insert(f4, vec![(1, pa(f4, 16)), (2, pa(f4, 32)), (3, pa(f4, 64))]);
-        let (virtual_infos, m2_info) = build_map_file(&ctx.page_files, m2, pages).await;
+        let (virtual_infos, m2_info) = build_file(&ctx.page_files, m2, pages).await;
         page_files.extend(virtual_infos.into_iter());
 
         let mut map_files = HashMap::new();
@@ -671,18 +671,18 @@ mod tests {
         let (m1, m2, m3) = (1, 2, 3);
         {
             let mut lock = ctx.manifest.lock().await;
-            lock.reset_next_map_file_id(m3);
+            lock.reset_next_file_id(m3);
         }
         let mut pages = HashMap::new();
         pages.insert(f1, vec![(1, pa(f1, 16)), (2, pa(f1, 32)), (3, pa(f1, 64))]);
         pages.insert(f2, vec![(4, pa(f2, 16)), (5, pa(f2, 32)), (6, pa(f2, 64))]);
-        let (virtual_infos, m1_info) = build_map_file(&ctx.page_files, m1, pages).await;
+        let (virtual_infos, m1_info) = build_file(&ctx.page_files, m1, pages).await;
         let mut page_groups = virtual_infos;
 
         let mut pages = HashMap::new();
         pages.insert(f3, vec![(7, pa(f3, 16)), (8, pa(f3, 32)), (9, pa(f3, 64))]);
         pages.insert(f4, vec![(1, pa(f4, 16)), (2, pa(f4, 32)), (3, pa(f4, 64))]);
-        let (virtual_infos, m2_info) = build_map_file(&ctx.page_files, m2, pages).await;
+        let (virtual_infos, m2_info) = build_file(&ctx.page_files, m2, pages).await;
         page_groups.extend(virtual_infos.into_iter());
 
         let mut file_infos = HashMap::new();

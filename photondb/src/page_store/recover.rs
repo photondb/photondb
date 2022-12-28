@@ -17,10 +17,10 @@ struct FileInfoBuilder<'a, E: Env> {
 
     /// The virtual page file set.
     virtual_files: HashSet<u32>,
-    /// The [`FileInfo`] for page files, includes virtual page files.
+    /// The [`PageGroup`] for files.
     page_groups: HashMap<u32, PageGroup>,
-    /// The [`MapFileInfo`] for map files.
-    map_files: HashMap<u32, FileInfo>,
+    /// The [`FileInfo`] for files.
+    file_infos: HashMap<u32, FileInfo>,
     /// The page table builder.
     page_table_builder: PageTableBuilder,
 
@@ -29,8 +29,8 @@ struct FileInfoBuilder<'a, E: Env> {
 }
 
 struct FilesSummary {
-    active_map_files: HashMap<u32, NewFile>,
-    obsoleted_map_files: HashSet<u32>,
+    active_files: HashMap<u32, NewFile>,
+    obsoleted_files: HashSet<u32>,
 }
 
 impl<E: Env> PageStore<E> {
@@ -53,39 +53,39 @@ impl<E: Env> PageStore<E> {
         let page_files = PageFiles::new(env, path.as_ref(), options).await;
 
         let mut builder = FileInfoBuilder::new(&page_files);
-        Self::recover_page_groups(&mut builder, &summary.active_map_files).await?;
-        let (file_infos, map_files, page_table) = builder.build();
+        Self::recover_page_groups(&mut builder, &summary.active_files).await?;
+        let (page_groups, file_infos, page_table) = builder.build();
 
         Self::delete_unreferenced_page_files(&page_files, &summary).await?;
 
-        let next_page_file_id = summary.next_map_file_id();
-        manifest.reset_next_map_file_id(summary.next_map_file_id());
+        let next_file_id = summary.next_file_id();
+        manifest.reset_next_file_id(summary.next_file_id());
         let delta = DeltaVersion {
-            page_groups: file_infos,
-            file_infos: map_files,
+            page_groups,
+            file_infos,
             ..Default::default()
         };
-        Ok((next_page_file_id, manifest, page_table, page_files, delta))
+        Ok((next_file_id, manifest, page_table, page_files, delta))
     }
 
     fn apply_version_edits(versions: Vec<VersionEdit>) -> FilesSummary {
-        let mut active_map_files = HashMap::new();
-        let mut obsoleted_map_files = HashSet::new();
+        let mut active_files = HashMap::new();
+        let mut obsoleted_files = HashSet::new();
         for edit in versions {
             if let Some(edit) = edit.file_stream {
                 for file in edit.new_files {
-                    active_map_files.insert(file.id, file);
+                    active_files.insert(file.id, file);
                 }
                 for file in edit.deleted_files {
-                    active_map_files.remove(&file);
-                    obsoleted_map_files.insert(file);
+                    active_files.remove(&file);
+                    obsoleted_files.insert(file);
                 }
             }
         }
 
         FilesSummary {
-            active_map_files,
-            obsoleted_map_files,
+            active_files,
+            obsoleted_files,
         }
     }
 
@@ -109,8 +109,8 @@ impl<E: Env> PageStore<E> {
         let exist_files = page_files.list_files()?;
         let deleted_files = Self::filter_obsoleted_files(
             exist_files,
-            &summary.active_map_files,
-            summary.obsoleted_map_files.clone(),
+            &summary.active_files,
+            summary.obsoleted_files.clone(),
         );
         page_files.remove_files(deleted_files).await?;
         Ok(())
@@ -139,7 +139,7 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
             facade,
             virtual_files: HashSet::default(),
             page_groups: HashMap::default(),
-            map_files: HashMap::default(),
+            file_infos: HashMap::default(),
             page_table_builder: PageTableBuilder::default(),
             dealloc_pages: HashMap::default(),
         }
@@ -156,14 +156,14 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
             self.page_groups.insert(file_id, file_info);
         }
 
-        // 2. recover map file info.
+        // 2. recover file info.
         if !meta_reader.dealloc_pages.is_empty() {
             self.dealloc_pages
                 .insert(file.id, meta_reader.dealloc_pages);
         }
 
         let file_meta = meta_reader.file_meta;
-        self.map_files
+        self.file_infos
             .insert(file.id, FileInfo::new(file.up1, file.up2, file_meta));
 
         // 3. recover page table.
@@ -178,11 +178,11 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
         Ok(())
     }
 
-    /// Build page files, map files, orphan page files, and page table.
+    /// Build page groups, file infos, orphan page files, and page table.
     fn build(mut self) -> (HashMap<u32, PageGroup>, HashMap<u32, FileInfo>, PageTable) {
         self.maintain_active_pages();
         let page_table = self.page_table_builder.build();
-        (self.page_groups, self.map_files, page_table)
+        (self.page_groups, self.file_infos, page_table)
     }
 
     fn maintain_active_pages(&mut self) {
@@ -195,9 +195,9 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
                 if let Some(info) = self.page_groups.get_mut(&group_id) {
                     info.deactivate_page(page_addr);
                     let physical_id = info.meta().file_id;
-                    self.map_files
+                    self.file_infos
                         .get_mut(&physical_id)
-                        .expect("The map file must exists")
+                        .expect("The file must exists")
                         .on_update(updated_at);
                 }
             }
@@ -206,10 +206,10 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
 }
 
 impl FilesSummary {
-    fn next_map_file_id(&self) -> u32 {
+    fn next_file_id(&self) -> u32 {
         let val = std::cmp::max(
-            self.active_map_files.keys().cloned().max().unwrap_or(0),
-            self.obsoleted_map_files.iter().cloned().max().unwrap_or(0),
+            self.active_files.keys().cloned().max().unwrap_or(0),
+            self.obsoleted_files.iter().cloned().max().unwrap_or(0),
         );
         val + 1
     }
@@ -218,8 +218,8 @@ impl FilesSummary {
 impl std::fmt::Debug for FilesSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FilesSummary")
-            .field("map_files", &self.active_map_files.keys())
-            .field("obsoleted_map_files", &self.obsoleted_map_files)
+            .field("files", &self.active_files.keys())
+            .field("obsoleted_files", &self.obsoleted_files)
             .finish()
     }
 }
