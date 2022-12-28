@@ -103,22 +103,21 @@ impl StrategyBuilder for MinDeclineRateStrategyBuilder {
 }
 
 impl From<(&FxHashMap<u32, PageGroup>, &FileInfo)> for FileSummary {
-    fn from((file_infos, info): (&FxHashMap<u32, PageGroup>, &FileInfo)) -> Self {
+    fn from((page_groups, info): (&FxHashMap<u32, PageGroup>, &FileInfo)) -> Self {
         let meta = info.meta();
         let up2 = info.up2();
-        let page_groups = &meta.page_groups;
         let mut num_active_pages = 0;
         let mut effective_size = 0;
         let mut total_pages = 0;
         let mut total_page_size = 0;
-        for page_group in page_groups.keys() {
-            let page_group = file_infos
-                .get(page_group)
-                .expect("Virtual page file must exists");
-            num_active_pages += page_group.num_active_pages();
-            effective_size += page_group.effective_size();
-            total_pages += page_group.meta().total_pages();
-            total_page_size += page_group.meta().total_page_size();
+        for (group_id, meta) in &meta.page_groups {
+            if let Some(page_group) = page_groups.get(group_id) {
+                num_active_pages += page_group.num_active_pages();
+                effective_size += page_group.effective_size();
+            }
+
+            total_pages += meta.total_pages();
+            total_page_size += meta.total_page_size();
         }
         let effective_rate = effective_size as f64 / (total_page_size as f64);
         let empty_pages_rate = if total_pages > 0 {

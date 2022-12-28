@@ -240,7 +240,7 @@ where
         let mut stats = CompactStats::default();
         let mut up2_sum = 0;
         for &id in &victims {
-            let info = file_infos.get(&id).expect("Must exists");
+            let info = file_infos.get(&id).expect("Victim must exists");
             up2_sum += info.up2();
             builder = self
                 .compact_file(builder, &mut stats, info, page_groups)
