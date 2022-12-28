@@ -17,7 +17,7 @@ pub(crate) struct Manifest<E: Env> {
 
     max_file_size: u64,
 
-    next_map_file_id: u32,
+    next_file_id: u32,
 
     current_file_num: Option<u32>,
     current_writer: Option<ManifestWriter<E::SequentialWriter>>,
@@ -39,7 +39,7 @@ impl<E: Env> Manifest<E> {
             base,
             base_dir: None,
             max_file_size: MAX_MANIFEST_SIZE,
-            next_map_file_id: 0,
+            next_file_id: 0,
             current_file_num: Default::default(),
             current_writer: None,
         };
@@ -80,18 +80,18 @@ impl<E: Env> Manifest<E> {
         Ok(())
     }
 
-    pub(super) fn reset_next_map_file_id(&mut self, next_id: u32) {
-        self.next_map_file_id = next_id;
+    pub(super) fn reset_next_file_id(&mut self, next_id: u32) {
+        self.next_file_id = next_id;
     }
 
-    pub(crate) fn next_map_file_id(&mut self) -> u32 {
-        let id = self.next_map_file_id;
-        self.next_map_file_id += 1;
+    pub(crate) fn next_file_id(&mut self) -> u32 {
+        let id = self.next_file_id;
+        self.next_file_id += 1;
         id
     }
 
     pub(crate) fn now(&self) -> u32 {
-        self.next_map_file_id
+        self.next_file_id
     }
 
     // Record a new version_edit to manifest file.

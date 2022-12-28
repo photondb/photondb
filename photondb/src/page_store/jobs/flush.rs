@@ -149,14 +149,14 @@ impl<E: Env> FlushCtx<E> {
         let now = manifest.now();
         let (mut page_groups, mut file_infos) =
             self.apply_dealloc_pages(&version, now, dealloc_pages.to_owned());
-        let obsoleted_map_files = drain_obsoleted_files(&mut page_groups, &mut file_infos);
+        let obsoleted_files = drain_obsoleted_files(&mut page_groups, &mut file_infos);
 
         let group_id = page_group.meta().group_id;
         let file_id = file_info.meta().file_id;
         page_groups.insert(group_id, page_group);
         file_infos.insert(file_id, file_info);
 
-        let edit = make_flush_version_edit(file_id, &obsoleted_map_files);
+        let edit = make_flush_version_edit(file_id, &obsoleted_files);
         manifest
             .record_version_edit(edit, || version_snapshot(&version))
             .await?;
@@ -164,21 +164,21 @@ impl<E: Env> FlushCtx<E> {
         // Release buffer permit and ensure the new buffer is installed, before install
         // new version.
         if wait_new_buffer {
-            version.buffer_set.release_permit_and_wait(file_id).await;
+            version.buffer_set.release_permit_and_wait(group_id).await;
         }
 
         let delta = DeltaVersion {
             reason: VersionUpdateReason::Flush,
             page_groups,
             file_infos,
-            obsoleted_files: obsoleted_map_files,
+            obsoleted_files,
         };
         // Safety: the mutable reference of [`Manifest`] is hold.
         unsafe { self.version_owner.install(delta) };
         Ok(())
     }
 
-    /// Flush [`WriteBuffer`] to map files and returns dealloc pages.
+    /// Flush [`WriteBuffer`] to files and returns dealloc pages.
     async fn build_page_file(
         &self,
         write_buffer: &WriteBuffer,
@@ -196,7 +196,7 @@ impl<E: Env> FlushCtx<E> {
 
         let file_id = {
             let mut lock = self.manifest.lock().await;
-            lock.next_map_file_id()
+            lock.next_file_id()
         };
         let mut builder = self
             .page_files
@@ -254,8 +254,8 @@ impl<E: Env> FlushCtx<E> {
             };
         }
         for file_id in updated_files {
-            if let Some(map_file) = file_infos.get_mut(&file_id) {
-                map_file.on_update(now);
+            if let Some(file) = file_infos.get_mut(&file_id) {
+                file.on_update(now);
             }
         }
 
@@ -355,7 +355,7 @@ pub(super) fn version_snapshot(version: &Version) -> VersionEdit {
 
     // NOTE: Only the deleted files of the current version are recorded here, and
     // the files of previous versions are not recorded here.
-    let deleted_files = version.obsoleted_map_files();
+    let deleted_files = version.obsoleted_files();
     let stream = StreamEdit {
         new_files,
         deleted_files,

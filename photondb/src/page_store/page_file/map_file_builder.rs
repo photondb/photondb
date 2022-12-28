@@ -32,7 +32,7 @@ use crate::{
 /// page block index = [(page_id, {data block index}, {meta block index})]
 /// dealloc pages block = [dealloc_page_addr]
 /// footer = {magic_number} { page block index}
-pub(crate) struct MapFileBuilder<'a, E: Env> {
+pub(crate) struct FileBuilder<'a, E: Env> {
     file_id: u32,
     writer: BufferedWriter<'a, E>,
     dealloc_pages: BTreeSet<u64>,
@@ -48,7 +48,7 @@ pub(crate) struct MapFileBuilder<'a, E: Env> {
 pub(crate) struct PageGroupBuilder<'a, E: Env> {
     group_id: u32,
     base_offset: u64,
-    builder: MapFileBuilder<'a, E>,
+    builder: FileBuilder<'a, E>,
     inner: CommonFileBuilder,
 }
 
@@ -75,7 +75,7 @@ pub(crate) struct Footer {
     pub(super) checksum_type: ChecksumType,
 }
 
-impl<'a, E: Env> MapFileBuilder<'a, E> {
+impl<'a, E: Env> FileBuilder<'a, E> {
     pub(crate) fn new(
         file_id: u32,
         base_dir: &'a E::Directory,
@@ -204,7 +204,7 @@ impl<'a, E: Env> PageGroupBuilder<'a, E> {
         self.builder.dealloc_pages.extend(dealloc_pages);
     }
 
-    pub(crate) async fn finish(mut self) -> Result<MapFileBuilder<'a, E>> {
+    pub(crate) async fn finish(mut self) -> Result<FileBuilder<'a, E>> {
         self.inner
             .finish_meta_block(&mut self.builder.writer)
             .await?;
@@ -403,7 +403,7 @@ mod tests {
             .open_sequential_writer(path1.to_owned())
             .await
             .expect("open file_id: {file_id}'s file fail");
-        let builder = MapFileBuilder::<Photon>::new(
+        let builder = FileBuilder::<Photon>::new(
             1,
             &base,
             file,

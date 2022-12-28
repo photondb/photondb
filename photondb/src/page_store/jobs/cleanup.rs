@@ -28,7 +28,7 @@ impl<E: Env> CleanupCtx<E> {
                 break;
             };
 
-            let files = next_version.obsoleted_map_files();
+            let files = next_version.obsoleted_files();
             std::mem::swap(&mut next_version, &mut version);
             if with_shutdown(&mut self.shutdown, next_version.wait_version_released())
                 .await
@@ -52,7 +52,7 @@ impl<E: Env> CleanupCtx<E> {
             let file_infos = version.file_infos();
             for &id in &obsoleted_files {
                 if file_infos.contains_key(&id) {
-                    panic!("A obsoleted map file {id} still exists in a visible version");
+                    panic!("A obsoleted file {id} still exists in a visible version");
                 }
             }
         }

@@ -28,7 +28,7 @@ pub(crate) struct Version {
     first_buffer_id: u32,
 
     /// Records the ID of the file that can be deleted.
-    obsoleted_map_files: HashSet<u32>,
+    obsoleted_files: HashSet<u32>,
 
     next_version: AtomicPtr<Arc<Version>>,
     new_version_latch: Latch,
@@ -186,7 +186,7 @@ impl Version {
             reason: delta.reason,
             page_groups: delta.page_groups,
             files: delta.file_infos,
-            obsoleted_map_files: delta.obsoleted_files,
+            obsoleted_files: delta.obsoleted_files,
             buffer_set,
 
             next_version: AtomicPtr::default(),
@@ -220,8 +220,8 @@ impl Version {
 
     /// Fetch the files which obsoleted but referenced by former [`Version`]s.
     #[inline]
-    pub(crate) fn obsoleted_map_files(&self) -> Vec<u32> {
-        self.obsoleted_map_files.iter().cloned().collect()
+    pub(crate) fn obsoleted_files(&self) -> Vec<u32> {
+        self.obsoleted_files.iter().cloned().collect()
     }
 
     #[inline]
@@ -337,9 +337,9 @@ impl std::fmt::Debug for DeltaVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeltaVersion")
             .field("reason", &self.reason)
-            .field("map_files", &self.file_infos.keys())
-            .field("page_files", &self.page_groups.keys())
-            .field("obsoleted_map_files", &self.obsoleted_files)
+            .field("files", &self.file_infos.keys())
+            .field("page_groups", &self.page_groups.keys())
+            .field("obsoleted_files", &self.obsoleted_files)
             .finish()
     }
 }
