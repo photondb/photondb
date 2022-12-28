@@ -113,7 +113,7 @@ impl<E: Env> PageStore<E> {
             &summary.active_files,
             summary.obsoleted_files.clone(),
         );
-        page_files.remove_files(deleted_files).await?;
+        page_files.remove_files(deleted_files).await;
         Ok(())
     }
 

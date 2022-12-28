@@ -59,9 +59,7 @@ impl<E: Env> CleanupCtx<E> {
 
         if !obsoleted_files.is_empty() {
             info!("Clean obsoleted files {obsoleted_files:?}");
-            if let Err(err) = self.page_files.remove_files(obsoleted_files).await {
-                todo!("{err}");
-            }
+            self.page_files.remove_files(obsoleted_files).await;
         }
     }
 }
