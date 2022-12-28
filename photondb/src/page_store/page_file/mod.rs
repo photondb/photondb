@@ -245,22 +245,16 @@ pub(crate) mod facade {
             Ok((file, file_size))
         }
 
-        pub(crate) async fn remove_files(&self, files: Vec<u32>) -> Result<()> {
+        pub(crate) async fn remove_files(&self, files: Vec<u32>) {
             for file_id in files {
-                // FIXME: handle error.
-                self.remove_file(file_id).await?;
+                self.remove_file(file_id).await;
                 self.reader_cache.invalidate(file_id);
             }
-            Ok(())
         }
 
-        async fn remove_file(&self, file_id: u32) -> Result<()> {
+        async fn remove_file(&self, file_id: u32) {
             let path = self.base.join(format!("{}_{file_id}", FILE_PREFIX));
-            self.env
-                .remove_file(&path)
-                .await
-                .expect("remove page file failed");
-            Ok(())
+            let _ = self.env.remove_file(&path).await;
         }
 
         pub(crate) fn populate_cache(&self, page_addr: u64, page_content: &[u8]) -> Result<()> {
