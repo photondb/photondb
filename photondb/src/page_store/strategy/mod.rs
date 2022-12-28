@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use rustc_hash::FxHashMap;
+
 use super::{FileInfo, PageGroup};
 
 pub(crate) trait StrategyBuilder: Send + Sync {
@@ -9,7 +11,7 @@ pub(crate) trait StrategyBuilder: Send + Sync {
 /// An abstraction describes the strategy of page files reclaiming.
 pub(crate) trait ReclaimPickStrategy: Send + Sync {
     /// Collect map file info and compute reclamation score.
-    fn collect_file(&mut self, page_groups: &HashMap<u32, PageGroup>, file_info: &FileInfo);
+    fn collect_file(&mut self, page_groups: &FxHashMap<u32, PageGroup>, file_info: &FileInfo);
 
     /// Return the most suitable files for reclaiming under the strategy.
     fn apply(&mut self) -> Option<(u32, usize /* active size */)>;
@@ -70,7 +72,7 @@ impl MinDeclineRateStrategy {
 }
 
 impl ReclaimPickStrategy for MinDeclineRateStrategy {
-    fn collect_file(&mut self, page_groups: &HashMap<u32, PageGroup>, file_info: &FileInfo) {
+    fn collect_file(&mut self, page_groups: &FxHashMap<u32, PageGroup>, file_info: &FileInfo) {
         let file_id = file_info.meta().file_id;
         let summary = FileSummary::from((page_groups, file_info));
         self.collect(file_id, &summary);
@@ -100,8 +102,8 @@ impl StrategyBuilder for MinDeclineRateStrategyBuilder {
     }
 }
 
-impl From<(&HashMap<u32, PageGroup>, &FileInfo)> for FileSummary {
-    fn from((file_infos, info): (&HashMap<u32, PageGroup>, &FileInfo)) -> Self {
+impl From<(&FxHashMap<u32, PageGroup>, &FileInfo)> for FileSummary {
+    fn from((file_infos, info): (&FxHashMap<u32, PageGroup>, &FileInfo)) -> Self {
         let meta = info.meta();
         let up2 = info.up2();
         let page_groups = &meta.page_groups;

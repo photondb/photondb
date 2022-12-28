@@ -1,10 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Instant,
-};
+use std::{sync::Arc, time::Instant};
 
 use log::info;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     env::Env,
@@ -239,10 +236,10 @@ impl<E: Env> FlushCtx<E> {
         version: &Version,
         now: u32,
         dealloc_pages: Vec<u64>,
-    ) -> (HashMap<u32, PageGroup>, HashMap<u32, FileInfo>) {
+    ) -> (FxHashMap<u32, PageGroup>, FxHashMap<u32, FileInfo>) {
         let mut page_groups = version.page_groups().clone();
         let mut file_infos = version.file_infos().clone();
-        let mut updated_files = HashSet::new();
+        let mut updated_files = FxHashSet::default();
         for page_addr in dealloc_pages {
             let group_id = (page_addr >> 32) as u32;
             if let Some(page_group) = page_groups.get_mut(&group_id) {
@@ -274,13 +271,13 @@ impl std::fmt::Display for FlushPageStats {
 }
 
 fn drain_obsoleted_files(
-    page_groups: &mut HashMap<u32, PageGroup>,
-    file_infos: &mut HashMap<u32, FileInfo>,
-) -> HashSet<u32> {
+    page_groups: &mut FxHashMap<u32, PageGroup>,
+    file_infos: &mut FxHashMap<u32, FileInfo>,
+) -> FxHashSet<u32> {
     // remove empty page groups.
     page_groups.retain(|_, g| !g.is_empty());
 
-    let mut empty_files = HashSet::new();
+    let mut empty_files = FxHashSet::default();
     'OUTER: for (file_id, info) in &mut *file_infos {
         for group_id in info.meta().page_groups.keys() {
             if let Some(page_group) = page_groups.get(group_id) {
@@ -293,7 +290,7 @@ fn drain_obsoleted_files(
         empty_files.insert(*file_id);
     }
 
-    let mut obsoleted_files = HashSet::new();
+    let mut obsoleted_files = FxHashSet::default();
     'OUTER: for file_id in empty_files {
         let file_info = file_infos.get_mut(&file_id).unwrap();
         for group_id in &file_info.meta().referenced_groups {
@@ -312,10 +309,10 @@ fn drain_obsoleted_files(
 fn collect_dealloc_pages_and_stats(
     write_buffer: &WriteBuffer,
     flush_stats: &mut FlushPageStats,
-) -> (Vec<u64>, HashSet<u32>) {
+) -> (Vec<u64>, FxHashSet<u32>) {
     let file_id = write_buffer.group_id();
     let mut dealloc_pages = Vec::new();
-    let mut skip_pages = HashSet::new();
+    let mut skip_pages = FxHashSet::default();
     for (_, header, record_ref) in write_buffer.iter() {
         flush_stats.num_records += 1;
         if header.is_tombstone() {
@@ -365,7 +362,7 @@ pub(super) fn version_snapshot(version: &Version) -> VersionEdit {
     }
 }
 
-fn make_flush_version_edit(file_id: u32, obsoleted_files: &HashSet<u32>) -> VersionEdit {
+fn make_flush_version_edit(file_id: u32, obsoleted_files: &FxHashSet<u32>) -> VersionEdit {
     let deleted_files = obsoleted_files.iter().cloned().collect();
     let new_files = vec![NewFile::from(file_id)];
     let stream = StreamEdit {
