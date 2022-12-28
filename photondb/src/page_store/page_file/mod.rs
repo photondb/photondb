@@ -276,9 +276,9 @@ pub(crate) mod facade {
             Ok(())
         }
 
-        pub(crate) fn evict_cached_pages(&self, page_addrs: &[u64]) {
-            for page_addr in page_addrs {
-                self.page_cache.erase(*page_addr);
+        pub(crate) fn evict_cached_pages(&self, files: &[u32]) {
+            for file_id in files {
+                self.page_cache.erase_file_pages(*file_id);
             }
         }
 

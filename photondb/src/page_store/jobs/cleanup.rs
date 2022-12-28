@@ -59,6 +59,7 @@ impl<E: Env> CleanupCtx<E> {
 
         if !obsoleted_files.is_empty() {
             info!("Clean obsoleted files {obsoleted_files:?}");
+            self.page_files.evict_cached_pages(&obsoleted_files);
             self.page_files.remove_files(obsoleted_files).await;
         }
     }
