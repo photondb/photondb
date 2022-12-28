@@ -101,8 +101,23 @@ impl<T: Clone> LRUCache<T> {
 
     #[inline]
     fn hash_key(key: u64) -> u32 {
-        const FIBONACCI_MAGIC_NUMBER_64BIT: u64 = 11400714819323198485;
-        (key.wrapping_mul(FIBONACCI_MAGIC_NUMBER_64BIT) >> 32) as u32 // TODO: cmp with hash for seprated file_id, offset and other algorithm(siphash, fnv, xxhash?).
+        // fnv32: https://github.com/golang/go/blob/master/src/hash/fnv/fnv.go#L99
+        const OFFSET32: u32 = 2166136261;
+        const PRIME32: u32 = 16777619;
+
+        let (mut file_id, mut offset) = ((key >> 32) as u32, key as u32);
+        let mut h = OFFSET32;
+        for _ in 0..4 {
+            h = h.wrapping_mul(PRIME32);
+            h ^= (file_id & 0xff) as u32;
+            file_id >>= 8;
+        }
+        for _ in 0..4 {
+            h = h.wrapping_mul(PRIME32);
+            h ^= (offset & 0xff) as u32;
+            offset >>= 8;
+        }
+        h
     }
 }
 

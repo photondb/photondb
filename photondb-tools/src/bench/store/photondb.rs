@@ -23,7 +23,7 @@ where
             std::fs::remove_dir_all(&config.db).unwrap();
         }
         let mut options = TableOptions::default();
-        options.page_store.prepopulate_cache_on_flush = true;
+        options.page_store.prepopulate_cache_on_flush = false;
         options.page_store.cache_strict_capacity_limit = true;
         options.page_store.cache_estimated_entry_charge = 4840;
         options.page_store.cache_capacity = config.cache_size as usize;
