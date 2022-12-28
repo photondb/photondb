@@ -161,7 +161,6 @@ pub(crate) struct LRUHandle<T: Clone> {
     value: Option<T>,
     charge: usize,
 
-    next_hash: *mut LRUHandle<T>,
     next_linked: *mut LRUHandle<T>,
     prev_linked: *mut LRUHandle<T>,
     refs: u32,
@@ -192,7 +191,6 @@ impl<T: Clone> Default for LRUHandle<T> {
             charge: Default::default(),
             detached: Default::default(),
 
-            next_hash: ptr::null_mut(),
             next_linked: ptr::null_mut(),
             prev_linked: ptr::null_mut(),
             refs: 0,
