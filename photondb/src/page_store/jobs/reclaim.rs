@@ -71,6 +71,7 @@ enum ReclaimReason {
 #[derive(Debug, Default)]
 struct CompactStats {
     num_active_pages: usize,
+    num_dealloc_pages: usize,
     input_size: usize,
     output_size: usize,
 }
@@ -258,6 +259,7 @@ where
         let elapsed = start_at.elapsed().as_micros();
         let CompactStats {
             num_active_pages,
+            num_dealloc_pages,
             input_size,
             output_size,
         } = stats;
@@ -267,7 +269,8 @@ where
         let free_ratio = (free_size as f64) / (input_size as f64);
         info!(
             "Compact files {victims:?} into a new file {new_file_id} \
-                    with {num_active_pages} active pages, \
+                    with up2 {up2}, relocate {num_active_pages} pages, \
+                    dealloc {num_dealloc_pages} pages, \
                     relocate {output_size} bytes, \
                     free {free_size} bytes, free ratio {free_ratio:.4}, \
                     latest {elapsed} microseconds"
@@ -284,9 +287,26 @@ where
         page_groups: &FxHashMap<u32, PageGroup>,
     ) -> Result<FileBuilder<'a, E>> {
         let file_id = file_info.meta().file_id;
-        debug!("compact file {file_id}");
-        let file_meta = self.page_files.read_file_meta(file_id).await?;
+        let existed_groups = file_info
+            .meta()
+            .referenced_groups
+            .iter()
+            .filter(|g| page_groups.contains_key(g))
+            .cloned()
+            .collect::<FxHashSet<_>>();
+
+        let mut file_meta = self.page_files.read_file_meta(file_id).await?;
+        file_meta
+            .dealloc_pages
+            .retain(|&addr| existed_groups.contains(&((addr >> 32) as u32)));
         builder.add_dealloc_pages(&file_meta.dealloc_pages);
+        stats.num_dealloc_pages += file_meta.dealloc_pages.len();
+
+        debug!(
+            "compact file {file_id}, {} dealloc pages, {} page groups",
+            file_meta.dealloc_pages.len(),
+            file_meta.page_groups.len()
+        );
 
         let reader = self
             .page_files
@@ -343,9 +363,8 @@ where
             self.page_files
                 .read_file_page_from_reader(reader, file_info.meta(), handle, &mut page)
                 .await?;
-            let page_ref = PageRef::new(page.as_slice());
-
             let page_id = *page_table.get(&page_addr).expect("Must exists");
+            let page_ref = PageRef::new(page.as_slice());
             builder
                 .add_page(page_id, page_addr, page_ref.info(), &page)
                 .await?;
