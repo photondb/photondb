@@ -43,6 +43,7 @@ function display_usage() {
   echo -e "\tMAX_SPACE_AMP\t\t\tThe max percent of space amplification to reclaim space (default: 10)"
   echo -e "\tSPACE_USED_HIGH\t\t\tThe space watermark which the DB needed to reclaim, in bytes (default: 100G)"
   echo -e "\tUSE_O_DIRECT\t\t\tUse O_DIRECT for user reads and compaction"
+  echo -e "\tKEY_RAND_DIST\t\t\tThe key distribution, zipf or uniform (default: uniform)"
   echo -e "\tSTATS_INTERVAL_SECONDS\t\tValue for stats_interval_seconds"
   echo -e "\tREPORT_INTERVAL_SECONDS\t\tValue for report_interval_seconds"
 }
@@ -134,7 +135,8 @@ if [ $writes -gt 0 ]; then
   const_params="$const_params --writes=$writes"
 fi
 
-params_w="$const_params "
+params_w="$const_params \
+       --key-rand-dist=${KEY_RAND_DIST:-uniform} "
 
 params_bulkload="$const_params "
 

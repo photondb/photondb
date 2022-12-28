@@ -1,7 +1,6 @@
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{compression::Compression, BlockHandle, ChecksumType};
 use crate::{page::PageInfo, util::bitmap::FixedBitmap};
@@ -52,7 +51,7 @@ pub(crate) struct PageGroupMeta {
     /// The last offset.
     meta_block_end: u64,
 
-    page_meta_map: HashMap<u32, PageMeta>,
+    page_meta_map: FxHashMap<u32, PageMeta>,
 }
 
 /// The volatile info of a file.
@@ -71,11 +70,11 @@ pub(crate) struct FileMeta {
     pub(crate) block_size: usize,
 
     /// The dealloc pages referenced page groups.
-    pub(crate) referenced_groups: HashSet<u32>,
+    pub(crate) referenced_groups: FxHashSet<u32>,
 
     pub(crate) checksum_type: ChecksumType,
     pub(crate) compression: Compression,
-    pub(crate) page_groups: HashMap<u32, Arc<PageGroupMeta>>,
+    pub(crate) page_groups: FxHashMap<u32, Arc<PageGroupMeta>>,
 }
 
 impl PageGroup {
@@ -232,8 +231,9 @@ impl PageGroupMeta {
     fn build_page_meta_map(
         data_offsets: BTreeMap<u64, (u64, PageInfo)>,
         meta_indexes: &[u64],
-    ) -> HashMap<u32, PageMeta> {
-        let mut page_meta_map = HashMap::with_capacity(data_offsets.len());
+    ) -> FxHashMap<u32, PageMeta> {
+        let mut page_meta_map =
+            FxHashMap::with_capacity_and_hasher(data_offsets.len(), Default::default());
         let mut last_addr = None;
         for (index, (addr, (offset, info))) in data_offsets.into_iter().enumerate() {
             let addr = addr as u32;
@@ -307,8 +307,8 @@ impl FileMeta {
         block_size: usize,
         checksum_type: ChecksumType,
         compression: Compression,
-        referenced_groups: HashSet<u32>,
-        page_groups: HashMap<u32, Arc<PageGroupMeta>>,
+        referenced_groups: FxHashSet<u32>,
+        page_groups: FxHashMap<u32, Arc<PageGroupMeta>>,
     ) -> Self {
         FileMeta {
             file_id,
