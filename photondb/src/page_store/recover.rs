@@ -4,6 +4,7 @@ use std::{
 };
 
 use log::debug;
+use rustc_hash::FxHashMap;
 
 use super::{
     page_table::{PageTable, PageTableBuilder},
@@ -18,9 +19,9 @@ struct FileInfoBuilder<'a, E: Env> {
     /// The virtual page file set.
     virtual_files: HashSet<u32>,
     /// The [`PageGroup`] for files.
-    page_groups: HashMap<u32, PageGroup>,
+    page_groups: FxHashMap<u32, PageGroup>,
     /// The [`FileInfo`] for files.
-    file_infos: HashMap<u32, FileInfo>,
+    file_infos: FxHashMap<u32, FileInfo>,
     /// The page table builder.
     page_table_builder: PageTableBuilder,
 
@@ -179,7 +180,13 @@ impl<'a, E: Env> FileInfoBuilder<'a, E> {
     }
 
     /// Build page groups, file infos, orphan page files, and page table.
-    fn build(mut self) -> (HashMap<u32, PageGroup>, HashMap<u32, FileInfo>, PageTable) {
+    fn build(
+        mut self,
+    ) -> (
+        FxHashMap<u32, PageGroup>,
+        FxHashMap<u32, FileInfo>,
+        PageTable,
+    ) {
         self.maintain_active_pages();
         let page_table = self.page_table_builder.build();
         (self.page_groups, self.file_infos, page_table)

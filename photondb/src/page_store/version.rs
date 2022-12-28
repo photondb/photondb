@@ -1,14 +1,12 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{
-        atomic::{AtomicPtr, Ordering},
-        Arc, Mutex,
-    },
+use std::sync::{
+    atomic::{AtomicPtr, Ordering},
+    Arc, Mutex,
 };
 
 use crossbeam_epoch::Guard;
 use futures::channel::oneshot;
 use log::debug;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{buffer_set::*, FileInfo, PageGroup, WriteBuffer};
 use crate::util::latch::Latch;
@@ -21,14 +19,14 @@ pub(crate) struct Version {
     pub(crate) buffer_set: Arc<BufferSet>,
 
     reason: VersionUpdateReason,
-    page_groups: HashMap<u32, PageGroup>,
-    files: HashMap<u32, FileInfo>,
+    page_groups: FxHashMap<u32, PageGroup>,
+    files: FxHashMap<u32, FileInfo>,
 
     // The id of the first buffer this version could access.
     first_buffer_id: u32,
 
     /// Records the ID of the file that can be deleted.
-    obsoleted_files: HashSet<u32>,
+    obsoleted_files: FxHashSet<u32>,
 
     next_version: AtomicPtr<Arc<Version>>,
     new_version_latch: Latch,
@@ -41,9 +39,9 @@ pub(crate) struct Version {
 #[derive(Default)]
 pub(crate) struct DeltaVersion {
     pub(crate) reason: VersionUpdateReason,
-    pub(crate) page_groups: HashMap<u32, PageGroup>,
-    pub(crate) file_infos: HashMap<u32, FileInfo>,
-    pub(crate) obsoleted_files: HashSet<u32>,
+    pub(crate) page_groups: FxHashMap<u32, PageGroup>,
+    pub(crate) file_infos: FxHashMap<u32, FileInfo>,
+    pub(crate) obsoleted_files: FxHashSet<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -225,12 +223,12 @@ impl Version {
     }
 
     #[inline]
-    pub(crate) fn page_groups(&self) -> &HashMap<u32, PageGroup> {
+    pub(crate) fn page_groups(&self) -> &FxHashMap<u32, PageGroup> {
         &self.page_groups
     }
 
     #[inline]
-    pub(crate) fn file_infos(&self) -> &HashMap<u32, FileInfo> {
+    pub(crate) fn file_infos(&self) -> &FxHashMap<u32, FileInfo> {
         &self.files
     }
 
