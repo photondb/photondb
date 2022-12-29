@@ -21,6 +21,7 @@ function display_usage() {
   echo -e "\tbulkload"
   echo -e "\tupdaterandom"
   echo -e "\treadrandom"
+  echo -e "\treadwhilewriting"
   echo -e "\twaitforreclaiming"
   echo -e "\tdebug"
   echo ""
@@ -413,6 +414,29 @@ function run_readrandom {
   summarize_result $log_file_name readrandom.t${num_threads} readrandom
 }
 
+function run_readwhilewriting {
+  echo "Read while writing $num_keys random keys"
+  log_file_name="${output_dir}/benchmark_readwhilewriting.t${num_threads}.log"
+  time_cmd=$( get_cmd $log_file_name.time )
+  cmd="$time_cmd ./target/release/photondb-tools bench --benchmarks=readrandomwriterandom \
+        $params_w \
+        --use-existing-db=1 \
+        --threads=$num_threads \
+        --read-write-percent=80 \
+        --seed-base=$( date +%s ) \
+        2>&1 | tee -a $log_file_name"
+  if [[ "$job_id" != "" ]]; then
+    echo "Job ID: ${job_id}" > $log_file_name
+    echo $cmd | tee -a $log_file_name
+  else
+    echo $cmd | tee $log_file_name
+  fi
+  start_stats $log_file_name.stats
+  eval $cmd
+  stop_stats $log_file_name.stats
+  summarize_result $log_file_name readwhilewriting.t${num_threads} readwhilewriting
+}
+
 function run_waitforreclaiming {
   echo "Wait for reclaiming"
   log_file_name="${output_dir}/benchmark_waitforreclaiming.log"
@@ -459,6 +483,8 @@ for job in ${jobs[@]}; do
     run_change updaterandom updaterandom updaterandom
   elif [ $job = readrandom ]; then
     run_readrandom
+  elif [ $job = readwhilewriting ]; then
+    run_readwhilewriting
   elif [ $job = waitforreclaiming ]; then
     run_waitforreclaiming
   elif [ $job = debug ]; then
