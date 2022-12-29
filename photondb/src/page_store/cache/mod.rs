@@ -34,6 +34,8 @@ pub(crate) trait Cache<T: Clone>: Sized {
 
     fn erase(self: &Arc<Self>, key: u64);
 
+    fn erase_file_pages(self: &std::sync::Arc<Self>, file_id: u32);
+
     fn stats(self: &Arc<Self>) -> CacheStats;
 }
 
@@ -121,7 +123,7 @@ where
     pub(crate) fn key(&self) -> u64 {
         match self.handle {
             Handle::Clock(h) => unsafe { (*h).key },
-            Handle::Lru(h) => unsafe { (*h).key },
+            Handle::Lru(h) => unsafe { (*h).key.into() },
         }
     }
 
@@ -154,18 +156,54 @@ pub(crate) struct ClockHandle<T: Clone> {
     detached: bool,
 }
 
+#[derive(Default, PartialEq, Debug, Clone, Copy)]
+pub(crate) struct Key(u64);
+
+impl From<u64> for Key {
+    fn from(n: u64) -> Self {
+        Self(n)
+    }
+}
+
+impl From<Key> for u64 {
+    fn from(k: Key) -> Self {
+        k.0
+    }
+}
+
+impl Key {
+    pub(crate) fn file_id(&self) -> u32 {
+        (self.0 >> 32) as u32
+    }
+}
+
 #[repr(align(64))]
 pub(crate) struct LRUHandle<T: Clone> {
-    key: u64,
+    key: Key,
     hash: u32,
     value: Option<T>,
     charge: usize,
 
-    next_linked: *mut LRUHandle<T>,
-    prev_linked: *mut LRUHandle<T>,
+    page_link: HandleLink<T>,
+    file_link: HandleLink<T>,
+
     refs: u32,
     flags: u8,
     detached: bool,
+}
+
+struct HandleLink<T: Clone> {
+    next: *mut LRUHandle<T>,
+    prev: *mut LRUHandle<T>,
+}
+
+impl<T: Clone> Default for HandleLink<T> {
+    fn default() -> Self {
+        Self {
+            next: ptr::null_mut(),
+            prev: ptr::null_mut(),
+        }
+    }
 }
 
 impl<T: Clone> Default for ClockHandle<T> {
@@ -190,9 +228,8 @@ impl<T: Clone> Default for LRUHandle<T> {
             hash: Default::default(),
             charge: Default::default(),
             detached: Default::default(),
-
-            next_linked: ptr::null_mut(),
-            prev_linked: ptr::null_mut(),
+            page_link: Default::default(),
+            file_link: Default::default(),
             refs: 0,
             flags: 0,
 

@@ -1001,6 +1001,10 @@ impl<T: Clone> Cache<T> for ClockCache<T> {
         shard.erase(key, hash)
     }
 
+    fn erase_file_pages(self: &std::sync::Arc<Self>, _file_id: u32) {
+        unimplemented!()
+    }
+
     fn stats(self: &Arc<Self>) -> CacheStats {
         let mut summary = CacheStats::default();
         for s in &self.shards {

@@ -1,4 +1,5 @@
 use std::{
+    collections::hash_map::Entry,
     ptr,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -10,7 +11,7 @@ use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use super::{
-    AtomicCacheStats, Cache, CacheEntry, CacheToken, Handle, LRUHandle, CACHE_AS_COLD,
+    AtomicCacheStats, Cache, CacheEntry, CacheToken, Handle, Key, LRUHandle, CACHE_AS_COLD,
     CACHE_DISCARD,
 };
 use crate::page_store::{cache::CACHE_AS_HOT, stats::CacheStats, CacheOption, Result};
@@ -33,7 +34,8 @@ struct LRUCacheShard<T: Clone> {
 }
 
 struct LRUCacheHandleTable<T: Clone> {
-    data: FxHashMap<u64, LRUHandlePtr<T>>,
+    pages: FxHashMap<u64, LRUHandlePtr<T>>,
+    files: FxHashMap<u32, LRUHandlePtr<T>>,
 }
 
 #[derive(Clone)]
@@ -42,10 +44,6 @@ struct LRUHandlePtr<T: Clone> {
 }
 
 impl<T: Clone> LRUHandlePtr<T> {
-    fn as_ref(&self) -> &LRUHandle<T> {
-        unsafe { &(*self.ptr) }
-    }
-
     fn mut_ptr(&self) -> *mut LRUHandle<T> {
         self.ptr
     }
@@ -190,7 +188,16 @@ impl<T: Clone> Cache<T> for LRUCache<T> {
             let hash = Self::hash_key(key);
             let idx = self.shard(hash);
             let mut shard = self.shards[idx as usize].lock();
-            shard.erase(key);
+            shard.erase(key.into());
+        }
+    }
+
+    fn erase_file_pages(self: &std::sync::Arc<Self>, file_id: u32) {
+        unsafe {
+            for shard in &self.shards {
+                let mut shard = shard.lock();
+                shard.erase_file_pages(file_id);
+            }
         }
     }
 
@@ -207,8 +214,8 @@ impl<T: Clone> Cache<T> for LRUCache<T> {
 impl<T: Clone> LRUCacheShard<T> {
     pub(crate) fn new(capacity: usize) -> Self {
         let mut linked = Box::new(LRUHandle::default());
-        linked.next_linked = linked.as_mut();
-        linked.prev_linked = linked.as_mut();
+        linked.page_link.next = linked.as_mut();
+        linked.page_link.prev = linked.as_mut();
         let ptr = Box::into_raw(linked);
         let head = Box::new(LRUHandlePtr { ptr });
         Self {
@@ -229,26 +236,30 @@ impl<T: Clone> LRUCacheShard<T> {
         charge: usize,
         option: CacheOption,
     ) -> Result<*mut LRUHandle<T>> {
-        if !self.evict_from_lru(charge, option) {
-            let h = Box::new(LRUHandle {
-                key,
+        if !self.evict_lru(charge, option) {
+            let mut h = Box::new(LRUHandle {
+                key: key.into(),
                 hash,
                 value,
                 charge,
                 detached: true,
                 ..Default::default()
             });
+            h.file_link.next = h.as_mut();
+            h.file_link.prev = h.as_mut();
             let handle = Box::into_raw(h);
             return Ok(handle);
         }
-        let h = Box::new(LRUHandle {
-            key,
+        let mut h = Box::new(LRUHandle {
+            key: key.into(),
             value,
             hash,
             charge,
             detached: false,
             ..Default::default()
         });
+        h.file_link.next = h.as_mut();
+        h.file_link.prev = h.as_mut();
         let lhd = Box::into_raw(h);
         let old = self.table.insert(lhd)?;
         if !old.is_null() {
@@ -281,7 +292,8 @@ impl<T: Clone> LRUCacheShard<T> {
                 && !token.returning_behavior_match(CACHE_DISCARD)
             {
                 let as_hot = token.returning_behavior_match(CACHE_AS_HOT);
-                self.lru_insert(h, as_hot);
+                self.link_lru(self.head.mut_ptr(), h, as_hot);
+                self.link_file(h);
                 return;
             }
 
@@ -296,7 +308,8 @@ impl<T: Clone> LRUCacheShard<T> {
         let e = self.table.lookup(key);
         if !e.is_null() {
             if !(*e).has_refs() {
-                self.lru_remove(e);
+                self.unlink_lru(e);
+                self.unlink_file(e);
             }
             self.stats.lookup_hit.inc();
             (*e).add_ref();
@@ -306,7 +319,7 @@ impl<T: Clone> LRUCacheShard<T> {
         e
     }
 
-    unsafe fn erase(&mut self, key: u64) {
+    unsafe fn erase(&mut self, key: Key) {
         let h = self.table.remove(key);
         if !h.is_null() {
             self.try_remove_cache_handle(h)
@@ -314,54 +327,105 @@ impl<T: Clone> LRUCacheShard<T> {
         self.stats.active_evict.inc();
     }
 
+    unsafe fn erase_file_pages(&mut self, file_id: u32) {
+        let Some(hd) = self.table.files.get_mut(&file_id) else {
+            return;
+        };
+        let mut ptr = hd.ptr;
+        loop {
+            let next = (*ptr).file_link.next;
+            self.erase((*ptr).key);
+            if std::ptr::eq(next, ptr) {
+                break;
+            }
+            ptr = next;
+        }
+    }
+
     unsafe fn try_remove_cache_handle(&mut self, h: *mut LRUHandle<T>) {
         assert!(!h.is_null());
         if !(*h).has_refs() {
-            self.lru_remove(h);
+            self.unlink_lru(h);
+            self.unlink_file(h);
             self.clear_handle(h);
         }
     }
 
-    unsafe fn lru_insert(&mut self, e: *mut LRUHandle<T>, as_recent: bool) {
+    unsafe fn link_lru(&mut self, head: *mut LRUHandle<T>, e: *mut LRUHandle<T>, as_recent: bool) {
         assert!(!e.is_null());
         if as_recent {
-            (*e).next_linked = self.head.mut_ptr();
-            (*e).prev_linked = self.head.as_ref().as_ref().prev_linked;
+            (*e).page_link.next = head;
+            (*e).page_link.prev = (*head).page_link.prev;
         } else {
-            (*e).prev_linked = self.head.mut_ptr();
-            (*e).next_linked = self.head.as_ref().as_ref().next_linked;
+            (*e).page_link.prev = head;
+            (*e).page_link.next = (*head).page_link.next;
         }
-        (*(*e).prev_linked).next_linked = e;
-        (*(*e).next_linked).prev_linked = e;
+        (*(*e).page_link.prev).page_link.next = e;
+        (*(*e).page_link.next).page_link.prev = e;
         self.lru_usage.fetch_add((*e).charge, Ordering::Relaxed);
     }
 
-    unsafe fn lru_remove(&mut self, e: *mut LRUHandle<T>) {
+    unsafe fn unlink_lru(&mut self, e: *mut LRUHandle<T>) {
         assert!(!e.is_null());
-
-        (*(*e).next_linked).prev_linked = (*e).prev_linked;
-        (*(*e).prev_linked).next_linked = (*e).next_linked;
-        (*e).prev_linked = ptr::null_mut();
-        (*e).next_linked = ptr::null_mut();
+        (*(*e).page_link.next).page_link.prev = (*e).page_link.prev;
+        (*(*e).page_link.prev).page_link.next = (*e).page_link.next;
+        (*e).page_link.prev = ptr::null_mut();
+        (*e).page_link.next = ptr::null_mut();
         self.lru_usage.fetch_sub((*e).charge, Ordering::Relaxed);
     }
 
-    unsafe fn evict_from_lru(&mut self, charge: usize, option: CacheOption) -> bool {
+    unsafe fn evict_lru(&mut self, charge: usize, option: CacheOption) -> bool {
         if option == CacheOption::REFILL_COLD_WHEN_NOT_FULL
             && self.usage.load(Ordering::Relaxed) + charge > self.capacity
         {
             return false;
         }
         while self.usage.load(Ordering::Relaxed) + charge > self.capacity
-            && !std::ptr::eq((*self.head.ptr).next_linked, self.head.ptr)
+            && !std::ptr::eq((*self.head.ptr).page_link.next, self.head.ptr)
         {
-            let old_ptr = (*self.head.ptr).next_linked;
+            let old_ptr = (*self.head.ptr).page_link.next;
             self.table.remove((*old_ptr).key);
-            self.lru_remove(old_ptr);
+            self.unlink_lru(old_ptr);
+            self.unlink_file(old_ptr);
             self.clear_handle(old_ptr);
             self.stats.passive_evict.inc();
         }
         true
+    }
+
+    unsafe fn link_file(&mut self, e: *mut LRUHandle<T>) {
+        assert!(!e.is_null());
+        let file_id = (*e).key.file_id();
+        match self.table.files.entry(file_id) {
+            Entry::Occupied(ent) => {
+                let head = ent.get().mut_ptr();
+                (*e).file_link.next = head;
+                (*e).file_link.prev = (*head).file_link.prev;
+                (*(*e).file_link.prev).file_link.next = e;
+                (*(*e).file_link.next).file_link.prev = e;
+            }
+            Entry::Vacant(ent) => {
+                ent.insert(LRUHandlePtr { ptr: e });
+            }
+        }
+    }
+
+    unsafe fn unlink_file(&mut self, e: *mut LRUHandle<T>) -> bool {
+        assert!(!e.is_null());
+        let next = (*e).file_link.next;
+        (*(*e).file_link.next).file_link.prev = (*e).file_link.prev;
+        (*(*e).file_link.prev).file_link.next = (*e).file_link.next;
+        (*e).file_link.prev = e;
+        (*e).file_link.next = e;
+
+        let file_id = (*e).key.file_id();
+        if std::ptr::eq(next, e) {
+            self.table.files.remove(&file_id);
+            false
+        } else {
+            self.table.files.insert(file_id, LRUHandlePtr { ptr: next });
+            true
+        }
     }
 
     unsafe fn clear_handle(&mut self, lh: *mut LRUHandle<T>) {
@@ -376,7 +440,8 @@ impl<T: Clone> LRUCacheShard<T> {
 impl<T: Clone> LRUCacheHandleTable<T> {
     pub(crate) fn new() -> Self {
         Self {
-            data: FxHashMap::default(),
+            pages: FxHashMap::default(),
+            files: FxHashMap::default(),
         }
     }
 
@@ -385,27 +450,29 @@ impl<T: Clone> LRUCacheHandleTable<T> {
         assert!(!(*proto).is_in_cache());
         (*proto).set_in_cache(true);
 
-        let old = self.data.insert((*proto).key, LRUHandlePtr { ptr: proto });
+        let old = self
+            .pages
+            .insert((*proto).key.into(), LRUHandlePtr { ptr: proto });
+
         if let Some(LRUHandlePtr { ptr }) = old {
             assert_eq!((*ptr).key, (*proto).key);
             assert!((*ptr).is_in_cache());
             (*ptr).set_in_cache(false);
             return Ok(ptr);
         }
-
         Ok(ptr::null_mut())
     }
 
     unsafe fn lookup(&self, key: u64) -> *mut LRUHandle<T> {
-        let h = self.data.get(&key);
+        let h = self.pages.get(&key);
         if let Some(LRUHandlePtr { ptr }) = h {
             return *ptr;
         }
         ptr::null_mut()
     }
 
-    unsafe fn remove(&mut self, key: u64) -> *mut LRUHandle<T> {
-        let old = self.data.remove(&key);
+    unsafe fn remove(&mut self, key: Key) -> *mut LRUHandle<T> {
+        let old = self.pages.remove(&key.into());
         if let Some(LRUHandlePtr { ptr }) = old {
             (*ptr).set_in_cache(false);
             return ptr;

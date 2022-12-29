@@ -191,8 +191,6 @@ impl<E: Env> FlushCtx<E> {
         let group_id = write_buffer.group_id();
         info!("Flush write buffer {group_id} to file, {flush_stats}");
 
-        self.page_files.evict_cached_pages(&dealloc_pages);
-
         let file_id = {
             let mut lock = self.manifest.lock().await;
             lock.next_file_id()
