@@ -136,7 +136,7 @@ impl<T: Clone> Cache<T> for LRUCache<T> {
             } else {
                 let token = if unsafe { (*ptr).detached } {
                     CacheToken::new(CACHE_DISCARD)
-                } else if option == CacheOption::REFILL_COLD_WHEN_NOT_FULL {
+                } else if option.refill_cold_when_not_full() {
                     CacheToken::new(CACHE_AS_COLD)
                 } else {
                     CacheToken::default()
@@ -375,7 +375,7 @@ impl<T: Clone> LRUCacheShard<T> {
     }
 
     unsafe fn evict_lru(&mut self, charge: usize, option: CacheOption) -> bool {
-        if option == CacheOption::REFILL_COLD_WHEN_NOT_FULL
+        if option.refill_cold_when_not_full()
             && self.usage.load(Ordering::Relaxed) + charge > self.capacity
         {
             return false;
