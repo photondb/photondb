@@ -9,8 +9,9 @@ use ::std::sync::{
     atomic::{AtomicU32, AtomicU64},
     Arc,
 };
+use bitflags::bitflags;
 
-use super::{stats::CacheStats, CacheOption};
+use super::{page_txn::CachePriority, stats::CacheStats, CacheOption};
 use crate::{
     page_store::{Error, Result},
     util::atomic::Counter,
@@ -49,8 +50,8 @@ where
     token: CacheToken,
 }
 
-pub(crate) const CACHE_AS_HOT: u8 = 0;
-pub(crate) const CACHE_AS_COLD: u8 = 1;
+pub(crate) const CACHE_AS_RECENT: u8 = 0;
+pub(crate) const CACHE_AS_OLD: u8 = 1;
 pub(crate) const CACHE_DISCARD: u8 = 2;
 
 #[derive(Clone)]
@@ -61,7 +62,7 @@ pub(crate) struct CacheToken {
 impl Default for CacheToken {
     fn default() -> Self {
         Self {
-            returning_behavior: Arc::new(AtomicU8::new(CACHE_AS_HOT)),
+            returning_behavior: Arc::new(AtomicU8::new(CACHE_AS_RECENT)),
         }
     }
 }
@@ -84,9 +85,9 @@ impl CacheToken {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn return_cache_as_cold(&self) {
+    pub(crate) fn return_cache_as_old(&self) {
         self.returning_behavior
-            .store(CACHE_AS_COLD, Ordering::Relaxed);
+            .store(CACHE_AS_OLD, Ordering::Relaxed);
     }
 }
 
@@ -188,8 +189,32 @@ pub(crate) struct LRUHandle<T: Clone> {
     file_link: HandleLink<T>,
 
     refs: u32,
-    flags: u8,
-    detached: bool,
+    flags: CacheFlags,
+}
+
+bitflags! {
+/// Cache Option.
+pub(crate) struct CacheFlags: u8 {
+    const DEFAULT = 0b00000000;
+
+    const IN_CACHE = 0b00000001;
+
+    const DETACHED = 0b00000010;
+
+    const LOW_PRI = 0b00000100;
+
+    const BOTTOM_PRI = 0b00001000;
+
+    const IN_LOW_PRI = 0b00010000;
+
+    const IN_HIGH_PRI = 0b00100000;
+}
+}
+
+impl Default for CacheFlags {
+    fn default() -> Self {
+        CacheFlags::DEFAULT
+    }
 }
 
 struct HandleLink<T: Clone> {
@@ -227,11 +252,10 @@ impl<T: Clone> Default for LRUHandle<T> {
             key: Default::default(),
             hash: Default::default(),
             charge: Default::default(),
-            detached: Default::default(),
             page_link: Default::default(),
             file_link: Default::default(),
             refs: 0,
-            flags: 0,
+            flags: Default::default(),
 
             value: None,
         }
@@ -248,15 +272,81 @@ impl<T: Clone> ClockHandle<T> {
 }
 
 impl<T: Clone> LRUHandle<T> {
+    #[inline]
     fn is_in_cache(&self) -> bool {
-        self.flags & FLAG_IN_CACHE > 0
+        self.flags.contains(CacheFlags::IN_CACHE)
     }
 
+    #[inline]
     fn set_in_cache(&mut self, in_cache: bool) {
-        if in_cache {
-            self.flags |= FLAG_IN_CACHE
+        self.flags.set(CacheFlags::IN_CACHE, in_cache)
+    }
+
+    #[inline]
+    fn is_detached(&self) -> bool {
+        self.flags.contains(CacheFlags::DETACHED)
+    }
+
+    #[inline]
+    fn set_detached(&mut self, detached: bool) {
+        self.flags.set(CacheFlags::DETACHED, detached)
+    }
+
+    #[inline]
+    fn priority(&self) -> CachePriority {
+        if self.flags.contains(CacheFlags::BOTTOM_PRI) {
+            CachePriority::Bottom
+        } else if self.flags.contains(CacheFlags::LOW_PRI) {
+            CachePriority::Low
         } else {
-            self.flags &= !FLAG_IN_CACHE
+            CachePriority::High
+        }
+    }
+
+    #[inline]
+    fn set_priority(&mut self, pri: CachePriority) {
+        match pri {
+            CachePriority::High => {
+                self.flags.set(CacheFlags::LOW_PRI, false);
+                self.flags.set(CacheFlags::BOTTOM_PRI, false);
+            }
+            CachePriority::Low => {
+                self.flags.set(CacheFlags::LOW_PRI, true);
+                self.flags.set(CacheFlags::BOTTOM_PRI, false);
+            }
+            CachePriority::Bottom => {
+                self.flags.set(CacheFlags::LOW_PRI, false);
+                self.flags.set(CacheFlags::BOTTOM_PRI, true);
+            }
+        }
+    }
+
+    #[inline]
+    fn set_in_cache_priority(&mut self, pri: CachePriority) {
+        match pri {
+            CachePriority::High => {
+                self.flags.set(CacheFlags::IN_HIGH_PRI, true);
+                self.flags.set(CacheFlags::IN_LOW_PRI, false);
+            }
+            CachePriority::Low => {
+                self.flags.set(CacheFlags::IN_HIGH_PRI, false);
+                self.flags.set(CacheFlags::IN_LOW_PRI, true);
+            }
+            CachePriority::Bottom => {
+                self.flags.set(CacheFlags::IN_HIGH_PRI, false);
+                self.flags.set(CacheFlags::IN_LOW_PRI, false);
+            }
+        }
+    }
+
+    #[inline]
+    fn in_cache_priority(&self) -> CachePriority {
+        if self.flags.contains(CacheFlags::IN_HIGH_PRI) {
+            CachePriority::High
+        } else if self.flags.contains(CacheFlags::IN_LOW_PRI) {
+            CachePriority::Low
+        } else {
+            CachePriority::Bottom
         }
     }
 
@@ -274,8 +364,6 @@ impl<T: Clone> LRUHandle<T> {
         self.refs > 0
     }
 }
-
-const FLAG_IN_CACHE: u8 = 1;
 
 #[derive(Default)]
 struct AtomicCacheStats {
@@ -354,12 +442,13 @@ mod tests {
     use ::std::thread;
 
     use super::*;
+    use crate::page_store::CacheOption;
 
     #[test]
     fn test_lru_base_op() {
         use super::lru::*;
 
-        let c = Arc::new(LRUCache::new(2, -1));
+        let c = Arc::new(LRUCache::new(2, -1, 0.0, 0.0));
 
         let h = c
             .insert(1, Some(vec![1]), 1, CacheOption::default())
@@ -390,6 +479,57 @@ mod tests {
 
         c.erase(3);
         let h = c.lookup(3);
+        assert!(h.is_none());
+    }
+
+    #[test]
+    fn test_lru_pri_op() {
+        use super::lru::*;
+
+        let c = Arc::new(LRUCache::new(10, -1, 0.5, 0.2));
+
+        // fill 1-5 as high, 6-7 as low, 8-10 as bottom.
+        for n in 1..=10 {
+            let p = if n <= 5 {
+                CachePriority::High
+            } else if n <= 7 {
+                CachePriority::Low
+            } else {
+                CachePriority::Bottom
+            };
+            let h = c
+                .insert(n, Some(vec![n]), 1, CacheOption::default().set_priority(p))
+                .unwrap()
+                .unwrap();
+            drop(h);
+        }
+
+        // access low and bottom's values.
+        for n in 6..=10 {
+            let h = c.lookup(n).unwrap();
+            drop(h);
+        }
+
+        // fill addition high element over capacity.
+        let h = c
+            .insert(
+                11,
+                Some(vec![11]),
+                1,
+                CacheOption::default().set_priority(CachePriority::High),
+            )
+            .unwrap()
+            .unwrap();
+        drop(h);
+
+        // 1-5 should not be evict.
+        for n in 1..=5 {
+            let h = c.lookup(n).unwrap();
+            drop(h);
+        }
+
+        // bottom oldest value should be evict first.
+        let h = c.lookup(8);
         assert!(h.is_none());
     }
 

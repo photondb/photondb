@@ -11,10 +11,12 @@ use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 
 use super::{
-    AtomicCacheStats, Cache, CacheEntry, CacheToken, Handle, Key, LRUHandle, CACHE_AS_COLD,
+    AtomicCacheStats, Cache, CacheEntry, CacheToken, Handle, Key, LRUHandle, CACHE_AS_OLD,
     CACHE_DISCARD,
 };
-use crate::page_store::{cache::CACHE_AS_HOT, stats::CacheStats, CacheOption, Result};
+use crate::page_store::{
+    cache::CACHE_AS_RECENT, page_txn::CachePriority, stats::CacheStats, CacheOption, Result,
+};
 
 pub(crate) struct LRUCache<T: Clone> {
     shards: Vec<Mutex<LRUCacheShard<T>>>,
@@ -23,11 +25,23 @@ pub(crate) struct LRUCache<T: Clone> {
 }
 
 struct LRUCacheShard<T: Clone> {
-    head: Box<LRUHandlePtr<T>>,
     table: LRUCacheHandleTable<T>,
     capacity: usize,
 
     lru_usage: Arc<AtomicUsize>,
+
+    high_pri_ratio: f64,
+    lru_high_pri: Box<LRUHandlePtr<T>>,
+    lru_high_usage: Arc<AtomicUsize>,
+    lru_high_capacity: usize,
+
+    low_pri_ratio: f64,
+    lru_low_pri: Box<LRUHandlePtr<T>>,
+    lru_low_usage: Arc<AtomicUsize>,
+    lru_low_capacity: usize,
+
+    lru_bottom_pri: Box<LRUHandlePtr<T>>,
+
     usage: Arc<AtomicUsize>,
 
     stats: Arc<AtomicCacheStats>,
@@ -54,7 +68,13 @@ unsafe impl<T: Clone> Send for LRUHandlePtr<T> {}
 unsafe impl<T: Clone> Sync for LRUHandlePtr<T> {}
 
 impl<T: Clone> LRUCache<T> {
-    pub(crate) fn new(capacity: usize, num_shard_bits: i32) -> Self {
+    pub(crate) fn new(
+        capacity: usize,
+        num_shard_bits: i32,
+        high_pri_ratio: f64,
+        low_pri_ratio: f64,
+    ) -> Self {
+        assert!(high_pri_ratio + low_pri_ratio < 1.0);
         assert!(num_shard_bits < 20);
         let num_shard_bits = if num_shard_bits >= 0 {
             num_shard_bits as u32
@@ -80,7 +100,7 @@ impl<T: Clone> LRUCache<T> {
         let mut shards = Vec::with_capacity(num_shards as usize);
         let mut stats = Vec::with_capacity(num_shards as usize);
         for _ in 0..num_shards {
-            let shard = LRUCacheShard::new(per_shard_cap);
+            let shard = LRUCacheShard::new(per_shard_cap, high_pri_ratio, low_pri_ratio);
             stats.push(shard.stats.clone());
             shards.push(Mutex::new(shard));
         }
@@ -134,10 +154,10 @@ impl<T: Clone> Cache<T> for LRUCache<T> {
             if ptr.is_null() {
                 None
             } else {
-                let token = if unsafe { (*ptr).detached } {
+                let token = if unsafe { (*ptr).is_detached() } {
                     CacheToken::new(CACHE_DISCARD)
                 } else if option.refill_cold_when_not_full() {
-                    CacheToken::new(CACHE_AS_COLD)
+                    CacheToken::new(CACHE_AS_OLD)
                 } else {
                     CacheToken::default()
                 };
@@ -212,17 +232,26 @@ impl<T: Clone> Cache<T> for LRUCache<T> {
 }
 
 impl<T: Clone> LRUCacheShard<T> {
-    pub(crate) fn new(capacity: usize) -> Self {
-        let mut linked = Box::new(LRUHandle::default());
-        linked.page_link.next = linked.as_mut();
-        linked.page_link.prev = linked.as_mut();
-        let ptr = Box::into_raw(linked);
-        let head = Box::new(LRUHandlePtr { ptr });
+    pub(crate) fn new(capacity: usize, high_pri_ratio: f64, low_pri_ratio: f64) -> Self {
+        let mut dummy = Box::new(LRUHandle::default());
+        dummy.page_link.next = dummy.as_mut();
+        dummy.page_link.prev = dummy.as_mut();
+        let ptr = Box::into_raw(dummy);
+        let lru_high_capacity = ((capacity as f64) * high_pri_ratio) as usize;
+        let lru_low_capacity = ((capacity as f64) * low_pri_ratio) as usize;
         Self {
-            head,
             table: LRUCacheHandleTable::new(),
             capacity,
             lru_usage: Default::default(),
+            lru_high_pri: Box::new(LRUHandlePtr { ptr }),
+            lru_high_usage: Default::default(),
+            lru_high_capacity,
+            high_pri_ratio,
+            lru_low_pri: Box::new(LRUHandlePtr { ptr }),
+            lru_low_usage: Default::default(),
+            lru_low_capacity,
+            low_pri_ratio,
+            lru_bottom_pri: Box::new(LRUHandlePtr { ptr }),
             usage: Default::default(),
             stats: Default::default(),
         }
@@ -242,9 +271,9 @@ impl<T: Clone> LRUCacheShard<T> {
                 hash,
                 value,
                 charge,
-                detached: true,
                 ..Default::default()
             });
+            h.set_detached(true);
             h.file_link.next = h.as_mut();
             h.file_link.prev = h.as_mut();
             let handle = Box::into_raw(h);
@@ -255,9 +284,9 @@ impl<T: Clone> LRUCacheShard<T> {
             value,
             hash,
             charge,
-            detached: false,
             ..Default::default()
         });
+        h.set_priority(option.priority());
         h.file_link.next = h.as_mut();
         h.file_link.prev = h.as_mut();
         let lhd = Box::into_raw(h);
@@ -273,7 +302,7 @@ impl<T: Clone> LRUCacheShard<T> {
 
     unsafe fn release(&mut self, h: *mut LRUHandle<T>, token: CacheToken) {
         assert!(!h.is_null());
-        if (*h).detached {
+        if (*h).is_detached() {
             drop(Box::from_raw(h));
             return;
         }
@@ -291,8 +320,8 @@ impl<T: Clone> LRUCacheShard<T> {
             if self.usage.load(Ordering::Relaxed) <= self.capacity
                 && !token.returning_behavior_match(CACHE_DISCARD)
             {
-                let as_hot = token.returning_behavior_match(CACHE_AS_HOT);
-                self.link_lru(self.head.mut_ptr(), h, as_hot);
+                let as_recent = token.returning_behavior_match(CACHE_AS_RECENT);
+                self.link_lru(h, as_recent);
                 self.link_file(h);
                 return;
             }
@@ -351,27 +380,146 @@ impl<T: Clone> LRUCacheShard<T> {
         }
     }
 
-    unsafe fn link_lru(&mut self, head: *mut LRUHandle<T>, e: *mut LRUHandle<T>, as_recent: bool) {
+    unsafe fn link_lru(&mut self, e: *mut LRUHandle<T>, as_recent: bool) {
         assert!(!e.is_null());
-        if as_recent {
-            (*e).page_link.next = head;
-            (*e).page_link.prev = (*head).page_link.prev;
+        assert!((*e).page_link.next.is_null());
+        assert!((*e).page_link.prev.is_null());
+
+        let pri = (*e).priority();
+        if self.high_pri_ratio > 0.0 && matches!(pri, CachePriority::High) {
+            if as_recent {
+                let lru = self.lru_high_pri.mut_ptr();
+                (*e).page_link.next = lru;
+                (*e).page_link.prev = (*lru).page_link.prev;
+            } else {
+                let lru = self.lru_low_pri.mut_ptr();
+                (*e).page_link.prev = lru;
+                (*e).page_link.next = (*lru).page_link.next;
+            }
+            (*(*e).page_link.prev).page_link.next = e;
+            (*(*e).page_link.next).page_link.prev = e;
+            (*e).set_in_cache_priority(CachePriority::High);
+            self.lru_high_usage
+                .fetch_add((*e).charge, Ordering::Relaxed);
+            self.maintain_priority_size();
+        } else if self.low_pri_ratio > 0.0
+            && matches!(pri, CachePriority::High | CachePriority::Low)
+        {
+            if as_recent {
+                let lru = self.lru_low_pri.mut_ptr();
+                (*e).page_link.next = (*lru).page_link.next;
+                (*e).page_link.prev = lru;
+            } else {
+                let lru = self.lru_bottom_pri.mut_ptr();
+                (*e).page_link.prev = lru;
+                (*e).page_link.next = (*lru).page_link.next;
+            }
+            (*(*e).page_link.prev).page_link.next = e;
+            (*(*e).page_link.next).page_link.prev = e;
+            (*e).set_in_cache_priority(CachePriority::Low);
+            self.lru_low_usage.fetch_add((*e).charge, Ordering::Relaxed);
+            self.maintain_priority_size();
+            if as_recent || std::ptr::eq(self.lru_bottom_pri.mut_ptr(), self.lru_low_pri.mut_ptr())
+            {
+                self.lru_low_pri = Box::new(LRUHandlePtr { ptr: e });
+            }
         } else {
-            (*e).page_link.prev = head;
-            (*e).page_link.next = (*head).page_link.next;
+            if as_recent {
+                let lru = self.lru_bottom_pri.mut_ptr();
+                (*e).page_link.next = (*lru).page_link.next;
+                (*e).page_link.prev = lru;
+            } else {
+                let lru = self.lru_high_pri.mut_ptr();
+                (*e).page_link.prev = lru;
+                (*e).page_link.next = (*lru).page_link.next;
+            }
+            (*(*e).page_link.prev).page_link.next = e;
+            (*(*e).page_link.next).page_link.prev = e;
+            (*e).set_in_cache_priority(CachePriority::Bottom);
+            if as_recent || std::ptr::eq(self.lru_high_pri.mut_ptr(), self.lru_bottom_pri.mut_ptr())
+            {
+                if std::ptr::eq(self.lru_bottom_pri.mut_ptr(), self.lru_low_pri.mut_ptr()) {
+                    self.lru_low_pri = Box::new(LRUHandlePtr { ptr: e });
+                }
+                self.lru_bottom_pri = Box::new(LRUHandlePtr { ptr: e });
+            }
         }
-        (*(*e).page_link.prev).page_link.next = e;
-        (*(*e).page_link.next).page_link.prev = e;
         self.lru_usage.fetch_add((*e).charge, Ordering::Relaxed);
+    }
+
+    unsafe fn maintain_priority_size(&mut self) {
+        // demote high -> low.
+        while self.lru_high_usage.load(Ordering::Relaxed) > self.lru_high_capacity {
+            self.lru_low_pri = Box::new(LRUHandlePtr {
+                ptr: (*self.lru_low_pri.mut_ptr()).page_link.next,
+            });
+            assert!(!std::ptr::eq(
+                self.lru_low_pri.mut_ptr(),
+                self.lru_high_pri.mut_ptr()
+            ));
+            (*self.lru_low_pri.mut_ptr()).set_in_cache_priority(CachePriority::Low);
+            assert!(
+                self.lru_high_usage.load(Ordering::Relaxed) >= (*self.lru_low_pri.mut_ptr()).charge
+            );
+            let charge = (*self.lru_low_pri.mut_ptr()).charge;
+            self.lru_high_usage.fetch_sub(charge, Ordering::Relaxed);
+            self.lru_low_usage.fetch_add(charge, Ordering::Relaxed);
+        }
+
+        // demote low -> bottom.
+        while self.lru_low_usage.load(Ordering::Relaxed) > self.lru_low_capacity {
+            self.lru_bottom_pri = Box::new(LRUHandlePtr {
+                ptr: (*self.lru_bottom_pri.mut_ptr()).page_link.next,
+            });
+            assert!(!std::ptr::eq(
+                self.lru_bottom_pri.mut_ptr(),
+                self.lru_high_pri.mut_ptr()
+            ));
+            (*self.lru_bottom_pri.mut_ptr()).set_in_cache_priority(CachePriority::Bottom);
+            assert!(
+                self.lru_low_usage.load(Ordering::Relaxed)
+                    >= (*self.lru_bottom_pri.mut_ptr()).charge
+            );
+            self.lru_low_usage
+                .fetch_sub((*self.lru_bottom_pri.mut_ptr()).charge, Ordering::Relaxed);
+        }
     }
 
     unsafe fn unlink_lru(&mut self, e: *mut LRUHandle<T>) {
         assert!(!e.is_null());
+        assert!(!(*e).page_link.next.is_null());
+        assert!(!(*e).page_link.prev.is_null());
+
+        if std::ptr::eq(self.lru_low_pri.mut_ptr(), e) {
+            self.lru_low_pri = Box::new(LRUHandlePtr {
+                ptr: (*e).page_link.prev,
+            })
+        }
+
+        if std::ptr::eq(self.lru_bottom_pri.mut_ptr(), e) {
+            self.lru_bottom_pri = Box::new(LRUHandlePtr {
+                ptr: (*e).page_link.prev,
+            })
+        }
+
         (*(*e).page_link.next).page_link.prev = (*e).page_link.prev;
         (*(*e).page_link.prev).page_link.next = (*e).page_link.next;
         (*e).page_link.prev = ptr::null_mut();
         (*e).page_link.next = ptr::null_mut();
+        assert!(self.lru_usage.load(Ordering::Relaxed) >= (*e).charge);
         self.lru_usage.fetch_sub((*e).charge, Ordering::Relaxed);
+        match (*e).in_cache_priority() {
+            CachePriority::High => {
+                assert!(self.lru_high_usage.load(Ordering::Relaxed) >= (*e).charge);
+                self.lru_high_usage
+                    .fetch_sub((*e).charge, Ordering::Relaxed);
+            }
+            CachePriority::Low => {
+                assert!(self.lru_low_usage.load(Ordering::Relaxed) >= (*e).charge);
+                self.lru_low_usage.fetch_sub((*e).charge, Ordering::Relaxed);
+            }
+            CachePriority::Bottom => {}
+        }
     }
 
     unsafe fn evict_lru(&mut self, charge: usize, option: CacheOption) -> bool {
@@ -381,9 +529,12 @@ impl<T: Clone> LRUCacheShard<T> {
             return false;
         }
         while self.usage.load(Ordering::Relaxed) + charge > self.capacity
-            && !std::ptr::eq((*self.head.ptr).page_link.next, self.head.ptr)
+            && !std::ptr::eq(
+                (*self.lru_high_pri.ptr).page_link.next,
+                self.lru_high_pri.ptr,
+            )
         {
-            let old_ptr = (*self.head.ptr).page_link.next;
+            let old_ptr = (*self.lru_high_pri.ptr).page_link.next;
             self.table.remove((*old_ptr).key);
             self.unlink_lru(old_ptr);
             self.unlink_file(old_ptr);

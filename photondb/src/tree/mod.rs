@@ -685,7 +685,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                             return true;
                         }
                         if let Some(ctoken) = ctoken {
-                            ctoken.return_cache_as_cold();
+                            ctoken.return_cache_as_old();
                         }
                         builder.add(SortedPageIter::from(page));
                         page_size += page.size();

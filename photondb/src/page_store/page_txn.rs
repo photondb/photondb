@@ -27,9 +27,9 @@ pub struct CacheOption: u32 {
     /// It's normally be used when read some cold data(not in cache) and discard them soon(i.g. consolidate)
     const REFILL_COLD_WHEN_NOT_FULL = 0b00000001;
 
-    const HIGH_PRI = 0b00000010;
+    const LOW_PRI = 0b00000010;
 
-    const LOW_PRI = 0b00000100;
+    const BOTTOM_PRI = 0b00000100;
 }
 }
 
@@ -41,27 +41,27 @@ impl Default for CacheOption {
 
 impl CacheOption {
     pub(crate) fn priority(&self) -> CachePriority {
-        if self.contains(CacheOption::HIGH_PRI) {
-            CachePriority::High
-        } else if self.contains(CacheOption::LOW_PRI) {
+        if self.contains(CacheOption::LOW_PRI) {
             CachePriority::Low
-        } else {
+        } else if self.contains(CacheOption::BOTTOM_PRI) {
             CachePriority::Bottom
+        } else {
+            CachePriority::High
         }
     }
 
     pub(crate) fn set_priority(mut self, pri: CachePriority) -> Self {
         match pri {
             CachePriority::High => {
-                self.set(CacheOption::HIGH_PRI, true);
+                self.set(CacheOption::BOTTOM_PRI, false);
                 self.set(CacheOption::LOW_PRI, false);
             }
             CachePriority::Low => {
-                self.set(CacheOption::HIGH_PRI, false);
+                self.set(CacheOption::BOTTOM_PRI, false);
                 self.set(CacheOption::LOW_PRI, true);
             }
             CachePriority::Bottom => {
-                self.set(CacheOption::HIGH_PRI, false);
+                self.set(CacheOption::BOTTOM_PRI, true);
                 self.set(CacheOption::LOW_PRI, false);
             }
         };
@@ -78,7 +78,7 @@ impl CacheOption {
     }
 }
 
-pub enum CachePriority {
+pub(crate) enum CachePriority {
     High,
     Low,
     Bottom,
