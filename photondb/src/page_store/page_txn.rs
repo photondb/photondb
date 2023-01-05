@@ -19,7 +19,7 @@ use crate::{
 
 bitflags! {
 /// Cache Option.
-pub struct CacheOption: u32 {
+pub struct CacheOption: u8 {
     /// Default: read from cache first, read disk and refill cache as recent used when cache miss.
     const DEFAULT = 0b00000000;
     /// RefillColdWhenNotFull: read from cache first and read disk when cache miss.

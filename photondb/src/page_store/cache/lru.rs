@@ -301,7 +301,7 @@ impl<T: Clone> LRUCacheShard<T> {
     }
 
     unsafe fn release(&mut self, h: *mut LRUHandle<T>, token: CacheToken) {
-        assert!(!h.is_null());
+        debug_assert!(!h.is_null());
         if (*h).is_detached() {
             drop(Box::from_raw(h));
             return;
@@ -372,7 +372,7 @@ impl<T: Clone> LRUCacheShard<T> {
     }
 
     unsafe fn try_remove_cache_handle(&mut self, h: *mut LRUHandle<T>) {
-        assert!(!h.is_null());
+        debug_assert!(!h.is_null());
         if !(*h).has_refs() {
             self.unlink_lru(h);
             self.unlink_file(h);
@@ -381,9 +381,9 @@ impl<T: Clone> LRUCacheShard<T> {
     }
 
     unsafe fn link_lru(&mut self, e: *mut LRUHandle<T>, as_recent: bool) {
-        assert!(!e.is_null());
-        assert!((*e).page_link.next.is_null());
-        assert!((*e).page_link.prev.is_null());
+        debug_assert!(!e.is_null());
+        debug_assert!((*e).page_link.next.is_null());
+        debug_assert!((*e).page_link.prev.is_null());
 
         let pri = (*e).priority();
         if self.high_pri_ratio > 0.0 && matches!(pri, CachePriority::High) {
@@ -453,12 +453,12 @@ impl<T: Clone> LRUCacheShard<T> {
             self.lru_low_pri = Box::new(LRUHandlePtr {
                 ptr: (*self.lru_low_pri.mut_ptr()).page_link.next,
             });
-            assert!(!std::ptr::eq(
+            debug_assert!(!std::ptr::eq(
                 self.lru_low_pri.mut_ptr(),
                 self.lru_high_pri.mut_ptr()
             ));
             (*self.lru_low_pri.mut_ptr()).set_in_cache_priority(CachePriority::Low);
-            assert!(
+            debug_assert!(
                 self.lru_high_usage.load(Ordering::Relaxed) >= (*self.lru_low_pri.mut_ptr()).charge
             );
             let charge = (*self.lru_low_pri.mut_ptr()).charge;
@@ -471,12 +471,12 @@ impl<T: Clone> LRUCacheShard<T> {
             self.lru_bottom_pri = Box::new(LRUHandlePtr {
                 ptr: (*self.lru_bottom_pri.mut_ptr()).page_link.next,
             });
-            assert!(!std::ptr::eq(
+            debug_assert!(!std::ptr::eq(
                 self.lru_bottom_pri.mut_ptr(),
                 self.lru_high_pri.mut_ptr()
             ));
             (*self.lru_bottom_pri.mut_ptr()).set_in_cache_priority(CachePriority::Bottom);
-            assert!(
+            debug_assert!(
                 self.lru_low_usage.load(Ordering::Relaxed)
                     >= (*self.lru_bottom_pri.mut_ptr()).charge
             );
@@ -486,9 +486,9 @@ impl<T: Clone> LRUCacheShard<T> {
     }
 
     unsafe fn unlink_lru(&mut self, e: *mut LRUHandle<T>) {
-        assert!(!e.is_null());
-        assert!(!(*e).page_link.next.is_null());
-        assert!(!(*e).page_link.prev.is_null());
+        debug_assert!(!e.is_null());
+        debug_assert!(!(*e).page_link.next.is_null());
+        debug_assert!(!(*e).page_link.prev.is_null());
 
         if std::ptr::eq(self.lru_low_pri.mut_ptr(), e) {
             self.lru_low_pri = Box::new(LRUHandlePtr {
@@ -506,16 +506,16 @@ impl<T: Clone> LRUCacheShard<T> {
         (*(*e).page_link.prev).page_link.next = (*e).page_link.next;
         (*e).page_link.prev = ptr::null_mut();
         (*e).page_link.next = ptr::null_mut();
-        assert!(self.lru_usage.load(Ordering::Relaxed) >= (*e).charge);
+        debug_assert!(self.lru_usage.load(Ordering::Relaxed) >= (*e).charge);
         self.lru_usage.fetch_sub((*e).charge, Ordering::Relaxed);
         match (*e).in_cache_priority() {
             CachePriority::High => {
-                assert!(self.lru_high_usage.load(Ordering::Relaxed) >= (*e).charge);
+                debug_assert!(self.lru_high_usage.load(Ordering::Relaxed) >= (*e).charge);
                 self.lru_high_usage
                     .fetch_sub((*e).charge, Ordering::Relaxed);
             }
             CachePriority::Low => {
-                assert!(self.lru_low_usage.load(Ordering::Relaxed) >= (*e).charge);
+                debug_assert!(self.lru_low_usage.load(Ordering::Relaxed) >= (*e).charge);
                 self.lru_low_usage.fetch_sub((*e).charge, Ordering::Relaxed);
             }
             CachePriority::Bottom => {}
@@ -545,7 +545,7 @@ impl<T: Clone> LRUCacheShard<T> {
     }
 
     unsafe fn link_file(&mut self, e: *mut LRUHandle<T>) {
-        assert!(!e.is_null());
+        debug_assert!(!e.is_null());
         let file_id = (*e).key.file_id();
         match self.table.files.entry(file_id) {
             Entry::Occupied(ent) => {
@@ -562,7 +562,7 @@ impl<T: Clone> LRUCacheShard<T> {
     }
 
     unsafe fn unlink_file(&mut self, e: *mut LRUHandle<T>) -> bool {
-        assert!(!e.is_null());
+        debug_assert!(!e.is_null());
         let next = (*e).file_link.next;
         (*(*e).file_link.next).file_link.prev = (*e).file_link.prev;
         (*(*e).file_link.prev).file_link.next = (*e).file_link.next;
@@ -580,9 +580,9 @@ impl<T: Clone> LRUCacheShard<T> {
     }
 
     unsafe fn clear_handle(&mut self, lh: *mut LRUHandle<T>) {
-        assert!(!lh.is_null());
-        assert!(!(*lh).is_in_cache());
-        assert!(!(*lh).has_refs());
+        debug_assert!(!lh.is_null());
+        debug_assert!(!(*lh).is_in_cache());
+        debug_assert!(!(*lh).has_refs());
         self.usage.fetch_sub((*lh).charge, Ordering::Relaxed);
         drop(Box::from_raw(lh));
     }
@@ -597,8 +597,8 @@ impl<T: Clone> LRUCacheHandleTable<T> {
     }
 
     unsafe fn insert(&mut self, proto: *mut LRUHandle<T>) -> Result<*mut LRUHandle<T>> {
-        assert!(!proto.is_null());
-        assert!(!(*proto).is_in_cache());
+        debug_assert!(!proto.is_null());
+        debug_assert!(!(*proto).is_in_cache());
         (*proto).set_in_cache(true);
 
         let old = self
@@ -606,8 +606,9 @@ impl<T: Clone> LRUCacheHandleTable<T> {
             .insert((*proto).key.into(), LRUHandlePtr { ptr: proto });
 
         if let Some(LRUHandlePtr { ptr }) = old {
+            #[cfg(debug_assertions)]
             assert_eq!((*ptr).key, (*proto).key);
-            assert!((*ptr).is_in_cache());
+            debug_assert!((*ptr).is_in_cache());
             (*ptr).set_in_cache(false);
             return Ok(ptr);
         }
