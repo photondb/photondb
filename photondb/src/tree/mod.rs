@@ -667,6 +667,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
         let mut last_page = view.page.clone();
         let mut page_addrs = Vec::with_capacity(chain_len);
         let mut range_limit = None;
+        let opt = CacheOption::default().set_refill_cold_when_not_full(true);
         self.walk_page(
             view.addr,
             |addr, page, ctoken| {
@@ -684,7 +685,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                             return true;
                         }
                         if let Some(ctoken) = ctoken {
-                            ctoken.return_cache_as_cold();
+                            ctoken.return_cache_as_old();
                         }
                         builder.add(SortedPageIter::from(page));
                         page_size += page.size();
@@ -700,7 +701,7 @@ impl<'a, E: Env> TreeTxn<'a, E> {
                 page_addrs.push(addr);
                 false
             },
-            CacheOption::REFILL_COLD_WHEN_NOT_FULL,
+            opt,
         )
         .await?;
         let iter = MergingPageIter::new(builder.build(), range_limit);

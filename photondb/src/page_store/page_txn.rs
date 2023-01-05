@@ -21,20 +21,67 @@ bitflags! {
 /// Cache Option.
 pub struct CacheOption: u8 {
     /// Default: read from cache first, read disk and refill cache as recent used when cache miss.
-    const DEFAULT = 0;
+    const DEFAULT = 0b00000000;
     /// RefillColdWhenNotFull: read from cache first and read disk when cache miss.
     /// It will refill cache as cold when cache has space after cache miss and Not refill cache when cache already full.
     /// It's normally be used when read some cold data(not in cache) and discard them soon(i.g. consolidate)
-    const REFILL_COLD_WHEN_NOT_FULL = 1;
+    const REFILL_COLD_WHEN_NOT_FULL = 0b00000001;
+
+    const LOW_PRI = 0b00000010;
+
+    const BOTTOM_PRI = 0b00000100;
 }
 }
 
 impl Default for CacheOption {
     fn default() -> Self {
-        Self {
-            bits: CacheOption::DEFAULT.bits,
+        CacheOption::DEFAULT
+    }
+}
+
+impl CacheOption {
+    pub(crate) fn priority(&self) -> CachePriority {
+        if self.contains(CacheOption::LOW_PRI) {
+            CachePriority::Low
+        } else if self.contains(CacheOption::BOTTOM_PRI) {
+            CachePriority::Bottom
+        } else {
+            CachePriority::High
         }
     }
+
+    pub(crate) fn set_priority(mut self, pri: CachePriority) -> Self {
+        match pri {
+            CachePriority::High => {
+                self.set(CacheOption::BOTTOM_PRI, false);
+                self.set(CacheOption::LOW_PRI, false);
+            }
+            CachePriority::Low => {
+                self.set(CacheOption::BOTTOM_PRI, false);
+                self.set(CacheOption::LOW_PRI, true);
+            }
+            CachePriority::Bottom => {
+                self.set(CacheOption::BOTTOM_PRI, true);
+                self.set(CacheOption::LOW_PRI, false);
+            }
+        };
+        self
+    }
+
+    pub(crate) fn refill_cold_when_not_full(&self) -> bool {
+        self.contains(CacheOption::REFILL_COLD_WHEN_NOT_FULL)
+    }
+
+    pub(crate) fn set_refill_cold_when_not_full(mut self, v: bool) -> Self {
+        self.set(CacheOption::REFILL_COLD_WHEN_NOT_FULL, v);
+        self
+    }
+}
+
+pub(crate) enum CachePriority {
+    High,
+    Low,
+    Bottom,
 }
 
 type CacheEntryGuard = CacheEntry<Vec<u8>, LRUCache<Vec<u8>>>;

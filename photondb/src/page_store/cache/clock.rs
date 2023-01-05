@@ -5,7 +5,7 @@ use ::std::{
 };
 
 use super::*;
-use crate::page_store::stats::CacheStats;
+use crate::page_store::{stats::CacheStats, CacheOption};
 
 const LOAD_FACTOR: f64 = 0.7;
 const STRICT_LOAD_FACTOR: f64 = 0.84;

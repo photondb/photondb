@@ -15,7 +15,7 @@ pub(super) struct FileReaderCache<E: Env> {
 
 impl<E: Env> FileReaderCache<E> {
     pub(super) fn new(max_size: u64) -> Self {
-        let cache = Arc::new(LRUCache::new(max_size as usize, -1));
+        let cache = Arc::new(LRUCache::new(max_size as usize, -1, 0.0, 0.0));
         Self {
             cache,
             _marker: PhantomData,

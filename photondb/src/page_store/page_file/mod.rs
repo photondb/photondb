@@ -45,8 +45,11 @@ pub(crate) mod facade {
     };
     use crate::{
         env::{Env, PositionalReader, SequentialWriter},
+        page::PageRef,
         page_store::{
-            page_txn::CacheOption, stats::CacheStats, Cache, CacheEntry, Error, LRUCache, Result,
+            page_txn::{CacheOption, CachePriority},
+            stats::CacheStats,
+            Cache, CacheEntry, Error, LRUCache, Result,
         },
         PageStoreOptions,
     };
@@ -78,7 +81,7 @@ pub(crate) mod facade {
             let base = base.into();
             let base_dir = env.open_dir(&base).await.expect("open base dir fail");
             let reader_cache = FileReaderCache::new(options.cache_file_reader_capacity);
-            let page_cache = Arc::new(LRUCache::new(options.cache_capacity, -1));
+            let page_cache = Arc::new(LRUCache::new(options.cache_capacity, -1, 0.5, 0.0));
             let use_direct = options.use_direct_io;
             let prepopulate_cache_on_flush = options.prepopulate_cache_on_flush;
             Self {
@@ -124,13 +127,24 @@ pub(crate) mod facade {
             file_meta: &FileMeta,
             addr: u64,
             handle: PageHandle,
-            hint: CacheOption,
+            mut hint: CacheOption,
         ) -> Result<(CacheEntry<Vec<u8>, LRUCache<Vec<u8>>>, /* hit */ bool)> {
             if let Some(cache_entry) = self.page_cache.lookup(addr) {
                 return Ok((cache_entry, true));
             }
 
             let buf = self.read_file_page(file_id, file_meta, handle).await?;
+
+            let is_inner = {
+                let page =
+                    PageRef::new(unsafe { std::slice::from_raw_parts(buf.as_ptr(), buf.len()) });
+                page.tier().is_inner()
+            };
+            hint = hint.set_priority(if is_inner {
+                CachePriority::High
+            } else {
+                CachePriority::Low
+            });
 
             let charge = buf.len();
             let cache_entry = self.page_cache.insert(addr, Some(buf), charge, hint)?;
