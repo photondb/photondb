@@ -77,14 +77,14 @@ pub(crate) mod facade {
             env: E,
             base: impl Into<PathBuf>,
             options: &PageStoreOptions,
-        ) -> Self {
+        ) -> Result<Self> {
             let base = base.into();
-            let base_dir = env.open_dir(&base).await.expect("open base dir fail");
+            let base_dir = env.open_dir(&base).await?;
             let reader_cache = FileReaderCache::new(options.cache_file_reader_capacity);
             let page_cache = Arc::new(LRUCache::new(options.cache_capacity, -1, 0.5, 0.0));
             let use_direct = options.use_direct_io;
             let prepopulate_cache_on_flush = options.prepopulate_cache_on_flush;
-            Self {
+            Ok(Self {
                 env,
                 base,
                 base_dir,
@@ -92,7 +92,7 @@ pub(crate) mod facade {
                 prepopulate_cache_on_flush,
                 reader_cache,
                 page_cache,
-            }
+            })
         }
 
         /// Create `MapFileBuilder` to write a new map file.
@@ -104,11 +104,7 @@ pub(crate) mod facade {
         ) -> Result<FileBuilder<E>> {
             // TODO: switch to env in suitable time.
             let path = self.base.join(format!("{}_{file_id}", FILE_PREFIX));
-            let writer = self
-                .env
-                .open_sequential_writer(path.to_owned())
-                .await
-                .expect("open writer for file_id: {file_id} fail");
+            let writer = self.env.open_sequential_writer(path.to_owned()).await?;
             let use_direct = self.use_direct && writer.direct_io_ify().is_ok();
             Ok(FileBuilder::new(
                 file_id,
@@ -213,17 +209,14 @@ pub(crate) mod facade {
             self.reader_cache
                 .get_with(file_id, async move {
                     let (prefix, id) = (FILE_PREFIX, file_id);
-                    let (file, file_size) = self
-                        .open_positional_reader(prefix, id)
-                        .await
-                        .expect("open reader for file_id: {file_id} fail");
+                    let (file, file_size) = self.open_positional_reader(prefix, id).await?;
                     let use_direct = self.use_direct && file.direct_io_ify().is_ok();
-                    Arc::new(FileReader::from(
+                    Ok(Arc::new(FileReader::from(
                         file,
                         use_direct,
                         block_size,
                         file_size as usize,
-                    ))
+                    )))
                 })
                 .await
         }
@@ -245,17 +238,8 @@ pub(crate) mod facade {
             file_id: u32,
         ) -> Result<(E::PositionalReader, u64)> {
             let path = self.base.join(format!("{}_{file_id}", prefix));
-            let file_size = self
-                .env
-                .metadata(&path)
-                .await
-                .expect("read fs metadata fail")
-                .len;
-            let file = self
-                .env
-                .open_positional_reader(path)
-                .await
-                .expect("open reader for file_id: {file_id} fail");
+            let file_size = self.env.metadata(&path).await?.len;
+            let file = self.env.open_positional_reader(path).await?;
             Ok((file, file_size))
         }
 
@@ -339,7 +323,9 @@ pub(crate) mod facade {
         fn test_file_builder() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_builder").unwrap();
-            let files = PageFiles::new(env, base.path(), &test_option()).await;
+            let files = PageFiles::new(env, base.path(), &test_option())
+                .await
+                .unwrap();
             let builder = files
                 .new_file_builder(11233, Compression::ZSTD, ChecksumType::NONE)
                 .await
@@ -360,7 +346,7 @@ pub(crate) mod facade {
             let base = TempDir::new("test_dread").unwrap();
             let mut opt = test_option();
             opt.page_checksum_type = ChecksumType::NONE;
-            let files = PageFiles::new(env, base.path(), &opt).await;
+            let files = PageFiles::new(env, base.path(), &opt).await.unwrap();
             let file_id = 2;
             let (group, info) = {
                 let b = files
@@ -416,7 +402,9 @@ pub(crate) mod facade {
         fn test_simple_write_reader() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_simple_rw").unwrap();
-            let files = PageFiles::new(env, base.path(), &test_option()).await;
+            let files = PageFiles::new(env, base.path(), &test_option())
+                .await
+                .unwrap();
 
             let file_id = 2;
             {
@@ -456,7 +444,9 @@ pub(crate) mod facade {
         fn test_query_page_id_by_addr() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_query_id_by_addr").unwrap();
-            let files = PageFiles::new(env, base.path(), &test_option()).await;
+            let files = PageFiles::new(env, base.path(), &test_option())
+                .await
+                .unwrap();
             let file_id = 1;
             let page_addr1 = page_addr(file_id, 0);
             let page_addr2 = page_addr(file_id, 1);
@@ -496,7 +486,9 @@ pub(crate) mod facade {
         fn test_get_child_page() {
             let env = crate::env::Photon;
             let base = TempDir::new("test_get_child_page").unwrap();
-            let files = PageFiles::new(env, base.path(), &test_option()).await;
+            let files = PageFiles::new(env, base.path(), &test_option())
+                .await
+                .unwrap();
 
             let file_id = 1;
             let page_addr1 = page_addr(file_id, 0);
@@ -534,7 +526,9 @@ pub(crate) mod facade {
 
             let env = crate::env::Photon;
             let base = TempDir::new("test_get_child_page").unwrap();
-            let files = PageFiles::new(env, base.path(), &test_option()).await;
+            let files = PageFiles::new(env, base.path(), &test_option())
+                .await
+                .unwrap();
             new_file(&files, 0).await;
             new_file(&files, 1).await;
             new_file(&files, 3).await;

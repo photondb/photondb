@@ -585,7 +585,7 @@ mod tests {
             10,
             DeltaVersion::default(),
         )));
-        let page_files = Arc::new(PageFiles::new(Photon, dir, &options).await);
+        let page_files = Arc::new(PageFiles::new(Photon, dir, &options).await.unwrap());
         ReclaimCtx {
             options,
             shutdown,

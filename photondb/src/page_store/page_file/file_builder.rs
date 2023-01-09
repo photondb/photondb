@@ -398,8 +398,7 @@ impl<'a, E: Env> BufferedWriter<'a, E> {
         }
         self.file
             .write_all(&self.buffer.as_bytes()[..self.buf_pos])
-            .await
-            .expect("flush page file error");
+            .await?;
         self.buf_pos = 0;
         Ok(())
     }
@@ -407,10 +406,7 @@ impl<'a, E: Env> BufferedWriter<'a, E> {
     pub(crate) async fn flush_and_sync(&mut self) -> Result<()> {
         self.flush().await?;
         if self.use_direct {
-            self.file
-                .truncate(self.actual_data_size as u64)
-                .await
-                .expect("set set file len fail");
+            self.file.truncate(self.actual_data_size as u64).await?;
         }
         // panic when sync fail, https://wiki.postgresql.org/wiki/Fsync_Errors
         self.file.sync_all().await.expect("sync file fail");

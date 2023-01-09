@@ -51,7 +51,7 @@ impl<E: Env> PageStore<E> {
         let summary = Self::apply_version_edits(versions);
         debug!("Recover with file summary {summary:?}");
 
-        let page_files = PageFiles::new(env, path.as_ref(), options).await;
+        let page_files = PageFiles::new(env, path.as_ref(), options).await?;
 
         let mut builder = FileInfoBuilder::new(&page_files);
         Self::recover_page_groups(&mut builder, &summary.active_files).await?;
