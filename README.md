@@ -24,13 +24,13 @@ Features:
 
 ## Progress
 
-We have published the `photondb` crate v0.0.2. You can try some examples to see what it can do so far. It is important to note that the current version is still too young to be used for anything serious.
+We have published the `photondb` crate v0.0.4. You can try some examples to see what it can do so far. It is important to note that the current version is still too young to be used for anything serious.
 
 Use the synchronous APIs:
 
 ```toml
 [dependencies]
-photondb = "0.0.2"
+photondb = "0.0.4"
 ```
 
 ```rust
@@ -66,7 +66,7 @@ Use the asynchronous APIs:
 
 ```toml
 [dependencies]
-photondb = "0.0.2"
+photondb = "0.0.4"
 photonio = "0.0.5"
 ```
 
