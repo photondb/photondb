@@ -55,13 +55,7 @@ impl<E: Env> Manifest<E> {
         match self.env.create_dir_all(&self.base).await {
             Ok(_) => {}
             Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-                if !self
-                    .env
-                    .metadata(&self.base)
-                    .await
-                    .expect("open base dir fail")
-                    .is_dir
-                {
+                if !self.env.metadata(&self.base).await?.is_dir {
                     panic!("base dir is not a dir")
                 }
             }
@@ -71,11 +65,7 @@ impl<E: Env> Manifest<E> {
     }
 
     async fn open_base_dir(&mut self) -> Result<()> {
-        let base_dir = self
-            .env
-            .open_dir(&self.base)
-            .await
-            .expect("open base dir fail");
+        let base_dir = self.env.open_dir(&self.base).await?;
         self.base_dir = Some(base_dir);
         Ok(())
     }
@@ -113,11 +103,7 @@ impl<E: Env> Manifest<E> {
             let path = self
                 .base
                 .join(format!("{}_{}", MANIFEST_FILE_NAME, file_num));
-            let current_writer = self
-                .env
-                .open_sequential_writer(&path)
-                .await
-                .expect("create new manifest file fail");
+            let current_writer = self.env.open_sequential_writer(&path).await?;
             current = Some(ManifestWriter {
                 current_file_size: 0,
                 current_writer,
@@ -181,14 +167,10 @@ impl<E: Env> Manifest<E> {
             let path = self
                 .base
                 .join(format!("{}_{}", MANIFEST_FILE_NAME, current_file));
-            let reader = self
-                .env
-                .open_positional_reader(path)
-                .await
-                .expect("open manifest fail");
+            let reader = self.env.open_positional_reader(path).await?;
             let mut decoder = VersionEditDecoder::new(reader);
             let mut ves = Vec::new();
-            while let Some(ve) = decoder.next_record().await.expect("manifest decode error") {
+            while let Some(ve) = decoder.next_record().await.map_err(|_| Error::Corrupted)? {
                 ves.push(ve)
             }
             ves
@@ -210,8 +192,7 @@ impl<E: Env> Manifest<E> {
         let mut file_num_bytes = vec![0u8; core::mem::size_of::<u32>()];
         curr_file_reader
             .read_exact_at(&mut file_num_bytes, 0)
-            .await
-            .expect("read current file fail");
+            .await?;
         let file_num = u32::from_le_bytes(
             file_num_bytes[0..core::mem::size_of::<u32>()]
                 .try_into()
@@ -227,15 +208,8 @@ impl<E: Env> Manifest<E> {
                 .join(format!("curr.{}.{}", file_num, TEMPFILE_SUFFIX));
 
             {
-                let mut tmp_file = self
-                    .env
-                    .open_sequential_writer(&tmp_path)
-                    .await
-                    .expect("create tmp current fail");
-                tmp_file
-                    .write_all(&file_num.to_le_bytes())
-                    .await
-                    .expect("write file_num to tmp fail");
+                let mut tmp_file = self.env.open_sequential_writer(&tmp_path).await?;
+                tmp_file.write_all(&file_num.to_le_bytes()).await?;
                 tmp_file
                     .sync_all()
                     .await
@@ -280,7 +254,7 @@ impl<E: Env> Manifest<E> {
         }
 
         let mut wait_remove_paths = Vec::new();
-        for path in self.env.read_dir(&self.base).expect("open base dir fail") {
+        for path in self.env.read_dir(&self.base)? {
             let file_path = path.unwrap().path();
             if let Some(ext) = file_path.extension() {
                 if ext.to_str().unwrap() == TEMPFILE_SUFFIX {
@@ -298,10 +272,7 @@ impl<E: Env> Manifest<E> {
 
         let need_remove = !wait_remove_paths.is_empty();
         for path in wait_remove_paths {
-            self.env
-                .remove_file(path)
-                .await
-                .expect("remove obsolete file fail")
+            self.env.remove_file(path).await?;
         }
 
         if need_remove {
@@ -322,10 +293,8 @@ struct VersionEditEncoder(VersionEdit);
 impl VersionEditEncoder {
     async fn encode<W: SequentialWriter>(&self, w: &mut W) -> Result<usize> {
         let bytes = self.0.encode_to_vec();
-        w.write_all(&bytes.len().to_le_bytes())
-            .await
-            .expect("write version edit fail");
-        w.write_all(&bytes).await.expect("write version edit fail");
+        w.write_all(&bytes.len().to_le_bytes()).await?;
+        w.write_all(&bytes).await?;
         Ok(bytes.len() + core::mem::size_of::<u64>())
     }
 }
@@ -350,7 +319,7 @@ impl<R: PositionalReader> VersionEditDecoder<R> {
             {
                 Ok(_) => {}
                 Err(err) if err.kind() == ErrorKind::UnexpectedEof => return Ok(None),
-                e @ Err(_) => e.expect("read manifest file fail"),
+                e @ Err(_) => e?,
             };
             u64::from_le_bytes(
                 len_bytes[0..core::mem::size_of::<u64>()]
@@ -363,9 +332,8 @@ impl<R: PositionalReader> VersionEditDecoder<R> {
             let mut ve_bytes = vec![0u8; len as usize];
             self.reader
                 .read_exact_at(&mut ve_bytes, offset as u64)
-                .await
-                .expect("read version edit record payload fail");
-            VersionEdit::decode(ve_bytes.as_slice()).expect("decode version edit fail")
+                .await?;
+            VersionEdit::decode(ve_bytes.as_slice()).map_err(|_| Error::Corrupted)?
         };
         self.offset = offset + len;
         Ok(Some(ve))

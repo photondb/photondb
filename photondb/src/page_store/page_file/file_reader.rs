@@ -31,10 +31,7 @@ impl<R: PositionalReader> FileReader<R> {
             return Ok(());
         }
         if !self.use_direct {
-            self.reader
-                .read_exact_at(buf, req_offset)
-                .await
-                .expect("read page data fail");
+            self.reader.read_exact_at(buf, req_offset).await?;
             self.read_bytes.add(buf.len() as u64);
             return Ok(());
         }
@@ -48,8 +45,7 @@ impl<R: PositionalReader> FileReader<R> {
         let read_buf = align_buf.as_bytes_mut();
 
         self.inner_read_exact_at(&self.reader, read_buf, align_offset as u64)
-            .await
-            .expect("read page data fail");
+            .await?;
 
         buf.copy_from_slice(&read_buf[offset_ahead..offset_ahead + buf.len()]);
         self.read_bytes.add(buf.len() as u64);

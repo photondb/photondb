@@ -25,13 +25,13 @@ impl<E: Env> FileReaderCache<E> {
     pub(super) async fn get_with(
         &self,
         file_id: u32,
-        init: impl Future<Output = Arc<FileReader<E::PositionalReader>>>,
+        init: impl Future<Output = Result<Arc<FileReader<E::PositionalReader>>>>,
     ) -> Result<Arc<FileReader<E::PositionalReader>>> {
         let key = file_id as u64;
         if let Some(cached) = self.cache.lookup(key) {
             return Ok(cached.value().clone());
         }
-        let reader = init.await;
+        let reader = init.await?;
         match self
             .cache
             .insert(key, Some(reader.clone()), 1, CacheOption::default())

@@ -404,7 +404,7 @@ mod tests {
             shutdown,
             job_stats: Arc::default(),
             version_owner,
-            page_files: Arc::new(PageFiles::new(Photon, base, &opt).await),
+            page_files: Arc::new(PageFiles::new(Photon, base, &opt).await.unwrap()),
             manifest: Arc::new(futures::lock::Mutex::new(
                 Manifest::open(Photon, base).await.unwrap(),
             )),
