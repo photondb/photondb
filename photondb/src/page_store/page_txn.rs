@@ -176,7 +176,7 @@ impl<E: Env> Guard<E> {
 
         let physical_id = page_group.meta().file_id;
         let Some(file_info) = self.version.file_infos().get(&physical_id) else {
-            panic!("TODO:")
+            panic!("Target file {physical_id} is missing");
         };
         let Some(handle) = page_group.get_page_handle(addr) else {
             panic!("The addr {addr} is not belongs to the target file {physical_id:?}");
@@ -198,7 +198,7 @@ impl<E: Env> Guard<E> {
         let cache_token = last_guard.cache_token();
 
         let page = PageRef::new(unsafe {
-            // Safety: the lifetime is guarranted by `guard`.
+            // Safety: the lifetime is guaranteed by `guard`.
             std::slice::from_raw_parts(page.as_ptr(), page.len())
         });
 

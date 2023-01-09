@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Instant};
 
-use log::{debug, info, trace};
+use log::{debug, error, info, trace};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
@@ -125,8 +125,12 @@ where
             return;
         }
 
-        self.reclaim_files_by_strategy(&mut progress, version, &cleaned_files)
-            .await;
+        if let Err(err) = self
+            .reclaim_files_by_strategy(&mut progress, version, &cleaned_files)
+            .await
+        {
+            error!("Reclaim files: {err:?}");
+        }
     }
 
     async fn reclaim_files_by_strategy(
@@ -134,7 +138,7 @@ where
         progress: &mut ReclaimProgress,
         version: &Arc<Version>,
         cleaned_files: &FxHashSet<u32>,
-    ) {
+    ) -> Result<()> {
         let now = {
             let lock = self.manifest.lock().await;
             lock.now()
@@ -145,7 +149,7 @@ where
             if let Some(job) = builder.add(file, active_size) {
                 match job {
                     ReclaimJob::Compact(victims) => {
-                        self.reclaim_files(progress, version, victims).await;
+                        self.reclaim_files(progress, version, victims).await?;
                     }
                 }
             }
@@ -157,6 +161,7 @@ where
                 break;
             }
         }
+        Ok(())
     }
 
     async fn reclaim_files(
@@ -164,7 +169,7 @@ where
         progress: &mut ReclaimProgress,
         version: &Arc<Version>,
         victims: FxHashSet<u32>,
-    ) {
+    ) -> Result<()> {
         let file_id = {
             let mut lock = self.manifest.lock().await;
             lock.next_file_id()
@@ -174,8 +179,7 @@ where
         let page_groups = version.page_groups();
         let (page_groups, file_info) = self
             .compact_files(progress, file_id, file_infos, page_groups, &victims)
-            .await
-            .unwrap();
+            .await?;
 
         // All input are obsoleted, since it doesn't relocate pages.
         let edit = make_compact_version_edit(&file_info, &victims);
@@ -183,8 +187,7 @@ where
         let version = self.version_owner.current();
         manifest
             .record_version_edit(edit, || super::version_snapshot(&version))
-            .await
-            .unwrap();
+            .await?;
 
         let mut delta = DeltaVersion::from(version.as_ref());
         delta.reason = VersionUpdateReason::Compact;
@@ -195,6 +198,7 @@ where
         delta.obsoleted_files = victims.into_iter().collect();
         // Safety: the mutable reference of [`Manifest`] is hold.
         unsafe { self.version_owner.install(delta) };
+        Ok(())
     }
 
     fn build_strategy(
@@ -722,7 +726,9 @@ mod tests {
         unsafe { ctx.version_owner.install(delta) };
         let version = ctx.version_owner.current();
         let mut progress = ReclaimProgress::new(&ctx.options, &version, &HashSet::default());
-        ctx.reclaim_files(&mut progress, &version, victims).await;
+        ctx.reclaim_files(&mut progress, &version, victims)
+            .await
+            .unwrap();
 
         let version = ctx.version_owner.current();
         let page_groups = version.page_groups();
