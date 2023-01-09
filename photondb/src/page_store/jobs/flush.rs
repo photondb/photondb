@@ -223,7 +223,10 @@ impl<E: Env> FlushCtx<E> {
         group_builder.add_dealloc_pages(&dealloc_pages);
         builder = group_builder.finish().await?;
         let (page_groups, file_info) = builder.finish(file_id).await?;
-        let page_group = page_groups.get(&group_id).unwrap().clone();
+        let page_group = page_groups
+            .get(&group_id)
+            .expect("FileBuilder ensure the existence of page group")
+            .clone();
 
         self.job_stats.flush_write_bytes.add(write_bytes as u64);
         self.job_stats.flush_discard_bytes.add(discard_bytes as u64);
@@ -292,7 +295,9 @@ fn drain_obsoleted_files(
 
     let mut obsoleted_files = FxHashSet::default();
     'OUTER: for file_id in empty_files {
-        let file_info = file_infos.get_mut(&file_id).unwrap();
+        let file_info = file_infos
+            .get_mut(&file_id)
+            .expect("Empty file come from file infos");
         for group_id in &file_info.meta().referenced_groups {
             // Is the referenced group empty? (empty group are removed in above)
             if page_groups.contains_key(group_id) {
